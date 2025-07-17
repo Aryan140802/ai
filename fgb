@@ -37,15 +37,15 @@ DB_CONFIGS = {
     }
 }
 
-# Safe system commands that can be executed
 SAFE_COMMANDS = {
-    "cpu": "top -bn1 | head -n 10",
+    "cpu": "top -bn1 | grep 'Cpu(s)'",
+    "cpu_util": "mpstat 1 1 | grep 'Average' || grep 'all' /proc/stat",
     "memory": "free -m",
     "disk": "df -h",
     "uptime": "uptime",
-    "load": "uptime",
-    "processes": "ps aux | head -20",
-    "netstat": "netstat -tuln | head -20",
+    "load": "cat /proc/loadavg",
+    "processes": "ps aux --sort=-%cpu | head -20",
+    "netstat": "ss -tuln | head -20",
     "iostat": "iostat -x 1 1",
     "vmstat": "vmstat 1 2",
     "who": "who",
@@ -56,7 +56,41 @@ SAFE_COMMANDS = {
     "lscpu": "lscpu",
     "lsblk": "lsblk",
     "mount": "mount | grep -E '^/dev'",
-    "systemctl": "systemctl list-units --type=service --state=active | head -20"
+    "systemctl": "systemctl list-units --type=service --state=active | head -20",
+    # New Red Hat/Linux-friendly additions:
+    "pidof": "pidof {process_name}",
+    "pgrep": "pgrep -fl {process_name}",
+    "ps_pid": "ps -C {process_name} -o pid,cmd --no-headers",
+    "topcpu": "ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 11",
+    "topmem": "ps -eo pid,comm,%mem,%cpu --sort=-%mem | head -n 11",
+    "psaux_grep": "ps aux | grep {process_name} | grep -v grep",
+    "top": "top -b -n1 | head -20",
+}
+
+command_map = {
+    'cpu': ['cpu usage', 'cpu percent', 'cpu utilization', 'cpu load', 'processor usage', 'processor utilization'],
+    'cpu_util': ['cpu stat', 'cpu statistics', 'cpu total', 'average cpu'],
+    'memory': ['memory usage', 'ram usage', 'mem usage'],
+    'disk': ['disk usage', 'storage usage', 'space usage', 'filesystem'],
+    'uptime': ['uptime', 'boot time', 'system running'],
+    'load': ['load average', 'system load'],
+    'processes': ['process list', 'running processes', 'ps', 'processes'],
+    'netstat': ['network', 'open port', 'connection', 'port', 'socket'],
+    'iostat': ['io', 'input', 'output'],
+    'vmstat': ['virtual', 'vm'],
+    'who': ['logged user', 'who is logged in', 'session'],
+    'hostname': ['hostname', 'host name', 'server name'],
+    'uname': ['kernel version', 'os version', 'uname'],
+    'lscpu': ['cpu info', 'processor info'],
+    'lsblk': ['block device', 'disk device'],
+    'systemctl': ['service', 'daemon', 'systemctl'],
+    'pidof': ['pid of', 'process id of', 'find pid', 'get pid'],
+    'pgrep': ['pid for', 'pgrep', 'process name'],
+    'ps_pid': ['process id', 'ps -C'],
+    'psaux_grep': ['search process', 'grep process', 'find process'],
+    'topcpu': ['top cpu', 'most cpu', 'highest cpu', 'max cpu', 'cpu hog'],
+    'topmem': ['top memory', 'most memory', 'highest memory', 'max memory', 'memory hog'],
+    'top': ['top'],
 }
 
 # Dangerous patterns to block
