@@ -6,6 +6,7 @@ import pymysql
 import traceback
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+import json
 
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
@@ -37,7 +38,6 @@ DB_CONFIGS = {
     }
 }
 
-# Safe system commands that can be executed (Red Hat/CentOS compatible)
 SAFE_COMMANDS = {
     "cpu": "top -bn1 | grep 'Cpu(s)'",
     "cpu_util": "mpstat 1 1 | grep 'Average' || grep 'all' /proc/stat",
@@ -58,7 +58,6 @@ SAFE_COMMANDS = {
     "lsblk": "lsblk",
     "mount": "mount | grep -E '^/dev'",
     "systemctl": "systemctl list-units --type=service --state=active | head -20",
-    # New Red Hat/Linux-friendly additions:
     "pidof": "pidof {process_name}",
     "pgrep": "pgrep -fl {process_name}",
     "ps_pid": "ps -C {process_name} -o pid,cmd --no-headers",
@@ -68,14 +67,11 @@ SAFE_COMMANDS = {
     "top": "top -b -n1 | head -20",
 }
 
-# Dangerous patterns to block
 BLOCKED_PATTERNS = [
     r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
     r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
     r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b"
 ]
-
-# --- LOGGING SETUP ---
 
 logging.basicConfig(
     filename=os.path.expanduser("~/.unified_ai.log"),
@@ -84,17 +80,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- UTILITY FUNCTIONS ---
-
 def is_dangerous(text: str) -> bool:
-    """Check if text contains dangerous patterns"""
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
 def detect_query_type(question: str) -> str:
-    """Detect what type of query the user is asking using AI-powered analysis"""
     question = question.lower()
-    
-    # System command patterns - real-time system info
     system_patterns = [
         r'\b(cpu|memory|ram|disk|storage|uptime|load|processes|running|network|port|iostat|vmstat)\b',
         r'\b(show|check|what|how much|current|live|real.?time)\b.*\b(cpu|memory|disk|load|system|server)\b',
@@ -103,8 +93,6 @@ def detect_query_type(question: str) -> str:
         r'\b(server|linux|unix)\b.*\b(status|info|performance)\b',
         r'\bhow\s+(much|many)\b.*\b(cpu|memory|disk|process|running)\b'
     ]
-    
-    # Database patterns - stored data queries
     team_patterns = [
         r'\b(team|user|employee|staff|member|person|people)\b',
         r'\b(show|list|find|get|count|search)\b.*\b(employee|user|team|staff)\b',
@@ -112,7 +100,6 @@ def detect_query_type(question: str) -> str:
         r'\bname.*\b(john|smith|portal|eis|project)\b',
         r'\b(portal|eis|project)\b.*\b(team|user|employee)\b'
     ]
-    
     process_patterns = [
         r'\b(process|pid|far|details)\b.*\b(database|table|stored|history|log)\b',
         r'\b(which|what|show|list)\b.*\bprocess\b.*\b(memory|cpu|usage|database)\b',
@@ -120,40 +107,28 @@ def detect_query_type(question: str) -> str:
         r'\bprocess\b.*\b(sorted|maximum|minimum|highest|lowest)\b',
         r'\b(database|table|stored)\b.*\bprocess\b'
     ]
-    
     system_db_patterns = [
         r'\b(metrics|monitoring|historical|logged|stored)\b.*\b(cpu|memory|disk|system)\b',
         r'\b(average|total|sum|count|maximum|minimum)\b.*\b(cpu|memory|disk|usage)\b',
         r'\b(system|server)\b.*\b(metrics|monitoring|database|table|history)\b',
         r'\b(latest|recent|last|previous)\b.*\b(system|metric|entry)\b'
     ]
-    
-    # Check patterns in order of specificity
     for pattern in system_patterns:
         if re.search(pattern, question):
             return "system"
-    
     for pattern in team_patterns:
         if re.search(pattern, question):
             return "team"
-    
     for pattern in process_patterns:
         if re.search(pattern, question):
             return "process"
-    
     for pattern in system_db_patterns:
         if re.search(pattern, question):
             return "system_db"
-    
-    # Enhanced keyword detection with context
     words = question.split()
-    
-    # System commands - immediate/live data
     if any(word in ['current', 'now', 'live', 'real-time', 'status', 'running'] for word in words):
         if any(word in ['cpu', 'memory', 'disk', 'process', 'system', 'server'] for word in words):
             return "system"
-    
-    # Database queries - stored/historical data
     if any(word in ['count', 'total', 'average', 'maximum', 'minimum', 'list', 'show', 'find'] for word in words):
         if any(word in ['employee', 'user', 'team', 'staff', 'member'] for word in words):
             return "team"
@@ -161,12 +136,9 @@ def detect_query_type(question: str) -> str:
             return "process"
         elif any(word in ['metric', 'monitoring', 'system', 'database'] for word in words):
             return "system_db"
-    
-    # Default to general AI for everything else
     return "general"
 
 def clean_sql(raw_sql: str) -> str:
-    """Clean LLM-generated SQL"""
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1)
@@ -176,57 +148,37 @@ def clean_sql(raw_sql: str) -> str:
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
-    """Format database query results"""
     if not result:
         return "No data found for your request."
-    
     if len(result) == 1 and len(result[0]) == 1:
         return f"Result: {result[0][0]}"
-    
     if columns and len(result) <= 10:
-        # Format as table for small results
         output = []
         col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
-        
-        # Header
         header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
         separator = "-+-".join("-" * width for width in col_widths)
         output.append(header)
         output.append(separator)
-        
-        # Rows
-        for row in result[:10]:  # Limit to 10 rows
+        for row in result[:10]:
             formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
             output.append(formatted_row)
-        
         if len(result) > 10:
             output.append(f"... and {len(result) - 10} more rows")
-        
         return "\n".join(output)
-    
-    # Simple list format
     rows = []
-    for row in result[:20]:  # Limit to 20 rows
+    for row in result[:20]:
         rows.append(" | ".join(str(val) for val in row))
-    
     if len(result) > 20:
         rows.append(f"... and {len(result) - 20} more rows")
-    
     return "\n".join(rows)
 
 def is_select_query(sql: str) -> bool:
-    """Check if query is a read-only SELECT statement"""
     return sql.strip().lower().startswith('select')
 
 def clear_screen():
-    """Clear the terminal screen"""
     os.system("cls" if os.name == "nt" else "clear")
 
-# --- MAIN ASSISTANT CLASS ---
-
 class UnifiedAIAssistant:
-    """Main AI Assistant class that handles all types of queries"""
-
     def __init__(self):
         self.llm = None
         self.db_handlers = {}
@@ -234,12 +186,9 @@ class UnifiedAIAssistant:
         self.chat_history = []
 
     def initialize(self):
-        """Initialize the AI model and database connections"""
         try:
             print("🔧 Initializing AI Assistant...")
             self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
-
-            # Initialize database handlers
             for category, config in DB_CONFIGS.items():
                 try:
                     db_cfg = config['db_config']
@@ -247,7 +196,6 @@ class UnifiedAIAssistant:
                     db_for_llm = SQLDatabase.from_uri(uri, include_tables=config.get("include_tables"))
                     chain = create_sql_query_chain(self.llm, db_for_llm)
                     db_conn = pymysql.connect(**db_cfg)
-
                     self.db_handlers[category] = {
                         'chain': chain,
                         'connection': db_conn,
@@ -257,20 +205,40 @@ class UnifiedAIAssistant:
                 except Exception as e:
                     print(f"⚠️  Failed to connect to {config['name']}: {e}")
                     logger.error(f"DB connection failed for {category}: {e}")
-
             self.initialized = True
             print("✅ AI Assistant initialized successfully!")
             return True
-
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
 
+    def save_feedback(self, question, answer, feedback):
+        data = {
+            "question": question,
+            "answer": answer,
+            "feedback": feedback,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            with open("feedback_log.jsonl", "a") as f:
+                f.write(json.dumps(data) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+
+    def find_relevant_feedback(self, question):
+        try:
+            with open("feedback_log.jsonl", "r") as f:
+                lines = f.readlines()
+            for line in lines[::-1]:
+                entry = json.loads(line)
+                if entry["question"].strip().lower() in question.strip().lower():
+                    return entry["feedback"]
+        except Exception:
+            pass
+        return None
+
     def run_system_command(self, question: str) -> str:
-        """
-        Execute safe system commands, including advanced PID and process queries, adapted for Red Hat Linux.
-        """
         question_lower = question.lower()
         command_map = {
             'cpu': ['cpu usage', 'cpu percent', 'cpu utilization', 'cpu load', 'processor usage', 'processor utilization'],
@@ -290,7 +258,6 @@ class UnifiedAIAssistant:
             'lsblk': ['block device', 'disk device'],
             'mount': ['mounted device', 'mount point'],
             'systemctl': ['service', 'daemon', 'systemctl'],
-            # New/advanced mappings
             'pidof': ['pid of', 'process id of', 'find pid', 'get pid'],
             'pgrep': ['pid for', 'pgrep', 'process name'],
             'ps_pid': ['process id', 'ps -C'],
@@ -299,12 +266,8 @@ class UnifiedAIAssistant:
             'topmem': ['top memory', 'most memory', 'highest memory', 'max memory', 'memory hog'],
             'top': ['top'],
         }
-
-        # Special handling for commands needing a process name
         process_name = None
         cmd = None
-
-        # PID-related queries
         pid_patterns = [
             (r'(?:pid of|process id of|get pid for|find pid for)\s+([a-zA-Z0-9_\-\.]+)', 'pidof'),
             (r'(?:pid for|pgrep|process name)\s+([a-zA-Z0-9_\-\.]+)', 'pgrep'),
@@ -317,13 +280,10 @@ class UnifiedAIAssistant:
                 process_name = match.group(1)
                 cmd = SAFE_COMMANDS[key].format(process_name=process_name)
                 break
-
-        # If no special PID command matched, use keyword mapping
         if not cmd:
             matched_cmd = None
             for cmd_key, keywords in command_map.items():
                 if any(keyword in question_lower for keyword in keywords):
-                    # For commands needing a process name, try to extract it
                     if cmd_key in ['pidof', 'pgrep', 'ps_pid', 'psaux_grep']:
                         proc_match = re.search(r'(?:pid of|get pid for|pgrep|process id for|process id|ps -c|search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', question_lower)
                         if proc_match:
@@ -332,7 +292,7 @@ class UnifiedAIAssistant:
                             matched_cmd = cmd
                             break
                         else:
-                            continue  # Need process name
+                            continue
                     else:
                         matched_cmd = SAFE_COMMANDS.get(cmd_key)
                         break
@@ -340,22 +300,21 @@ class UnifiedAIAssistant:
                 matched_cmd = SAFE_COMMANDS['processes']
             if not cmd:
                 cmd = matched_cmd
-
         try:
             output = subprocess.getoutput(cmd)
-            # Provide context to LLM for a natural language answer
-            # Add chat history context for LLM (last 5 turns)
             context = ""
             for turn in self.chat_history[-5:]:
                 context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
             context += f"User: {question}\nAssistant:"
-
             context += f"""
 Here's the system command output:
 {output}
 
 Please provide a clear, helpful response that directly answers the user's question based on this system information. Be concise but informative. Focus on what the user specifically asked about.
 """
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
             ai_response = self.llm.invoke(context)
             self.chat_history.append({"user": question, "assistant": ai_response})
             return ai_response
@@ -364,34 +323,21 @@ Please provide a clear, helpful response that directly answers the user's questi
             return f"❌ Error getting system information: {e}"
 
     def query_database(self, question: str, category: str) -> str:
-        """Query database using AI-generated SQL"""
         if category not in self.db_handlers:
             return f"❌ Database category '{category}' not available."
-        
         handler = self.db_handlers[category]
-        
         try:
-            # Generate SQL using AI
             raw_sql = handler['chain'].invoke({"question": question})
             sql = clean_sql(raw_sql)
-            
-            # Security check
             if not is_select_query(sql):
                 return "🚫 Only SELECT queries are allowed for security."
-            
-            # Execute query
             with handler['connection'].cursor() as cursor:
                 cursor.execute(sql)
                 result = cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description] if cursor.description else None
-            
             if not result:
                 return "No data found matching your query."
-            
-            # Format result and provide AI interpretation
             formatted_result = format_answer(result, columns)
-            
-            # Use AI to provide context and interpretation
             context = ""
             for turn in self.chat_history[-5:]:
                 context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
@@ -402,28 +348,29 @@ Database query results:
 {formatted_result}
 
 Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful."""
-            
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
             ai_interpretation = self.llm.invoke(context)
             self.chat_history.append({"user": question, "assistant": ai_interpretation})
             return ai_interpretation
-            
         except Exception as e:
             logger.error(f"Database query error: {e}")
             return f"❌ Unable to retrieve that information: {e}"
 
     def general_ai_response(self, question: str) -> str:
-        """Generate general AI response"""
         try:
-            # Enhanced prompt for better context
             context = ""
             for turn in self.chat_history[-5:]:
                 context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
             context += f"""User: {question}
 Assistant:
-You are a helpful AI assistant with expertise in system administration, databases, and general technical knowledge. 
+You are a helpful AI assistant with expertise in system administration, databases, and general technical knowledge.
 
 Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational."""
-            
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
             response = self.llm.invoke(context)
             self.chat_history.append({"user": question, "assistant": response})
             return response
@@ -432,16 +379,11 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
             return f"❌ Unable to process your question: {e}"
 
     def process_question(self, question: str) -> str:
-        """Main method to process user questions"""
         if not self.initialized:
             return "❌ Assistant not initialized. Please restart."
-        
         if is_dangerous(question):
             return "🚫 Question blocked for security reasons."
-        
         query_type = detect_query_type(question)
-        
-        # Process based on detected type without showing detection
         if query_type == "system":
             return self.run_system_command(question)
         elif query_type in ["team", "process", "system_db"]:
@@ -451,7 +393,6 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
             return self.general_ai_response(question)
 
     def show_help(self):
-        """Show help information"""
         help_text = """
 📖 UNIFIED AI ASSISTANT HELP
 
@@ -500,7 +441,6 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
         print(help_text)
 
     def show_status(self):
-        """Show system status"""
         print("🔍 SYSTEM STATUS")
         print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"🤖 AI Model: Initialized ({'✅' if self.initialized else '❌'})")
@@ -510,24 +450,18 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
             print(f"   - {handler['config']['name']}: {status}")
 
     def start_interactive_session(self):
-        """Start the interactive session"""
         if not self.initialize():
             return
-
         clear_screen()
         print("🤖 AI Assistant Ready")
         print("Ask me anything about your system, databases, or general questions...")
         print("Type 'exit' to quit\n")
-
         while True:
             try:
                 question = input("💬 ").strip()
-
                 if not question:
                     continue
-
                 question_lower = question.lower()
-
                 if question_lower in ['exit', 'quit', 'q']:
                     print("👋 Goodbye!")
                     break
@@ -540,29 +474,23 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
                 elif question_lower == 'status':
                     self.show_status()
                     continue
-
-                # Process the question
                 response = self.process_question(question)
                 print(f"\n{response}\n")
-
+                feedback = input("Was this answer helpful? (yes/no/correction): ")
+                if feedback.lower() not in ['yes', 'y']:
+                    self.save_feedback(question, response, feedback)
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 break
             except Exception as e:
                 print(f"\n❌ Error: {e}")
                 logger.error(f"Session error: {e}", exc_info=True)
-
-        # Cleanup
         for handler in self.db_handlers.values():
             if handler['connection'].open:
                 handler['connection'].close()
-
         print("Connection closed.")
 
-# --- MAIN ENTRY POINT ---
-
 def main():
-    """Main entry point"""
     assistant = UnifiedAIAssistant()
     assistant.start_interactive_session()
 
