@@ -37,6 +37,7 @@ DB_CONFIGS = {
     }
 }
 
+# Safe system commands that can be executed (Red Hat/CentOS compatible)
 SAFE_COMMANDS = {
     "cpu": "top -bn1 | grep 'Cpu(s)'",
     "cpu_util": "mpstat 1 1 | grep 'Average' || grep 'all' /proc/stat",
@@ -65,32 +66,6 @@ SAFE_COMMANDS = {
     "topmem": "ps -eo pid,comm,%mem,%cpu --sort=-%mem | head -n 11",
     "psaux_grep": "ps aux | grep {process_name} | grep -v grep",
     "top": "top -b -n1 | head -20",
-}
-
-command_map = {
-    'cpu': ['cpu usage', 'cpu percent', 'cpu utilization', 'cpu load', 'processor usage', 'processor utilization'],
-    'cpu_util': ['cpu stat', 'cpu statistics', 'cpu total', 'average cpu'],
-    'memory': ['memory usage', 'ram usage', 'mem usage'],
-    'disk': ['disk usage', 'storage usage', 'space usage', 'filesystem'],
-    'uptime': ['uptime', 'boot time', 'system running'],
-    'load': ['load average', 'system load'],
-    'processes': ['process list', 'running processes', 'ps', 'processes'],
-    'netstat': ['network', 'open port', 'connection', 'port', 'socket'],
-    'iostat': ['io', 'input', 'output'],
-    'vmstat': ['virtual', 'vm'],
-    'who': ['logged user', 'who is logged in', 'session'],
-    'hostname': ['hostname', 'host name', 'server name'],
-    'uname': ['kernel version', 'os version', 'uname'],
-    'lscpu': ['cpu info', 'processor info'],
-    'lsblk': ['block device', 'disk device'],
-    'systemctl': ['service', 'daemon', 'systemctl'],
-    'pidof': ['pid of', 'process id of', 'find pid', 'get pid'],
-    'pgrep': ['pid for', 'pgrep', 'process name'],
-    'ps_pid': ['process id', 'ps -C'],
-    'psaux_grep': ['search process', 'grep process', 'find process'],
-    'topcpu': ['top cpu', 'most cpu', 'highest cpu', 'max cpu', 'cpu hog'],
-    'topmem': ['top memory', 'most memory', 'highest memory', 'max memory', 'memory hog'],
-    'top': ['top'],
 }
 
 # Dangerous patterns to block
@@ -251,18 +226,19 @@ def clear_screen():
 
 class UnifiedAIAssistant:
     """Main AI Assistant class that handles all types of queries"""
-    
+
     def __init__(self):
         self.llm = None
         self.db_handlers = {}
         self.initialized = False
-        
+        self.chat_history = []
+
     def initialize(self):
         """Initialize the AI model and database connections"""
         try:
             print("🔧 Initializing AI Assistant...")
             self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
-            
+
             # Initialize database handlers
             for category, config in DB_CONFIGS.items():
                 try:
@@ -271,7 +247,7 @@ class UnifiedAIAssistant:
                     db_for_llm = SQLDatabase.from_uri(uri, include_tables=config.get("include_tables"))
                     chain = create_sql_query_chain(self.llm, db_for_llm)
                     db_conn = pymysql.connect(**db_cfg)
-                    
+
                     self.db_handlers[category] = {
                         'chain': chain,
                         'connection': db_conn,
@@ -281,67 +257,112 @@ class UnifiedAIAssistant:
                 except Exception as e:
                     print(f"⚠️  Failed to connect to {config['name']}: {e}")
                     logger.error(f"DB connection failed for {category}: {e}")
-            
+
             self.initialized = True
             print("✅ AI Assistant initialized successfully!")
             return True
-            
+
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
-    
+
     def run_system_command(self, question: str) -> str:
-        """Execute safe system commands"""
+        """
+        Execute safe system commands, including advanced PID and process queries, adapted for Red Hat Linux.
+        """
         question_lower = question.lower()
-        
-        # Enhanced command matching with better patterns
         command_map = {
-            'cpu': ['cpu', 'processor', 'load', 'usage'],
-            'memory': ['memory', 'ram', 'mem'],
-            'disk': ['disk', 'storage', 'space', 'filesystem'],
-            'uptime': ['uptime', 'boot', 'running'],
-            'processes': ['process', 'running', 'ps', 'top'],
-            'netstat': ['network', 'connection', 'port', 'socket'],
+            'cpu': ['cpu usage', 'cpu percent', 'cpu utilization', 'cpu load', 'processor usage', 'processor utilization'],
+            'cpu_util': ['cpu stat', 'cpu statistics', 'cpu total', 'average cpu'],
+            'memory': ['memory usage', 'ram usage', 'mem usage'],
+            'disk': ['disk usage', 'storage usage', 'space usage', 'filesystem'],
+            'uptime': ['uptime', 'boot time', 'system running'],
+            'load': ['load average', 'system load'],
+            'processes': ['process list', 'running processes', 'ps', 'processes'],
+            'netstat': ['network', 'open port', 'connection', 'port', 'socket'],
             'iostat': ['io', 'input', 'output'],
             'vmstat': ['virtual', 'vm'],
-            'who': ['logged', 'user', 'session'],
-            'hostname': ['hostname', 'host', 'server name'],
-            'uname': ['version', 'kernel', 'os'],
+            'who': ['logged user', 'who is logged in', 'session'],
+            'hostname': ['hostname', 'host name', 'server name'],
+            'uname': ['kernel version', 'os version', 'uname'],
             'lscpu': ['cpu info', 'processor info'],
-            'lsblk': ['block', 'device'],
-            'systemctl': ['service', 'daemon', 'systemctl']
+            'lsblk': ['block device', 'disk device'],
+            'mount': ['mounted device', 'mount point'],
+            'systemctl': ['service', 'daemon', 'systemctl'],
+            # New/advanced mappings
+            'pidof': ['pid of', 'process id of', 'find pid', 'get pid'],
+            'pgrep': ['pid for', 'pgrep', 'process name'],
+            'ps_pid': ['process id', 'ps -C'],
+            'psaux_grep': ['search process', 'grep process', 'find process'],
+            'topcpu': ['top cpu', 'most cpu', 'highest cpu', 'max cpu', 'cpu hog'],
+            'topmem': ['top memory', 'most memory', 'highest memory', 'max memory', 'memory hog'],
+            'top': ['top'],
         }
-        
-        # Find best matching command
-        matched_cmd = None
-        for cmd_key, keywords in command_map.items():
-            if any(keyword in question_lower for keyword in keywords):
-                matched_cmd = SAFE_COMMANDS.get(cmd_key)
-                break
-        
-        if not matched_cmd:
-            # Default to processes if no specific match
-            matched_cmd = SAFE_COMMANDS['processes']
-        
-        try:
-            output = subprocess.getoutput(matched_cmd)
-            
-            # Use AI to interpret the output in context
-            context = f"""You are a system administrator AI assistant. A user asked: "{question}"
 
+        # Special handling for commands needing a process name
+        process_name = None
+        cmd = None
+
+        # PID-related queries
+        pid_patterns = [
+            (r'(?:pid of|process id of|get pid for|find pid for)\s+([a-zA-Z0-9_\-\.]+)', 'pidof'),
+            (r'(?:pid for|pgrep|process name)\s+([a-zA-Z0-9_\-\.]+)', 'pgrep'),
+            (r'(?:process id|ps -c)\s+([a-zA-Z0-9_\-\.]+)', 'ps_pid'),
+            (r'(?:search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', 'psaux_grep')
+        ]
+        for pattern, key in pid_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                process_name = match.group(1)
+                cmd = SAFE_COMMANDS[key].format(process_name=process_name)
+                break
+
+        # If no special PID command matched, use keyword mapping
+        if not cmd:
+            matched_cmd = None
+            for cmd_key, keywords in command_map.items():
+                if any(keyword in question_lower for keyword in keywords):
+                    # For commands needing a process name, try to extract it
+                    if cmd_key in ['pidof', 'pgrep', 'ps_pid', 'psaux_grep']:
+                        proc_match = re.search(r'(?:pid of|get pid for|pgrep|process id for|process id|ps -c|search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', question_lower)
+                        if proc_match:
+                            process_name = proc_match.group(1)
+                            cmd = SAFE_COMMANDS[cmd_key].format(process_name=process_name)
+                            matched_cmd = cmd
+                            break
+                        else:
+                            continue  # Need process name
+                    else:
+                        matched_cmd = SAFE_COMMANDS.get(cmd_key)
+                        break
+            if not matched_cmd:
+                matched_cmd = SAFE_COMMANDS['processes']
+            if not cmd:
+                cmd = matched_cmd
+
+        try:
+            output = subprocess.getoutput(cmd)
+            # Provide context to LLM for a natural language answer
+            # Add chat history context for LLM (last 5 turns)
+            context = ""
+            for turn in self.chat_history[-5:]:
+                context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            context += f"User: {question}\nAssistant:"
+
+            context += f"""
 Here's the system command output:
 {output}
 
-Please provide a clear, helpful response that directly answers the user's question based on this system information. Be concise but informative. Focus on what the user specifically asked about."""
-            
+Please provide a clear, helpful response that directly answers the user's question based on this system information. Be concise but informative. Focus on what the user specifically asked about.
+"""
             ai_response = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": ai_response})
             return ai_response
-            
         except Exception as e:
             logger.error(f"System command error: {e}")
             return f"❌ Error getting system information: {e}"
-    
+
     def query_database(self, question: str, category: str) -> str:
         """Query database using AI-generated SQL"""
         if category not in self.db_handlers:
@@ -371,7 +392,11 @@ Please provide a clear, helpful response that directly answers the user's questi
             formatted_result = format_answer(result, columns)
             
             # Use AI to provide context and interpretation
-            context = f"""A user asked: "{question}"
+            context = ""
+            for turn in self.chat_history[-5:]:
+                context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            context += f"""User: {question}
+Assistant:
 
 Database query results:
 {formatted_result}
@@ -379,28 +404,33 @@ Database query results:
 Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful."""
             
             ai_interpretation = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": ai_interpretation})
             return ai_interpretation
             
         except Exception as e:
             logger.error(f"Database query error: {e}")
             return f"❌ Unable to retrieve that information: {e}"
-    
+
     def general_ai_response(self, question: str) -> str:
         """Generate general AI response"""
         try:
             # Enhanced prompt for better context
-            enhanced_prompt = f"""You are a helpful AI assistant with expertise in system administration, databases, and general technical knowledge. 
-
-User question: {question}
+            context = ""
+            for turn in self.chat_history[-5:]:
+                context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            context += f"""User: {question}
+Assistant:
+You are a helpful AI assistant with expertise in system administration, databases, and general technical knowledge. 
 
 Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational."""
             
-            response = self.llm.invoke(enhanced_prompt)
+            response = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": response})
             return response
         except Exception as e:
             logger.error(f"AI response error: {e}")
             return f"❌ Unable to process your question: {e}"
-    
+
     def process_question(self, question: str) -> str:
         """Main method to process user questions"""
         if not self.initialized:
@@ -419,7 +449,7 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
             return self.query_database(question, db_category)
         else:
             return self.general_ai_response(question)
-    
+
     def show_help(self):
         """Show help information"""
         help_text = """
@@ -432,6 +462,8 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
   - "Show running processes" / "List active processes"
   - "System uptime" / "How long has system been running?"
   - "Show network connections" / "What ports are open?"
+  - "PID of httpd" / "Get PID for sshd"
+  - "Top CPU process" / "Top memory process"
 
 💾 DATABASE QUERIES:
   Team/User Info:
@@ -466,7 +498,7 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
   - Database writes are prevented
         """
         print(help_text)
-    
+
     def show_status(self):
         """Show system status"""
         print("🔍 SYSTEM STATUS")
@@ -476,26 +508,26 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
         for category, handler in self.db_handlers.items():
             status = "✅" if handler['connection'].open else "❌"
             print(f"   - {handler['config']['name']}: {status}")
-    
+
     def start_interactive_session(self):
         """Start the interactive session"""
         if not self.initialize():
             return
-        
+
         clear_screen()
         print("🤖 AI Assistant Ready")
         print("Ask me anything about your system, databases, or general questions...")
         print("Type 'exit' to quit\n")
-        
+
         while True:
             try:
                 question = input("💬 ").strip()
-                
+
                 if not question:
                     continue
-                
+
                 question_lower = question.lower()
-                
+
                 if question_lower in ['exit', 'quit', 'q']:
                     print("👋 Goodbye!")
                     break
@@ -508,23 +540,23 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
                 elif question_lower == 'status':
                     self.show_status()
                     continue
-                
+
                 # Process the question
                 response = self.process_question(question)
                 print(f"\n{response}\n")
-                
+
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 break
             except Exception as e:
                 print(f"\n❌ Error: {e}")
                 logger.error(f"Session error: {e}", exc_info=True)
-        
+
         # Cleanup
         for handler in self.db_handlers.values():
             if handler['connection'].open:
                 handler['connection'].close()
-        
+
         print("Connection closed.")
 
 # --- MAIN ENTRY POINT ---
