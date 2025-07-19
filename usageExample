@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""
+Complete Usage Example
+Demonstrates how to use the modular AI Assistant with different handlers
+"""
+
+from main_coordinator import AIAssistantCoordinator
+
+def demonstrate_handler_usage():
+    """Demonstrate how different handlers work with various queries"""
+    
+    print("🚀 AI Assistant Handler Demonstration")
+    print("=" * 50)
+    
+    # Initialize coordinator
+    coordinator = AIAssistantCoordinator()
+    
+    if not coordinator.initialize():
+        print("❌ Failed to initialize coordinator")
+        return
+    
+    # Test queries for each handler type
+    test_scenarios = [
+        {
+            "category": "Team Database Queries",
+            "icon": "👥",
+            "queries": [
+                "Show all employees in Portal team",
+                "Find user named John Smith", 
+                "Count total staff members",
+                "List employees in EIS project"
+            ],
+            "expected_handler": "team",
+            "dataset": "UserMaster table in EIS database"
+        },
+        {
+            "category": "Process Database Queries", 
+            "icon": "⚙️",
+            "queries": [
+                "Which process uses maximum memory?",
+                "Show FAR details sorted by CPU usage",
+                "List all processes with PID greater than 1000",
+                "Find processes consuming most resources"
+            ],
+            "expected_handler": "process",
+            "dataset": "FarDetailsAll table in EIS_n database"
+        },
+        {
+            "category": "System Monitoring Queries",
+            "icon": "🖥️", 
+            "queries": [
+                "Show current CPU usage",
+                "Check system memory status",
+                "Display disk space information",
+                "What's the system uptime?"
+            ],
+            "expected_handler": "system",
+            "dataset": "System log files and real-time commands"
+        },
+        {
+            "category": "General AI Queries",
+            "icon": "🤖",
+            "queries": [
+                "What is a database?",
+                "Explain how SQL works",
+                "Hello, how are you?",
+                "Calculate 25 * 4 + 10"
+            ],
+            "expected_handler": "general", 
+            "dataset": "Knowledge base and LLM responses"
+        }
+    ]
+    
+    # Demonstrate each
