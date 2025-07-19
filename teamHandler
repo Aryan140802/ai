@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""
+Team Database Handler
+Handles team/user related database queries
+"""
+
+import re
+import pymysql
+from typing import List, Optional
+from langchain_community.utilities import SQLDatabase
+from langchain.chains import create_sql_query_chain
+from base_handler import BaseHandler
+
+class TeamHandler(BaseHandler):
+    """Handler for team/user database queries"""
+    
+    def __init__(self, llm=None):
+        super().__init__("Team Handler", llm)
+        self.db_config = {
+            "host": "localhost",
+            "user": "root", 
+            "password": "root123",
+            "database": "EIS"
+        }
+        self.include_tables = ["UserMaster"]
+        self.connection = None
+        self.chain = None
+    
+    def initialize(self) -> bool:
+        """Initialize database connection and SQL chain"""
+        try:
+            # Create database connection for queries
+            self.connection = pymysql.connect(**self.db_config)
+            
+            # Create LangChain SQL database and chain
+            if self.llm:
+                uri = f"mysql+pymysql://{self.db_config['user']}:{self.db_config['password']}@{self.db_config['host']}/{self.db_config['database']}"
+                db_for_llm = SQLDatabase.from_uri(uri, include_tables=self.include_tables)
+                self.chain = create_sql_query_chain(self.llm, db_for_llm)
+            
+            self.initialized = True
+            self.log_info("Database connection established")
+            return True
+            
+        except Exception as e:
+            self.log_error(f"Failed to initialize database connection: {e}", e)
+            return False
+    
+    def get_patterns(self) -> List[str]:
+        """Return regex patterns for team-related queries"""
+        return [
+            r'\b(team|user|employee|staff|member|person|people)\b',
+            r'\b(show|list|find|get|count|search)\b.*\b(employee|user|team|staff)\b',
+            r'\b(who|which\s+user|which\s+employee)\b',
+            r'\bname.*\b(john|smith|portal|eis|project)\b',
+            r'\b(portal|eis|project)\b.*\b(team|user|employee)\b'
+        ]
+    
+    def get_keywords(self) -> List[str]:
+        """Return keywords for team-related queries"""
+        return [
+            "team", "user", "employee", "staff", "member", "person", "people",
+            "portal", "eis", "project", "john", "smith", "name", "who"
+        ]
+    
+    def can_handle(self, question: str) -> bool:
+        """Check if this handler can process the question"""
+        question_lower = question.lower()
+        
+        # Check patterns
+        for pattern in self.get_patterns():
+            if re.search(pattern, question_lower):
+                return True
+        
+        # Check keywords with context
+        words = question_lower.split()
+        team_keywords = ["employee", "user", "team", "staff", "member"]
+        action_keywords = ["count", "total", "list", "show", "find", "who"]
+        
+        has_team_keyword = any(word in team_keywords for word in words)
+        has_action_keyword = any(word in action_keywords for word in words)
+        
+        return has_team_keyword and has_action_keyword
+    
+    def clean_sql(self, raw_sql: str) -> str:
+        """Clean LLM-generated SQL"""
+        match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
+        if match:
+            sql = match.group(1)
+        else:
+            sql = re.sub(r"```", "", raw_sql)
+            sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+        return sql.strip().rstrip(";")
+    
+    def is_select_query(self, sql: str) -> bool:
+        """Check if query is a read-only SELECT statement"""
+        return sql.strip().lower().startswith('select')
+    
+    def format_result(self, result: List[tuple], columns: Optional[List[str]] = None) -> str:
+        """Format database query results"""
+        if not result:
+            return "No team/user data found for your request."
+        
+        if len(result) == 1 and len(result[0]) == 1:
+            return f"Result: {result[0][0]}"
+        
+        if columns and len(result) <= 10:
+            # Format as table for small results
+            output = []
+            col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
+            
+            # Header
+            header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
+            separator = "-+-".join("-" * width for width in col_widths)
+            output.append(header)
+            output.append(separator)
+            
+            # Rows
+            for row in result[:10]:
+                formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
+                output.append(formatted_row)
+            
+            if len(result) > 10:
+                output.append(f"... and {len(result) - 10} more rows")
+            
+            return "\n".join(output)
+        
+        # Simple list format
+        rows = []
+        for row in result[:20]:
+            rows.append(" | ".join(str(val) for val in row))
+        
+        if len(result) > 20:
+            rows.append(f"... and {len(result) - 20} more rows")
+        
+        return "\n".join(rows)
+    
+    def process_query(self, question: str) -> str:
+        """Process team/user database query"""
+        if not self.initialized:
+            return "❌ Team database handler not initialized."
+        
+        try:
+            # Generate SQL using AI
+            raw_sql = self.chain.invoke({"question": question})
+            sql = self.clean_sql(raw_sql)
+            
+            # Security check
+            if not self.is_select_query(sql):
+                return "🚫 Only SELECT queries are allowed for security."
+            
+            # Execute query
+            with self.connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description] if cursor.description else None
+            
+            if not result:
+                return "No team/user data found matching your query."
+            
+            # Format result
+            formatted_result = self.format_result(result, columns)
+            
+            # Use AI to provide context and interpretation
+            if self.llm:
+                context = f"""A user asked about team/user information: "{question}"
+
+Database query results from UserMaster table:
+{formatted_result}
+
+Please provide a clear, natural language response that directly answers the user's question about team/user data. Make it conversational and helpful."""
+                
+                ai_interpretation = self.llm.invoke(context)
+                return ai_interpretation
+            else:
+                return f"Team/User Query Results:\n{formatted_result}"
+                
+        except Exception as e:
+            self.log_error(f"Database query error: {e}", e)
+            return f"❌ Unable to retrieve team information: {e}"
+    
+    def cleanup(self):
+        """Clean up database connection"""
+        if self.connection and self.connection.open:
+            self.connection.close()
+            self.log_info("Database connection closed")
+    
+    def get_status(self) -> dict:
+        """Get handler status"""
+        status = super().get_status()
+        status.update({
+            "database": self.db_config["database"],
+            "host": self.db_config["host"],
+            "tables": self.include_tables,
+            "connection_open": self.connection.open if self.connection else False
+        })
+        return status
