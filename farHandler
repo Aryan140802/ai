@@ -1,198 +1,447 @@
-#!/usr/bin/env python3
-"""
-Process Database Handler
-Handles process/FAR details related database queries
-"""
-
+import os
 import re
+import logging
 import pymysql
-from typing import List, Optional
-from langchain_community.utilities import SQLDatabase
-from langchain.chains import create_sql_query_chain
-from base_handler import BaseHandler
+import traceback
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
+import json
 
-class ProcessHandler(BaseHandler):
-    """Handler for process/FAR database queries"""
+from langchain_community.utilities import SQLDatabase
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
+
+# --- CONFIGURATION ---
+
+DB_CONFIG = {
+    "name": "FAR Details",
+    "db_config": {
+        "host": "localhost", 
+        "user": "root", 
+        "password": "root123", 
+        "database": "EIS_n"
+    },
+    "include_tables": ["FarDetailsAll"],
+}
+
+# Static token collection for frontend integration
+STATIC_TOKENS = {
+    "PROCESS_QUERY": {
+        "category": "process",
+        "description": "Process database queries",
+        "examples": ["process details", "FAR information", "stored process data"]
+    },
+    "GENERAL_QUERY": {
+        "category": "general",
+        "description": "General AI assistance",
+        "examples": ["explanations", "help", "technical questions"]
+    }
+}
+
+logging.basicConfig(
+    filename=os.path.expanduser("~/.process_ai.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def extract_token_and_query(user_input: str) -> Tuple[str, str]:
+    """
+    Extract static token and actual query from user input
+    Expected format: "TOKEN: actual user query"
+    """
+    if ":" in user_input:
+        parts = user_input.split(":", 1)
+        if len(parts) == 2:
+            token = parts[0].strip().upper()
+            query = parts[1].strip()
+            return token, query
+    return "", user_input
+
+def get_category_from_token(token: str) -> str:
+    """
+    Map static token to category
+    """
+    token_mapping = {
+        "PROCESS_QUERY": "process",
+        "GENERAL_QUERY": "general"
+    }
+    return token_mapping.get(token, "general")
+
+def detect_query_type_fallback(question: str) -> str:
+    """
+    Fallback detection when no token is provided (for backward compatibility)
+    """
+    question = question.lower()
+    process_patterns = [
+        r'\b(process|pid|far|details)\b.*\b(database|table|stored|history|log)\b',
+        r'\b(which|what|show|list)\b.*\bprocess\b.*\b(memory|cpu|usage|database)\b',
+        r'\bfar\s*details\b',
+        r'\bprocess\b.*\b(sorted|maximum|minimum|highest|lowest)\b',
+        r'\b(database|table|stored)\b.*\bprocess\b'
+    ]
     
-    def __init__(self, llm=None):
-        super().__init__("Process Handler", llm)
-        self.db_config = {
-            "host": "localhost",
-            "user": "root",
-            "password": "root123", 
-            "database": "EIS_n"
-        }
-        self.include_tables = ["FarDetailsAll"]
-        self.connection = None
-        self.chain = None
+    for pattern in process_patterns:
+        if re.search(pattern, question):
+            return "process"
     
-    def initialize(self) -> bool:
-        """Initialize database connection and SQL chain"""
+    return "general"
+
+def clean_sql(raw_sql: str) -> str:
+    match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
+    if match:
+        sql = match.group(1)
+    else:
+        sql = re.sub(r"```", "", raw_sql)
+        sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+    return sql.strip().rstrip(";")
+
+def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
+    if not result:
+        return "No data found for your request."
+    if len(result) == 1 and len(result[0]) == 1:
+        return f"Result: {result[0][0]}"
+    if columns and len(result) <= 10:
+        output = []
+        col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
+        header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
+        separator = "-+-".join("-" * width for width in col_widths)
+        output.append(header)
+        output.append(separator)
+        for row in result[:10]:
+            formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
+            output.append(formatted_row)
+        if len(result) > 10:
+            output.append(f"... and {len(result) - 10} more rows")
+        return "\n".join(output)
+    rows = []
+    for row in result[:20]:
+        rows.append(" | ".join(str(val) for val in row))
+    if len(result) > 20:
+        rows.append(f"... and {len(result) - 20} more rows")
+    return "\n".join(rows)
+
+def is_select_query(sql: str) -> bool:
+    return sql.strip().lower().startswith('select')
+
+def clear_screen():
+    os.system("cls" if os.name == "nt" else "clear")
+
+class ProcessAIAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_handler = None
+        self.initialized = False
+        self.chat_history = []
+
+    def initialize(self):
         try:
-            # Create database connection for queries
-            self.connection = pymysql.connect(**self.db_config)
+            print("🔧 Initializing Process AI Assistant...")
+            self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
             
-            # Create LangChain SQL database and chain
-            if self.llm:
-                uri = f"mysql+pymysql://{self.db_config['user']}:{self.db_config['password']}@{self.db_config['host']}/{self.db_config['database']}"
-                db_for_llm = SQLDatabase.from_uri(uri, include_tables=self.include_tables)
-                self.chain = create_sql_query_chain(self.llm, db_for_llm)
-            
+            # Initialize database connection
+            try:
+                db_cfg = DB_CONFIG['db_config']
+                uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+                db_for_llm = SQLDatabase.from_uri(uri, include_tables=DB_CONFIG.get("include_tables"))
+                chain = create_sql_query_chain(self.llm, db_for_llm)
+                db_conn = pymysql.connect(**db_cfg)
+                self.db_handler = {
+                    'chain': chain,
+                    'connection': db_conn,
+                    'config': DB_CONFIG
+                }
+                print(f"✅ {DB_CONFIG['name']} database connected")
+            except Exception as e:
+                print(f"⚠️  Failed to connect to {DB_CONFIG['name']}: {e}")
+                logger.error(f"DB connection failed: {e}")
+                return False
+                
             self.initialized = True
-            self.log_info("Database connection established")
+            print("✅ Process AI Assistant initialized successfully!")
             return True
-            
         except Exception as e:
-            self.log_error(f"Failed to initialize database connection: {e}", e)
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
-    
-    def get_patterns(self) -> List[str]:
-        """Return regex patterns for process-related queries"""
-        return [
-            r'\b(process|pid|far|details)\b.*\b(database|table|stored|history|log)\b',
-            r'\b(which|what|show|list)\b.*\bprocess\b.*\b(memory|cpu|usage|database)\b',
-            r'\bfar\s*details\b',
-            r'\bprocess\b.*\b(sorted|maximum|minimum|highest|lowest)\b',
-            r'\b(database|table|stored)\b.*\bprocess\b'
-        ]
-    
-    def get_keywords(self) -> List[str]:
-        """Return keywords for process-related queries"""
-        return [
-            "process", "pid", "far", "details", "fardetails", "stored", 
-            "database", "table", "maximum", "minimum", "highest", "lowest", 
-            "memory", "cpu", "usage"
-        ]
-    
-    def can_handle(self, question: str) -> bool:
-        """Check if this handler can process the question"""
-        question_lower = question.lower()
-        
-        # Check patterns
-        for pattern in self.get_patterns():
-            if re.search(pattern, question_lower):
-                return True
-        
-        # Check keywords with context
-        words = question_lower.split()
-        process_keywords = ["process", "pid", "far", "fardetails"]
-        context_keywords = ["database", "table", "stored", "history", "maximum", "minimum"]
-        
-        has_process_keyword = any(word in process_keywords for word in words)
-        has_context_keyword = any(word in context_keywords for word in words)
-        
-        return has_process_keyword and (has_context_keyword or "details" in words)
-    
-    def clean_sql(self, raw_sql: str) -> str:
-        """Clean LLM-generated SQL"""
-        match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
-        if match:
-            sql = match.group(1)
-        else:
-            sql = re.sub(r"```", "", raw_sql)
-            sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
-        return sql.strip().rstrip(";")
-    
-    def is_select_query(self, sql: str) -> bool:
-        """Check if query is a read-only SELECT statement"""
-        return sql.strip().lower().startswith('select')
-    
-    def format_result(self, result: List[tuple], columns: Optional[List[str]] = None) -> str:
-        """Format database query results"""
-        if not result:
-            return "No process/FAR data found for your request."
-        
-        if len(result) == 1 and len(result[0]) == 1:
-            return f"Result: {result[0][0]}"
-        
-        if columns and len(result) <= 10:
-            # Format as table for small results
-            output = []
-            col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
-            
-            # Header
-            header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
-            separator = "-+-".join("-" * width for width in col_widths)
-            output.append(header)
-            output.append(separator)
-            
-            # Rows
-            for row in result[:10]:
-                formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
-                output.append(formatted_row)
-            
-            if len(result) > 10:
-                output.append(f"... and {len(result) - 10} more rows")
-            
-            return "\n".join(output)
-        
-        # Simple list format
-        rows = []
-        for row in result[:20]:
-            rows.append(" | ".join(str(val) for val in row))
-        
-        if len(result) > 20:
-            rows.append(f"... and {len(result) - 20} more rows")
-        
-        return "\n".join(rows)
-    
-    def process_query(self, question: str) -> str:
-        """Process process/FAR database query"""
-        if not self.initialized:
-            return "❌ Process database handler not initialized."
+
+    def get_available_tokens(self) -> Dict[str, Dict]:
+        """
+        Return available static tokens for frontend integration
+        """
+        return STATIC_TOKENS
+
+    def save_feedback(self, question, answer, feedback):
+        data = {
+            "question": question,
+            "answer": answer,
+            "feedback": feedback,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            with open("feedback_log.jsonl", "a") as f:
+                f.write(json.dumps(data) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+
+    def find_relevant_feedback(self, question):
+        try:
+            with open("feedback_log.jsonl", "r") as f:
+                lines = f.readlines()
+            for line in lines[::-1]:
+                entry = json.loads(line)
+                if entry["question"].strip().lower() in question.strip().lower():
+                    return entry["feedback"]
+        except Exception:
+            pass
+        return None
+
+    def query_database(self, question: str) -> str:
+        if not self.db_handler:
+            return "❌ Process database not available."
         
         try:
-            # Generate SQL using AI
-            raw_sql = self.chain.invoke({"question": question})
-            sql = self.clean_sql(raw_sql)
+            raw_sql = self.db_handler['chain'].invoke({"question": question})
+            sql = clean_sql(raw_sql)
             
-            # Security check
-            if not self.is_select_query(sql):
+            if not is_select_query(sql):
                 return "🚫 Only SELECT queries are allowed for security."
             
-            # Execute query
-            with self.connection.cursor() as cursor:
+            with self.db_handler['connection'].cursor() as cursor:
                 cursor.execute(sql)
                 result = cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description] if cursor.description else None
             
             if not result:
-                return "No process/FAR data found matching your query."
+                return "No data found matching your query."
             
-            # Format result
-            formatted_result = self.format_result(result, columns)
+            formatted_result = format_answer(result, columns)
+            context = f"""
+Database query executed: {sql}
+Results: {formatted_result}
+
+User question: {question}
+
+Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful.
+"""
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
             
-            # Use AI to provide context and interpretation
-            if self.llm:
-                context = f"""A user asked about process/FAR information: "{question}"
-
-Database query results from FarDetailsAll table:
-{formatted_result}
-
-Please provide a clear, natural language response that directly answers the user's question about process/FAR data. Make it conversational and helpful."""
-                
-                ai_interpretation = self.llm.invoke(context)
-                return ai_interpretation
-            else:
-                return f"Process/FAR Query Results:\n{formatted_result}"
-                
+            ai_interpretation = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": ai_interpretation})
+            return ai_interpretation
         except Exception as e:
-            self.log_error(f"Database query error: {e}", e)
-            return f"❌ Unable to retrieve process information: {e}"
+            logger.error(f"Database query error: {e}")
+            return f"❌ Unable to retrieve that information: {e}"
+
+    def general_ai_response(self, question: str) -> str:
+        try:
+            context = f"""
+You are a helpful AI assistant with expertise in process management, databases, and general technical knowledge.
+
+User question: {question}
+
+Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational.
+"""
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
+            response = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": response})
+            return response
+        except Exception as e:
+            logger.error(f"AI response error: {e}")
+            return f"❌ Unable to process your question: {e}"
+
+    def process_question_with_token(self, user_input: str) -> Dict[str, Any]:
+        """
+        Main method for frontend integration - processes question with static token
+        Returns structured response for API consumption
+        """
+        if not self.initialized:
+            return {
+                "success": False,
+                "error": "Assistant not initialized",
+                "response": "❌ Assistant not initialized. Please restart."
+            }
+        
+        # Extract token and query
+        token, actual_query = extract_token_and_query(user_input)
+        
+        # Determine category from token or fallback detection
+        if token and token in ["PROCESS_QUERY", "GENERAL_QUERY"]:
+            category = get_category_from_token(token)
+        else:
+            # Fallback to automatic detection
+            category = detect_query_type_fallback(actual_query)
+            token = "AUTO_DETECTED"
+        
+        try:
+            # Process based on category
+            if category == "process":
+                response = self.query_database(actual_query)
+            else:
+                response = self.general_ai_response(actual_query)
+            
+            return {
+                "success": True,
+                "token_used": token,
+                "category": category,
+                "original_query": actual_query,
+                "response": response,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Processing error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"❌ Error processing your request: {e}"
+            }
+
+    def process_question(self, question: str) -> str:
+        """
+        Backward compatibility method
+        """
+        result = self.process_question_with_token(question)
+        return result["response"]
+
+    def show_tokens(self):
+        """
+        Display available tokens for reference
+        """
+        print("🏷️  AVAILABLE STATIC TOKENS:")
+        print("=" * 50)
+        for token, info in STATIC_TOKENS.items():
+            print(f"Token: {token}")
+            print(f"Category: {info['category']}")
+            print(f"Description: {info['description']}")
+            print(f"Examples: {', '.join(info['examples'])}")
+            print("-" * 30)
+
+    def show_help(self):
+        help_text = """
+📖 PROCESS AI ASSISTANT HELP (Frontend Ready)
+
+🏷️  STATIC TOKENS (for Frontend Integration):
+  Usage: "TOKEN: your question"
+  
+  Available Tokens:
+  - PROCESS_QUERY: For process database queries
+  - GENERAL_QUERY: For general AI assistance
+
+💾 DATABASE QUERIES:
+  Process Info (use PROCESS_QUERY token):
+  - "PROCESS_QUERY: Which process uses most memory?"
+  - "PROCESS_QUERY: Show FAR details"
+  - "PROCESS_QUERY: List all processes in database"
+  - "PROCESS_QUERY: Find processes with highest CPU usage"
+
+🤖 GENERAL AI (use GENERAL_QUERY token):
+  - "GENERAL_QUERY: Explain how databases work"
+  - "GENERAL_QUERY: Help with SQL queries"
+  - "GENERAL_QUERY: What is process management?"
+
+💡 COMMANDS:
+  - 'help' - Show this help
+  - 'tokens' - Show available tokens
+  - 'clear' - Clear screen
+  - 'status' - Show system status
+  - 'exit' - Quit assistant
+
+📡 API Integration:
+  Use process_question_with_token() method for structured responses
+        """
+        print(help_text)
+
+    def show_status(self):
+        print("🔍 SYSTEM STATUS")
+        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🤖 AI Model: Initialized ({'✅' if self.initialized else '❌'})")
+        print(f"💾 Database Connection: {'✅' if self.db_handler and self.db_handler['connection'].open else '❌'}")
+        if self.db_handler:
+            print(f"   - {self.db_handler['config']['name']}: {'✅' if self.db_handler['connection'].open else '❌'}")
+        print(f"🏷️  Available Tokens: {len(STATIC_TOKENS)}")
+
+    def start_interactive_session(self):
+        if not self.initialize():
+            return
+        clear_screen()
+        print("🤖 Process AI Assistant Ready (Frontend Integration Enabled)")
+        print("Ask me about process data or general questions...")
+        print("Type 'exit' to quit, 'tokens' to see available tokens\n")
+        
+        while True:
+            try:
+                question = input("💬 ").strip()
+                if not question:
+                    continue
+                
+                question_lower = question.lower()
+                if question_lower in ['exit', 'quit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                elif question_lower == 'help':
+                    self.show_help()
+                    continue
+                elif question_lower == 'tokens':
+                    self.show_tokens()
+                    continue
+                elif question_lower == 'clear':
+                    clear_screen()
+                    continue
+                elif question_lower == 'status':
+                    self.show_status()
+                    continue
+                
+                result = self.process_question_with_token(question)
+                print(f"\n🏷️  Token Used: {result.get('token_used', 'N/A')}")
+                print(f"📂 Category: {result.get('category', 'N/A')}")
+                print(f"📝 Response: {result['response']}\n")
+                
+                if result['success']:
+                    feedback = input("Was this answer helpful? (yes/no/correction): ")
+                    if feedback.lower() not in ['yes', 'y']:
+                        self.save_feedback(result.get('original_query', question), result['response'], feedback)
+                        
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                logger.error(f"Session error: {e}", exc_info=True)
+        
+        # Close database connection
+        if self.db_handler and self.db_handler['connection'].open:
+            self.db_handler['connection'].close()
+        print("Connection closed.")
+
+def main():
+    assistant = ProcessAIAssistant()
     
-    def cleanup(self):
-        """Clean up database connection"""
-        if self.connection and self.connection.open:
-            self.connection.close()
-            self.log_info("Database connection closed")
+    # Example usage for frontend integration
+    print("=== Frontend Integration Examples ===")
+    assistant.initialize()
     
-    def get_status(self) -> dict:
-        """Get handler status"""
-        status = super().get_status()
-        status.update({
-            "database": self.db_config["database"],
-            "host": self.db_config["host"],
-            "tables": self.include_tables,
-            "connection_open": self.connection.open if self.connection else False
-        })
-        return status
+    # Example 1: With static token
+    example1 = "PROCESS_QUERY: Show me all FAR details"
+    result1 = assistant.process_question_with_token(example1)
+    print(f"Input: {example1}")
+    print(f"Result: {result1}")
+    print()
+    
+    # Example 2: Without token (auto-detection)
+    example2 = "Which process uses most memory in database?"
+    result2 = assistant.process_question_with_token(example2)
+    print(f"Input: {example2}")
+    print(f"Result: {result2}")
+    print()
+    
+    # Start interactive session
+    assistant.start_interactive_session()
+
+if __name__ == "__main__":
+    main()
