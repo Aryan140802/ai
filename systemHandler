@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""
+System File Handler
+Handles system monitoring queries by searching in files rather than database
+"""
+
+import re
+import os
+import json
+import subprocess
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from base_handler import BaseHandler
+
+class SystemHandler(BaseHandler):
+    """Handler for system monitoring queries using file-based data"""
+    
+    def __init__(self, llm=None):
+        super().__init__("System Handler", llm)
+        self.system_data_file = "system_metrics.json"
+        self.log_files = {
+            "cpu": "/var/log/system_metrics/cpu.log",
+            "memory": "/var/log/system_metrics/memory.log", 
+            "disk": "/var/log/system_metrics/disk.log",
+            "network": "/var/log/system_metrics/network.log"
+        }
+        self.safe_commands = {
+            "cpu": "top -bn1 | head -n 10",
+            "memory": "free -m",
+            "disk": "df -h",
+            "uptime": "uptime",
+            "processes": "ps aux | head -20",
+            "netstat": "netstat -tuln | head -20",
+            "iostat": "iostat -x 1 1",
+            "vmstat": "vmstat 1 2",
+            "who": "who",
+            "hostname": "hostname",
+            "uname": "uname -a",
+            "lscpu": "lscpu",
+            "lsblk": "lsblk",
+        }
+        self.cached_data = {}
+        self.last_update = None
+    
+    def initialize(self) -> bool:
+        """Initialize system monitoring data sources"""
+        try:
+            # Create data directory if it doesn't exist
+            os.makedirs("system_data", exist_ok=True)
+            
+            # Load cached system metrics if available
+            self.load_system_data()
+            
+            self.initialized = True
+            self.log_info("System handler initialized")
+            return True
+            
+        except Exception as e:
+            self.log_error(f"Failed to initialize system handler: {e}", e)
+            return False
+    
+    def get_patterns(self) -> List[str]:
+        """Return regex patterns for system-related queries"""
+        return [
+            r'\b(cpu|memory|ram|disk|storage|uptime|load|processes|running|network|port|iostat|vmstat)\b',
+            r'\b(show|check|what|how much|current|live|real.?time)\b.*\b(cpu|memory|disk|load|system|server)\b',
+            r'\b(top|ps|free|df|netstat|who|hostname|uname)\b',
+            r'\bsystem\b.*\b(status|info|usage|performance|health)\b',
+            r'\b(server|linux|unix)\b.*\b(status|info|performance)\b',
+            r'\bhow\s+(much|many)\b.*\b(cpu|memory|disk|process|running)\b'
+        ]
+    
+    def get_keywords(self) -> List[str]:
+        """Return keywords for system-related queries"""
+        return [
+            "cpu", "memory", "ram", "disk", "storage", "uptime", "load", 
+            "processes", "running", "network", "port", "system", "server",
+            "current", "live", "real-time", "status", "performance", "health"
+        ]
+    
+    def can_handle(self, question: str) -> bool:
+        """Check if this handler can process the question"""
+        question_lower = question.lower()
+        
+        # Check patterns
+        for pattern in self.get_patterns():
+            if re.search(pattern, question_lower):
+                return True
+        
+        # Check keywords with context
+        words = question_lower.split()
+        system_keywords = ["cpu", "memory", "disk", "system", "server", "process"]
+        realtime_keywords = ["current", "now", "live", "real-time", "status", "running"]
+        
+        has_system_keyword = any(word in system_keywords for word in words)
+        has_realtime_keyword = any(word in realtime_keywords for word in words)
+        
+        return has_system_keyword and has_realtime_keyword
+    
+    def load_system_data(self) -> Dict[str, Any]:
+        """Load system data from files"""
+        try:
+            # Try to load from JSON file first
+            if os.path.exists(self.system_data_file):
+                with open(self.system_data_file, 'r') as f:
+                    self.cached_data = json.load(f)
+                    self.last_update = datetime.fromisoformat(self.cached_data.get('last_update', datetime.now().isoformat()))
+            
+            # Check if data is stale (older than 5 minutes)
+            if not self.last_update or (datetime.now() - self.last_update).seconds > 300:
+                self.refresh_system_data()
+            
+            return self.cached_data
+            
+        except Exception as e:
+            self.log_error(f"Error loading system data: {e}", e)
+            return {}
+    
+    def refresh_system_data(self):
+        """Refresh system data by running commands and reading files"""
+        try:
+            fresh_data = {
+                'last_update': datetime.now().isoformat(),
+                'metrics': {}
+            }
+            
+            # Get real-time system info
+            for metric, command in self.safe_commands.items():
+                try:
+                    output = subprocess.getoutput(command)
+                    fresh_data['metrics'][metric] = {
+                        'output': output,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                except Exception as e:
+                    self.log_error(f"Error getting {metric}: {e}")
+            
+            # Read from log files if they exist
+            for metric, log_file in self.log_files.items():
+                if os.path.exists(log_file):
+                    try:
+                        with open(log_file, 'r') as f:
+                            lines = f.readlines()
+                            fresh_data['metrics'][f"{metric}_history"] = lines[-100:]  # Last 100 entries
+                    except Exception as e:
+                        self.log_error(f"Error reading {log_file}: {e}")
+            
+            # Save to cache file
+            with open(self.system_data_file, 'w') as f:
+                json.dump(fresh_data, f, indent=2)
+            
+            self.cached_data = fresh_data
+            self.last_update = datetime.now()
+            self.log_info("System data refreshed")
+            
+        except Exception as e:
+            self.log_error(f"Error refreshing system data: {e}", e)
+    
+    def search_system_data(self, question: str) -> Dict[str, Any]:
+        """Search system data based on question"""
+        question_lower = question.lower()
+        relevant_data = {}
+        
+        # Map question keywords to data categories
+        keyword_mapping = {
+            'cpu': ['cpu', 'processor', 'load'],
+            'memory': ['memory', 'ram', 'mem'],
+            'disk': ['disk', 'storage', 'space', 'filesystem'],
+            'uptime': ['uptime', 'boot', 'running'],
+            'processes': ['process', 'running', 'ps', 'top'],
+            'netstat': ['network', 'connection', 'port', 'socket'],
+            'hostname': ['hostname', 'host', 'server'],
+            'uname': ['version', 'kernel', 'os']
+        }
+        
+        # Find relevant metrics
+        for metric, keywords in keyword_mapping.items():
+            if any(keyword in question_lower for keyword in keywords):
+                if metric in self.cached_data.get('metrics', {}):
+                    relevant_data[metric] = self.cached_data['metrics'][metric]
+                # Also check history if available
+                history_key = f"{metric}_history"
+                if history_key in self.cached_data.get('metrics', {}):
+                    relevant_data[history_key] = self.cached_data['metrics'][history_key]
+        
+        # If no specific match, return general system info
+        if not relevant_data:
+            for key in ['cpu', 'memory', 'uptime']:
+                if key in self.cached_data.get('metrics', {}):
+                    relevant_data[key] = self.cached_data['metrics'][key]
+        
+        return relevant_data
+    
+    def format_system_data(self, data: Dict[str, Any]) -> str:
+        """Format system data for display"""
+        if not data:
+            return "No system data available."
+        
+        output = []
+        for metric, info in data.items():
+            if metric.endswith('_history'):
+                # Handle historical data
+                metric_name = metric.replace('_history', '').upper()
+                output.append(f"\n{metric_name} History (last entries):")
+                if isinstance(info, list):
+                    for line in info[-5:]:  # Show last 5 entries
+                        output.append(f"  {line.strip()}")
+            else:
+                # Handle real-time data
+                metric_name = metric.upper()
+                if isinstance(info, dict) and 'output' in info:
+                    output.append(f"\n{metric_name}:")
+                    output.append(info['output'])
+                    if 'timestamp' in info:
+                        output.append(f"Updated: {info['timestamp']}")
+                else:
+                    output.append(f"\n{metric_name}: {info}")
+        
+        return "\n".join(output)
+    
+    def execute_safe_command(self, question: str) -> str:
+        """Execute safe system command based on question"""
+        question_lower = question.lower()
+        
+        # Map question to appropriate command
+        command_map = {
+            'cpu': ['cpu', 'processor', 'load', 'usage'],
+            'memory': ['memory', 'ram', 'mem'],
+            'disk': ['disk', 'storage', 'space', 'filesystem'],
+            'uptime': ['uptime', 'boot', 'running'],
+            'processes': ['process', 'running', 'ps', 'top'],
+            'netstat': ['network', 'connection', 'port', 'socket'],
+            'hostname': ['hostname', 'host', 'server name'],
+            'uname': ['version', 'kernel', 'os'],
+            'lscpu': ['cpu info', 'processor info'],
+            'lsblk': ['block', 'device']
+        }
+        
+        # Find best matching command
+        matched_cmd = None
+        for cmd_key, keywords in command_map.items():
+            if any(keyword in question_lower for keyword in keywords):
+                matched_cmd = self.safe_commands.get(cmd_key)
+                break
+        
+        if not matched_cmd:
+            matched_cmd = self.safe_commands['processes']  # Default
+        
+        try:
+            output = subprocess.getoutput(matched_cmd)
+            return output
+        except Exception as e:
+            self.log_error(f"Command execution error: {e}", e)
+            return f"❌ Error getting system information: {e}"
+    
+    def process_query(self, question: str) -> str:
+        """Process system monitoring query"""
+        if not self.initialized:
+            return "❌ System handler not initialized."
+        
+        try:
+            # Refresh data if it's stale
+            self.load_system_data()
+            
+            # Search relevant data in files
+            relevant_data
