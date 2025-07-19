@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""
+Main Coordinator Class
+Manages all handlers and routes queries to appropriate handlers based on tokens/patterns
+"""
+
+import os
+import re
+import logging
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from langchain_ollama import OllamaLLM
+
+# Import all handlers
+from base_handler import BaseHandler
+from team_handler import TeamHandler
+from process_handler import ProcessHandler
+from system_handler import SystemHandler
+from general_handler import GeneralAIHandler
+
+class AIAssistantCoordinator:
+    """Main coordinator that manages all specialized handlers"""
+    
+    def __init__(self):
+        self.llm = None
+        self.handlers: Dict[str, BaseHandler] = {}
+        self.handler_priority = []  # Order of handler preference
+        self.initialized = False
+        self.blocked_patterns = [
+            r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+            r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
+            r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b"
+        ]
+        
+        # Setup logging
+        logging.basicConfig(
+            filename=os.path.expanduser("~/.ai_assistant.log"),
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def initialize(self) -> bool:
+        """Initialize the coordinator and all handlers"""
+        try:
+            print("🔧 Initializing AI Assistant Coordinator...")
+            
+            # Initialize LLM
+            self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
+            print("✅ Language model loaded")
+            
+            # Initialize all handlers with specific tokens/datasets
+            handler_configs = [
+                {
+                    "name": "team",
+                    "class": TeamHandler,
+                    "description": "Team/User database queries",
+                    "tokens": ["team", "user", "employee", "staff"],
+                    "dataset": "UserMaster table in EIS database"
+                },
+                {
+                    "name": "process", 
+                    "class": ProcessHandler,
+                    "description": "Process/FAR database queries",
+                    "tokens": ["process", "far", "fardetails", "pid"],
+                    "dataset": "FarDetailsAll table in EIS_n database"
+                },
+                {
+                    "name": "system",
+                    "class": SystemHandler,
+                    "description": "System monitoring from files",
+                    "tokens": ["system", "cpu", "memory", "disk"],
+                    "dataset": "System log files and real-time commands"
+                },
+                {
+                    "name": "general",
+                    "class": GeneralAIHandler, 
+                    "description": "General AI conversations",
+                    "tokens": ["general", "help", "what", "how"],
+                    "dataset": "Knowledge base and LLM responses"
+                }
+            ]
+            
+            # Initialize each handler
+            for config in handler_configs:
+                try:
+                    handler = config["class"](llm=self.llm)
+                    if handler.initialize():
+                        self.handlers[config["name"]] = handler
+                        print(f"✅ {config['description']} handler initialized")
+                        self.logger.info(f"Handler {config['name']} initialized successfully")
+                    else:
+                        print(f"⚠️  {config['description']} handler failed to initialize")
+                        self.logger.warning(f"Handler {config['name']} failed to initialize")
+                except Exception as e:
+                    print(f"❌ Error initializing {config['name']} handler: {e}")
+                    self.logger.error(f"Error initializing {config['name']}: {e}")
+            
+            # Set handler priority (specific to general)
+            self.handler_priority = ["team", "process", "system", "general"]
+            
+            self.initialized = True
+            print(f"✅ AI Assistant Coordinator initialized with {len(self.handlers)} handlers!")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Coordinator initialization failed: {e}")
+            self.logger.error(f"Coordinator initialization failed: {e}", exc_info=True)
+            return False
+    
+    def is_dangerous(self, text: str) -> bool:
+        """Check if text contains dangerous patterns"""
+        return any(re.search(pattern, text.lower()) for pattern in self.blocked_patterns)
+    
+    def detect_handler_by_tokens(self, question: str) -> Optional[str]:
+        """Detect appropriate handler based on specific tokens"""
+        question_lower = question.lower()
+        words = question_lower.split()
+        
+        # Token-based detection with specific datasets
+        handler_tokens = {
+            "team": {
+                "primary": ["team", "user", "employee", "staff", "member", "person"],
+                "context": ["portal", "eis", "project", "name", "john", "smith"],
+                "dataset_hint": "usermaster"
+            },
+            "process": {
+                "primary": ["process", "far", "fardetails", "pid"],
+                "context": ["details", "memory", "cpu", "maximum", "minimum"],
+                "dataset_hint": "fardetailsall"
+            },
+            "system": {
+                "primary": ["system", "cpu", "memory", "disk", "network"],
+                "context": ["current", "real-time", "live", "status", "running"],
+                "dataset_hint": "files"
+            }
+        }
+        
+        # Score each handler based on token matches
+        handler_scores = {}
+        
+        for handler_name, tokens in handler_tokens.items():
+            score = 0
+            
+            # Primary tokens (high weight)
+            for token in tokens["primary"]:
+                if token in question_lower:
+                    score += 10
+            
+            # Context tokens (medium weight)
+            for token in tokens["context"]:
+                if token in question_lower:
+                    score += 5
+            
+            # Dataset hint (low weight)
+            if tokens["dataset_hint"] in question_lower:
+                score += 3
+            
+            if score > 0:
+                handler_scores[handler_name] = score
+        
+        # Return handler with highest score
+        if handler_scores:
+            return max(handler_scores.items(), key=lambda x: x[1])[0]
+        
+        return "general"  # Default to general handler
+    
+    def route_query(self, question: str) -> str:
+        """Route query to appropriate handler based on detection"""
+        if not self.initialized:
+            return "❌ Assistant not initialized. Please restart."
+        
+        if self.is_dangerous(question):
+            return "🚫 Query blocked for security reasons."
+        
+        # Detect appropriate handler
+        handler_name = self.detect_handler_by_tokens(question)
+        
+        # Fallback to pattern matching if token detection fails
+        if handler_name == "general":
+            for name in self.handler_priority[:-1]:  # Exclude general from priority check
+                if name in self.handlers and self.handlers[name].can_handle(question):
+                    handler_name = name
+                    break
+        
+        # Process with selected handler
+        if handler_name in self.handlers:
+            handler = self.handlers[handler_name]
+            self.logger.info(f"Routing query to {handler_name} handler: {question[:50]}...")
+            
+            try:
+                response = handler.process_query(question)
+                self.logger.info(f"Successfully processed query with {handler_name} handler")
+                return response
+            except Exception as e:
+                self.logger.error(f"Error in {handler_name} handler: {e}")
+                return f"❌ Error processing query with {handler_name} handler: {e}"
+        else:
+            return f"❌ Handler '{handler_name}' not available."
+    
+    def show_available_datasets(self):
+        """Show information about available datasets and handlers"""
+        print("\n📊 AVAILABLE DATASETS & HANDLERS")
+        print("=" * 50)
+        
+        dataset_info = {
+            "team": {
+                "name": "Team/User Database",
+                "dataset": "UserMaster table in EIS database",
+                "tokens": ["team", "user", "employee", "staff", "member"],
+                "examples": [
+                    "Show all employees in Portal team",
+                    "Find user named John",
+                    "Count staff members in EIS project"
+                ]
+            },
+            "process": {
+                "name": "Process/FAR Database", 
+                "dataset": "FarDetailsAll table in EIS_n database",
+                "tokens": ["process", "far", "fardetails", "pid"],
+                "examples": [
+                    "Which process uses maximum memory?",
+                    "Show FAR details sorted by CPU",
+                    "List processes with high memory usage"
+                ]
+            },
+            "system": {
+                "name": "System Monitoring Files",
+                "dataset": "System log files + real-time commands",
+                "tokens": ["system", "cpu", "memory", "disk", "network"],
+                "examples": [
+                    "Show current CPU usage",
+                    "Check system memory status",
+                    "Display disk space information"
+                ]
+            },
+            "general": {
+                "name": "General AI Knowledge",
+                "dataset": "Knowledge base + LLM responses", 
+                "tokens": ["help", "what", "how", "explain"],
+                "examples": [
+                    "What is SQL?",
+                    "How does this system work?",
+                    "Explain database concepts"
+                ]
+            }
+        }
+        
+        for handler_name, info in dataset_info.items():
+            status = "✅" if handler_name in self.handlers else "❌"
+            print(f"\n{status} {info['name']}")
+            print(f"   📁 Dataset: {info['dataset']}")
+            print(f"   🏷️  Tokens: {', '.join(info['tokens'])}")
+            print(f"   💡 Examples:")
+            for example in info['examples']:
+                print(f"      - {example}")
+    
+    def show_handler_status(self):
+        """Show status of all handlers"""
+        print("\n🔍 HANDLER STATUS")
+        print("=" * 30)
+        
+        for name, handler in self.handlers.items():
+            status = handler.get_status()
+            print(f"\n📋 {status['name']}:")
+            print(f"   Status: {'✅ Active' if status['initialized'] else '❌ Inactive'}")
+            print(f"   Type: {status['type']}")
+            
+            # Show handler-specific status
+            if name == "team" and "connection_open" in status:
+                print(f"   Database: {status.get('database', 'N/A')}")
+                print(f"   Connection: {'✅ Open' if status['connection_open'] else '❌ Closed'}")
+            elif name == "process" and "connection_open" in status:
+                print(f"   Database: {status.get('database', 'N/A')}")
+                print(f"   Connection: {'✅ Open' if status['connection_open'] else '❌ Closed'}")
+            elif name == "general" and "conversation_history_length" in status:
+                print(f"   Knowledge entries: {status.get('knowledge_base_entries', 0)}")
+                print(f"   Conversation history: {status.get('conversation_history_length', 0)} items")
+    
+    def process_special_commands(self, command: str) -> bool:
+        """Process special coordinator commands"""
+        command_lower = command.lower().strip()
+        
+        if command_lower == "show datasets":
+            self.show_available_datasets()
+            return True
+        elif command_lower == "show status":
+            self.show_handler_status()
+            return True
+        elif command_lower == "show handlers":
+            print(f"\n🤖 Active Handlers: {', '.join(self.handlers.keys())}")
+            print(f"🔄 Priority Order: {' → '.join(self.handler_priority)}")
+            return True
+        elif command_lower.startswith("test "):
+            # Test specific handler
+            handler_name = command_lower.split(" ", 1)[1]
+            if handler_name in self.handlers:
+                print(f"\n🧪 Testing {handler_name} handler...")
+                test_queries = {
+                    "team": "Show me team information",
+                    "process": "List process details", 
+                    "system": "Show system status",
+                    "general": "Hello, how are you?"
+                }
+                if handler_name in test_queries:
+                    response = self.handlers[handler_name].process_query(test_queries[handler_name])
+                    print(f"Test response: {response}")
+                else:
+                    print(f"No test query available for {handler_name}")
+            else:
+                print(f"Handler '{handler_name}' not found")
+            return True
+        
+        return False
+    
+    def start_interactive_session(self):
+        """Start interactive session with the coordinator"""
+        if not self.initialize():
+            return
+        
+        os.system("cls" if os.name == "nt" else "clear")
+        print("🤖 AI Assistant Coordinator Ready")
+        print("Intelligent query routing with specialized handlers")
+        print("Type 'help' for commands, 'show datasets' for available data, or ask any question\n")
+        
+        while True:
+            try:
+                question = input("💬 Ask me anything: ").strip()
+                
+                if not question:
+                    continue
+                
+                question_lower = question.lower()
+                
+                # Handle exit commands
+                if question_lower in ['exit', 'quit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                
+                # Handle special commands
+                if self.process_special_commands(question):
+                    continue
+                
+                # Handle help
+                if question_lower == 'help':
+                    print("""
+📖 AI Assistant Coordinator Help
+
+🎯 SMART QUERY ROUTING:
+   The system automatically detects the best handler for your query based on tokens and patterns.
+
+🏷️  TOKEN-BASED DETECTION:
+   • Team queries: team, user, employee, staff → UserMaster database
+   • Process queries: process, far, pid → FarDetailsAll database  
+   • System queries: cpu, memory, disk, system → System files & commands
+   • General queries: help, what, how → AI knowledge base
+
+📊 SPECIAL COMMANDS:
+   • 'show datasets' - List available datasets and examples
+   • 'show status' - Show handler status and connections
+   • 'show handlers' - List active handlers and priority
+   • 'test [handler]' - Test specific handler
+
+💡 EXAMPLE QUERIES:
+   • "Show team members in Portal project" → Team Handler
+   • "Which process uses maximum memory?" → Process Handler  
+   • "Check current CPU usage" → System Handler
+   • "What is a database?" → General AI Handler
+                    """)
+                    continue
+                
+                # Clear screen
+                if question_lower == 'clear':
+                    os.system("cls" if os.name == "nt" else "clear")
+                    continue
+                
+                # Route and process the query
+                response = self.route_query(question)
+                print(f"\n{response}\n")
+                
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                self.logger.error(f"Session error: {e}", exc_info=True)
+        
+        # Cleanup all handlers
+        for handler in self.handlers.values():
+            try:
+                handler.cleanup()
+            except Exception as e:
+                self.logger.error(f"Error during cleanup: {e}")
+        
+        print("🔌 All connections closed.")
+
+def main():
+    """Main entry point"""
+    coordinator = AIAssistantCoordinator()
+    coordinator.start_interactive_session()
+
+if __name__ == "__main__":
+    main()
