@@ -1,0 +1,20 @@
+# simplified_system_handler.py
+from unified_ai_assistant import UnifiedAIAssistant
+
+class SystemHandler:
+    """Simplified System Handler - delegates to UnifiedAIAssistant"""
+    
+    def __init__(self):
+        self.assistant = UnifiedAIAssistant()
+    
+    def initialize(self):
+        return self.assistant.initialize()
+    
+    def process_question(self, question: str) -> str:
+        """Process system-specific questions"""
+        result = self.assistant.process_question_with_token(f"SYSTEM_QUERY: {question}")
+        return result["response"]
+    
+    def run_system_command(self, question: str) -> str:
+        """Direct system command execution"""
+        return self.assistant.run_system_command(question)
