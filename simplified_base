@@ -1,0 +1,662 @@
+import os
+import re
+import logging
+import pymysql
+import subprocess
+import traceback
+from typing import Dict, Any, Tuple, List, Optional
+from datetime import datetime
+import json
+
+from langchain_community.utilities import SQLDatabase
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
+
+# --- UNIFIED CONFIGURATION ---
+
+# System Commands Configuration
+SAFE_COMMANDS = {
+    "cpu": "top -bn1 | grep 'Cpu(s)'",
+    "cpu_util": "mpstat 1 1 | grep 'Average' || grep 'all' /proc/stat",
+    "memory": "free -m",
+    "disk": "df -h",
+    "uptime": "uptime",
+    "load": "cat /proc/loadavg",
+    "processes": "ps aux --sort=-%cpu | head -20",
+    "netstat": "ss -tuln | head -20",
+    "iostat": "iostat -x 1 1",
+    "vmstat": "vmstat 1 2",
+    "who": "who",
+    "whoami": "whoami",
+    "date": "date",
+    "hostname": "hostname",
+    "uname": "uname -a",
+    "lscpu": "lscpu",
+    "lsblk": "lsblk",
+    "mount": "mount | grep -E '^/dev'",
+    "systemctl": "systemctl list-units --type=service --state=active | head -20",
+    "pidof": "pidof {process_name}",
+    "pgrep": "pgrep -fl {process_name}",
+    "ps_pid": "ps -C {process_name} -o pid,cmd --no-headers",
+    "topcpu": "ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 11",
+    "topmem": "ps -eo pid,comm,%mem,%cpu --sort=-%mem | head -n 11",
+    "psaux_grep": "ps aux | grep {process_name} | grep -v grep",
+    "top": "top -b -n1 | head -20",
+}
+
+BLOCKED_PATTERNS = [
+    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+    r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b"
+]
+
+# Database Configurations
+DB_CONFIGS = {
+    "team": {
+        "name": "Team Info",
+        "db_config": {
+            "host": "localhost", "user": "root", "password": "root123", "database": "EIS"
+        },
+        "include_tables": ["UserMaster"],
+    },
+    "process": {
+        "name": "Process Details",
+        "db_config": {
+            "host": "localhost", "user": "root", "password": "root123", "database": "EIS_n"
+        },
+        "include_tables": ["FarDetailsAll"],
+    }
+}
+
+# Static tokens for all handlers
+STATIC_TOKENS = {
+    "SYSTEM_QUERY": {
+        "category": "system",
+        "description": "Live system monitoring commands",
+        "examples": ["check CPU usage", "memory status", "disk space"]
+    },
+    "TEAM_QUERY": {
+        "category": "team",
+        "description": "Query team/user information",
+        "examples": ["show employees", "find user details", "list team members"]
+    },
+    "PROCESS_QUERY": {
+        "category": "process",
+        "description": "Process database queries",
+        "examples": ["process details", "FAR information", "stored process data"]
+    },
+    "GENERAL_QUERY": {
+        "category": "general",
+        "description": "General AI assistance",
+        "examples": ["explanations", "help", "technical questions"]
+    }
+}
+
+# --- SHARED UTILITIES ---
+
+logging.basicConfig(
+    filename=os.path.expanduser("~/.unified_ai.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def clear_screen():
+    os.system("cls" if os.name == "nt" else "clear")
+
+def is_dangerous(text: str) -> bool:
+    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
+
+def extract_token_and_query(user_input: str) -> Tuple[str, str]:
+    """Extract static token and actual query from user input"""
+    if ":" in user_input:
+        parts = user_input.split(":", 1)
+        if len(parts) == 2:
+            token = parts[0].strip().upper()
+            query = parts[1].strip()
+            return token, query
+    return "", user_input
+
+def get_category_from_token(token: str) -> str:
+    """Map static token to category"""
+    token_mapping = {
+        "SYSTEM_QUERY": "system",
+        "TEAM_QUERY": "team", 
+        "PROCESS_QUERY": "process",
+        "GENERAL_QUERY": "general"
+    }
+    return token_mapping.get(token, "general")
+
+def detect_query_type_fallback(question: str) -> str:
+    """Intelligent query type detection using pattern matching"""
+    question = question.lower()
+    
+    # System patterns
+    system_patterns = [
+        r'\b(cpu|memory|ram|disk|storage|uptime|load|processes|running|network|port|iostat|vmstat)\b',
+        r'\b(show|check|what|how much|current|live|real.?time)\b.*\b(cpu|memory|disk|load|system|server)\b',
+        r'\b(top|ps|free|df|netstat|who|hostname|uname)\b',
+        r'\bsystem\b.*\b(status|info|usage|performance|health)\b',
+        r'\b(server|linux|unix)\b.*\b(status|info|performance)\b',
+        r'\bhow\s+(much|many)\b.*\b(cpu|memory|disk|process|running)\b'
+    ]
+    
+    # Team patterns
+    team_patterns = [
+        r'\b(team|user|employee|staff|member|person|people)\b',
+        r'\b(show|list|find|get|count|search)\b.*\b(employee|user|team|staff)\b',
+        r'\b(who|which\s+user|which\s+employee)\b',
+        r'\bname.*\b(john|smith|portal|eis|project)\b',
+        r'\b(portal|eis|project)\b.*\b(team|user|employee)\b'
+    ]
+    
+    # Process patterns
+    process_patterns = [
+        r'\b(process|pid|far|details)\b.*\b(database|table|stored|history|log)\b',
+        r'\b(which|what|show|list)\b.*\bprocess\b.*\b(memory|cpu|usage|database)\b',
+        r'\bfar\s*details\b',
+        r'\bprocess\b.*\b(sorted|maximum|minimum|highest|lowest)\b',
+        r'\b(database|table|stored)\b.*\bprocess\b'
+    ]
+    
+    # Check patterns in order of specificity
+    for pattern in system_patterns:
+        if re.search(pattern, question):
+            return "system"
+    
+    for pattern in team_patterns:
+        if re.search(pattern, question):
+            return "team"
+    
+    for pattern in process_patterns:
+        if re.search(pattern, question):
+            return "process"
+    
+    return "general"
+
+def clean_sql(raw_sql: str) -> str:
+    """Clean and extract SQL from LLM response"""
+    match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
+    if match:
+        sql = match.group(1)
+    else:
+        sql = re.sub(r"```", "", raw_sql)
+        sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+    return sql.strip().rstrip(";")
+
+def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
+    """Format database query results for display"""
+    if not result:
+        return "No data found for your request."
+    if len(result) == 1 and len(result[0]) == 1:
+        return f"Result: {result[0][0]}"
+    if columns and len(result) <= 10:
+        output = []
+        col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
+        header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
+        separator = "-+-".join("-" * width for width in col_widths)
+        output.append(header)
+        output.append(separator)
+        for row in result[:10]:
+            formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
+            output.append(formatted_row)
+        if len(result) > 10:
+            output.append(f"... and {len(result) - 10} more rows")
+        return "\n".join(output)
+    rows = []
+    for row in result[:20]:
+        rows.append(" | ".join(str(val) for val in row))
+    if len(result) > 20:
+        rows.append(f"... and {len(result) - 20} more rows")
+    return "\n".join(rows)
+
+def is_select_query(sql: str) -> bool:
+    """Check if SQL query is a safe SELECT statement"""
+    return sql.strip().lower().startswith('select')
+
+class UnifiedAIAssistant:
+    """Unified AI Assistant that intelligently routes queries to appropriate handlers"""
+    
+    def __init__(self):
+        self.llm = None
+        self.db_handlers = {}
+        self.initialized = False
+        self.chat_history = []
+
+    def initialize(self):
+        """Initialize the AI assistant and all database connections"""
+        try:
+            print("🔧 Initializing Unified AI Assistant...")
+            self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
+            
+            # Initialize database connections
+            for category, config in DB_CONFIGS.items():
+                try:
+                    db_cfg = config['db_config']
+                    uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+                    db_for_llm = SQLDatabase.from_uri(uri, include_tables=config.get("include_tables"))
+                    chain = create_sql_query_chain(self.llm, db_for_llm)
+                    db_conn = pymysql.connect(**db_cfg)
+                    self.db_handlers[category] = {
+                        'chain': chain,
+                        'connection': db_conn,
+                        'config': config
+                    }
+                    print(f"✅ {config['name']} database connected")
+                except Exception as e:
+                    print(f"⚠️  Failed to connect to {config['name']}: {e}")
+                    logger.error(f"DB connection failed for {category}: {e}")
+            
+            self.initialized = True
+            print("✅ Unified AI Assistant initialized successfully!")
+            return True
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}", exc_info=True)
+            return False
+
+    def get_available_tokens(self) -> Dict[str, Dict]:
+        """Return available static tokens for frontend integration"""
+        return STATIC_TOKENS
+
+    def save_feedback(self, question: str, answer: str, feedback: str):
+        """Save user feedback for continuous learning"""
+        data = {
+            "question": question,
+            "answer": answer,
+            "feedback": feedback,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            with open("feedback_log.jsonl", "a") as f:
+                f.write(json.dumps(data) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+
+    def find_relevant_feedback(self, question: str) -> Optional[str]:
+        """Find relevant feedback from previous interactions"""
+        try:
+            with open("feedback_log.jsonl", "r") as f:
+                lines = f.readlines()
+            for line in lines[::-1]:
+                entry = json.loads(line)
+                if entry["question"].strip().lower() in question.strip().lower():
+                    return entry["feedback"]
+        except Exception:
+            pass
+        return None
+
+    def run_system_command(self, question: str) -> str:
+        """Handle system monitoring queries"""
+        question_lower = question.lower()
+        
+        # Command mapping for system queries
+        command_map = {
+            'cpu': ['cpu usage', 'cpu percent', 'cpu utilization', 'cpu load', 'processor usage'],
+            'cpu_util': ['cpu stat', 'cpu statistics', 'cpu total', 'average cpu'],
+            'memory': ['memory usage', 'ram usage', 'mem usage'],
+            'disk': ['disk usage', 'storage usage', 'space usage', 'filesystem'],
+            'uptime': ['uptime', 'boot time', 'system running'],
+            'load': ['load average', 'system load'],
+            'processes': ['process list', 'running processes', 'ps', 'processes'],
+            'netstat': ['network', 'open port', 'connection', 'port', 'socket'],
+            'iostat': ['io', 'input', 'output'],
+            'vmstat': ['virtual', 'vm'],
+            'who': ['logged user', 'who is logged in', 'session'],
+            'hostname': ['hostname', 'host name', 'server name'],
+            'uname': ['kernel version', 'os version', 'uname'],
+            'lscpu': ['cpu info', 'processor info'],
+            'lsblk': ['block device', 'disk device'],
+            'mount': ['mounted device', 'mount point'],
+            'systemctl': ['service', 'daemon', 'systemctl'],
+            'topcpu': ['top cpu', 'most cpu', 'highest cpu', 'max cpu', 'cpu hog'],
+            'topmem': ['top memory', 'most memory', 'highest memory', 'max memory', 'memory hog'],
+            'top': ['top'],
+        }
+        
+        # Process-specific patterns
+        pid_patterns = [
+            (r'(?:pid of|process id of|get pid for|find pid for)\s+([a-zA-Z0-9_\-\.]+)', 'pidof'),
+            (r'(?:pid for|pgrep|process name)\s+([a-zA-Z0-9_\-\.]+)', 'pgrep'),
+            (r'(?:process id|ps -c)\s+([a-zA-Z0-9_\-\.]+)', 'ps_pid'),
+            (r'(?:search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', 'psaux_grep')
+        ]
+        
+        cmd = None
+        process_name = None
+        
+        # Check for process-specific commands
+        for pattern, key in pid_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                process_name = match.group(1)
+                cmd = SAFE_COMMANDS[key].format(process_name=process_name)
+                break
+        
+        # Find matching command
+        if not cmd:
+            for cmd_key, keywords in command_map.items():
+                if any(keyword in question_lower for keyword in keywords):
+                    cmd = SAFE_COMMANDS.get(cmd_key)
+                    break
+            
+            if not cmd:
+                cmd = SAFE_COMMANDS['processes']  # Default command
+        
+        try:
+            output = subprocess.getoutput(cmd)
+            context = f"""
+System command executed: {cmd}
+Output: {output}
+
+User question: {question}
+
+Please provide a clear, helpful response that directly answers the user's question based on this system information. Be concise but informative.
+"""
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
+            ai_response = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": ai_response, "type": "system"})
+            return ai_response
+        except Exception as e:
+            logger.error(f"System command error: {e}")
+            return f"❌ Error getting system information: {e}"
+
+    def query_database(self, question: str, category: str) -> str:
+        """Handle database queries for team and process data"""
+        if category not in self.db_handlers:
+            return f"❌ Database category '{category}' not available."
+        
+        handler = self.db_handlers[category]
+        try:
+            raw_sql = handler['chain'].invoke({"question": question})
+            sql = clean_sql(raw_sql)
+            
+            if not is_select_query(sql):
+                return "🚫 Only SELECT queries are allowed for security."
+            
+            with handler['connection'].cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description] if cursor.description else None
+            
+            if not result:
+                return "No data found matching your query."
+            
+            formatted_result = format_answer(result, columns)
+            context = f"""
+Database query executed: {sql}
+Results: {formatted_result}
+
+User question: {question}
+
+Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful.
+"""
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
+            ai_interpretation = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": ai_interpretation, "type": category})
+            return ai_interpretation
+        except Exception as e:
+            logger.error(f"Database query error for {category}: {e}")
+            return f"❌ Unable to retrieve {category} information: {e}"
+
+    def general_ai_response(self, question: str) -> str:
+        """Handle general AI queries"""
+        try:
+            context = f"""
+You are a helpful AI assistant with expertise in system administration, team management, databases, and general technical knowledge.
+
+User question: {question}
+
+Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational.
+"""
+            feedback = self.find_relevant_feedback(question)
+            if feedback:
+                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
+            response = self.llm.invoke(context)
+            self.chat_history.append({"user": question, "assistant": response, "type": "general"})
+            return response
+        except Exception as e:
+            logger.error(f"AI response error: {e}")
+            return f"❌ Unable to process your question: {e}"
+
+    def process_question_with_token(self, user_input: str) -> Dict[str, Any]:
+        """Main method for frontend integration - processes question with intelligent routing"""
+        if not self.initialized:
+            return {
+                "success": False,
+                "error": "Assistant not initialized",
+                "response": "❌ Assistant not initialized. Please restart."
+            }
+        
+        if is_dangerous(user_input):
+            return {
+                "success": False,
+                "error": "Blocked for security",
+                "response": "🚫 Question blocked for security reasons."
+            }
+        
+        # Extract token and query
+        token, actual_query = extract_token_and_query(user_input)
+        
+        # Determine category from token or fallback detection
+        if token and token in STATIC_TOKENS:
+            category = get_category_from_token(token)
+        else:
+            # Intelligent fallback detection
+            category = detect_query_type_fallback(actual_query)
+            token = "AUTO_DETECTED"
+        
+        try:
+            # Route to appropriate handler based on category
+            if category == "system":
+                response = self.run_system_command(actual_query)
+            elif category in ["team", "process"]:
+                response = self.query_database(actual_query, category)
+            else:
+                response = self.general_ai_response(actual_query)
+            
+            return {
+                "success": True,
+                "token_used": token,
+                "category": category,
+                "original_query": actual_query,
+                "response": response,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Processing error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"❌ Error processing your request: {e}"
+            }
+
+    def process_question(self, question: str) -> str:
+        """Backward compatibility method"""
+        result = self.process_question_with_token(question)
+        return result["response"]
+
+    def show_tokens(self):
+        """Display available tokens for reference"""
+        print("🏷️  AVAILABLE STATIC TOKENS:")
+        print("=" * 60)
+        for token, info in STATIC_TOKENS.items():
+            print(f"Token: {token}")
+            print(f"Category: {info['category']}")
+            print(f"Description: {info['description']}")
+            print(f"Examples: {', '.join(info['examples'])}")
+            print("-" * 40)
+
+    def show_help(self):
+        """Display comprehensive help information"""
+        help_text = """
+📖 UNIFIED AI ASSISTANT HELP (Smart Routing Enabled)
+
+🧠 INTELLIGENT QUERY ROUTING:
+  The assistant automatically detects query type and routes to the appropriate handler:
+  - System queries → System monitoring commands
+  - Team queries → Team database queries  
+  - Process queries → Process database queries
+  - General queries → General AI assistance
+
+🏷️  STATIC TOKENS (Optional - for explicit routing):
+  Usage: "TOKEN: your question"
+  
+  Available Tokens:
+  - SYSTEM_QUERY: For live system monitoring
+  - TEAM_QUERY: For team/user information
+  - PROCESS_QUERY: For process database queries
+  - GENERAL_QUERY: For general AI assistance
+
+🖥️  SYSTEM COMMANDS:
+  Examples (auto-detected or use SYSTEM_QUERY):
+  - "Show CPU usage" / "SYSTEM_QUERY: Check processor utilization"
+  - "How much memory is used?" / "SYSTEM_QUERY: Memory status"
+  - "List running processes" / "SYSTEM_QUERY: What processes are running?"
+  - "Check disk space" / "SYSTEM_QUERY: Show filesystem usage"
+
+👥 TEAM INFORMATION:
+  Examples (auto-detected or use TEAM_QUERY):
+  - "Show all employees" / "TEAM_QUERY: List team members"
+  - "Find user John Smith" / "TEAM_QUERY: Search for employee John"
+  - "How many team members?" / "TEAM_QUERY: Count total employees"
+
+🔄 PROCESS DATABASE:
+  Examples (auto-detected or use PROCESS_QUERY):
+  - "Show FAR details" / "PROCESS_QUERY: List all process data"
+  - "Which process uses most memory?" / "PROCESS_QUERY: Find memory hogs"
+  - "Process database statistics" / "PROCESS_QUERY: Show process summary"
+
+🤖 GENERAL AI:
+  Examples (auto-detected or use GENERAL_QUERY):
+  - "Explain how databases work" / "GENERAL_QUERY: What is SQL?"
+  - "Help with Linux commands" / "GENERAL_QUERY: System administration tips"
+
+💡 COMMANDS:
+  - 'help' - Show this help
+  - 'tokens' - Show available tokens
+  - 'clear' - Clear screen
+  - 'status' - Show system status
+  - 'exit' - Quit assistant
+
+🔒 SECURITY:
+  Only safe, read-only operations are allowed.
+  Destructive commands are automatically blocked.
+
+📡 API Integration:
+  Use process_question_with_token() method for structured responses
+        """
+        print(help_text)
+
+    def show_status(self):
+        """Display system status"""
+        print("🔍 UNIFIED AI ASSISTANT STATUS")
+        print("=" * 50)
+        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🤖 AI Model: {'✅ Initialized' if self.initialized else '❌ Not initialized'}")
+        print(f"🏷️  Available Tokens: {len(STATIC_TOKENS)}")
+        print(f"🛡️  Safe Commands: {len(SAFE_COMMANDS)}")
+        print(f"🚫 Blocked Patterns: {len(BLOCKED_PATTERNS)}")
+        print(f"💾 Database Connections: {len(self.db_handlers)}")
+        
+        for category, handler in self.db_handlers.items():
+            status = "✅" if handler['connection'].open else "❌"
+            print(f"   - {handler['config']['name']}: {status}")
+        
+        print(f"💬 Chat History: {len(self.chat_history)} interactions")
+
+    def start_interactive_session(self):
+        """Start the interactive chat session"""
+        if not self.initialize():
+            return
+            
+        clear_screen()
+        print("🤖 Unified AI Assistant Ready (Smart Routing Enabled)")
+        print("Ask me anything - I'll automatically route to the right handler!")
+        print("Type 'exit' to quit, 'help' for commands\n")
+        
+        while True:
+            try:
+                question = input("💬 ").strip()
+                if not question:
+                    continue
+                
+                question_lower = question.lower()
+                if question_lower in ['exit', 'quit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                elif question_lower == 'help':
+                    self.show_help()
+                    continue
+                elif question_lower == 'tokens':
+                    self.show_tokens()
+                    continue
+                elif question_lower == 'clear':
+                    clear_screen()
+                    continue
+                elif question_lower == 'status':
+                    self.show_status()
+                    continue
+                
+                result = self.process_question_with_token(question)
+                print(f"\n🔍 Query Type: {result.get('category', 'unknown').title()}")
+                print(f"🏷️  Token Used: {result.get('token_used', 'N/A')}")
+                print(f"📝 Response:\n{result['response']}\n")
+                
+                if result['success']:
+                    feedback = input("💭 Was this helpful? (yes/no/correction): ").strip()
+                    if feedback.lower() not in ['yes', 'y', '']:
+                        self.save_feedback(result.get('original_query', question), result['response'], feedback)
+                        print("📝 Thank you for the feedback!\n")
+                        
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                logger.error(f"Session error: {e}", exc_info=True)
+        
+        # Cleanup database connections
+        for handler in self.db_handlers.values():
+            if handler['connection'].open:
+                handler['connection'].close()
+        print("🔌 Database connections closed.")
+
+def main():
+    """Main entry point with example usage"""
+    assistant = UnifiedAIAssistant()
+    
+    # Example usage for API integration
+    print("=== UNIFIED AI ASSISTANT - API EXAMPLES ===")
+    
+    if assistant.initialize():
+        print("\n🧪 Testing intelligent query routing:")
+        
+        test_queries = [
+            "What's the CPU usage?",  # Should route to system
+            "Show all employees",     # Should route to team  
+            "FAR process details",    # Should route to process
+            "Explain how AI works"    # Should route to general
+        ]
+        
+        for query in test_queries:
+            print(f"\n📝 Query: '{query}'")
+            result = assistant.process_question_with_token(query)
+            print(f"🎯 Routed to: {result.get('category', 'unknown')}")
+            print(f"📊 Success: {result.get('success', False)}")
+            
+        print("\n" + "="*50)
+    
+    # Start interactive session
+    assistant.start_interactive_session()
+
+if __name__ == "__main__":
+    main()
