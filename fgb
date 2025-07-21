@@ -32,7 +32,7 @@ DB_CONFIGS = {
     "team": {
         "name": "Team Info",
         "db_config": {
-            "host": "localhost", "user": "root", "password": "root123", "database": "EIS"
+            "host": "localhost", "user": "root", "password": "root123", "database": "EIS_n"
         },
         "include_tables": ["UserMaster"],
     }
@@ -188,7 +188,7 @@ class UnifiedAIAssistant:
     def initialize(self):
         try:
             print("🔧 Initializing AI Assistant...")
-            self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
+            self.llm = OllamaLLM(model="mistral:latest", temperature=0.1)
             for category, config in DB_CONFIGS.items():
                 try:
                     db_cfg = config['db_config']
@@ -329,14 +329,18 @@ Please provide a clear, helpful response that directly answers the user's questi
         try:
             raw_sql = handler['chain'].invoke({"question": question})
             sql = clean_sql(raw_sql)
+            print(sql)
             if not is_select_query(sql):
                 return "🚫 Only SELECT queries are allowed for security."
             with handler['connection'].cursor() as cursor:
+                print("connection established")
                 cursor.execute(sql)
                 result = cursor.fetchall()
+                print(result)
                 columns = [desc[0] for desc in cursor.description] if cursor.description else None
             if not result:
                 return "No data found matching your query."
+            print(result)
             formatted_result = format_answer(result, columns)
             context = ""
             for turn in self.chat_history[-5:]:
@@ -411,12 +415,12 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
   - "Show all employees in Portal team"
   - "Give me details of employee named John"
   - "Count employees in EIS project"
-  
+
   Process Info:
   - "Which process uses maximum memory?"
   - "List all processes run by root"
   - "Show processes sorted by CPU usage"
-  
+
   System Metrics:
   - "What is the latest system metric?"
   - "Show average CPU usage from database"
