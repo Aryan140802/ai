@@ -11,7 +11,6 @@ import json
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from langchain.prompts import PromptTemplate
 
 # --- CONFIGURATION ---
 
@@ -39,56 +38,115 @@ DB_CONFIGS = {
     }
 }
 
+# Expanded safe commands with more system monitoring capabilities
 SAFE_COMMANDS = {
+    # CPU and Performance
     "cpu": "top -bn1 | grep 'Cpu(s)'",
     "cpu_util": "mpstat 1 1 | grep 'Average' || grep 'all' /proc/stat",
-    "memory": "free -m",
-    "disk": "df -h",
-    "uptime": "uptime",
+    "cpu_cores": "nproc",
+    "cpu_freq": "cat /proc/cpuinfo | grep 'cpu MHz'",
+    "cpu_temp": "sensors | grep -i temp || cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null",
     "load": "cat /proc/loadavg",
-    "processes": "ps aux --sort=-%cpu | head -20",
-    "netstat": "ss -tuln | head -20",
-    "iostat": "iostat -x 1 1",
-    "vmstat": "vmstat 1 2",
-    "who": "who",
-    "whoami": "whoami",
-    "date": "date",
-    "hostname": "hostname",
-    "uname": "uname -a",
-    "lscpu": "lscpu",
+    "load_avg": "uptime | awk '{print $(NF-2), $(NF-1), $NF}'",
+    
+    # Memory Management
+    "memory": "free -m",
+    "memory_detailed": "free -h",
+    "swap": "swapon -s",
+    "buffer_cache": "cat /proc/meminfo | grep -E 'Buffers|Cached'",
+    "memory_usage": "ps aux --sort=-%mem | head -20",
+    
+    # Disk and Storage
+    "disk": "df -h",
+    "disk_usage": "du -sh /* 2>/dev/null | sort -hr | head -20",
+    "disk_io": "iostat -x 1 1",
+    "disk_speed": "hdparm -t /dev/sda 2>/dev/null || echo 'hdparm not available'",
     "lsblk": "lsblk",
     "mount": "mount | grep -E '^/dev'",
-    "systemctl": "systemctl list-units --type=service --state=active | head -20",
+    "filesystem": "findmnt -D",
+    
+    # Network
+    "netstat": "ss -tuln | head -20",
+    "network_interfaces": "ip addr show",
+    "network_stats": "cat /proc/net/dev",
+    "routing": "ip route",
+    "arp": "arp -a",
+    "ping_gateway": "ping -c 3 $(ip route | grep default | awk '{print $3}' | head -1)",
+    "bandwidth": "vnstat -i eth0 2>/dev/null || echo 'vnstat not available'",
+    
+    # Process Management
+    "processes": "ps aux --sort=-%cpu | head -20",
+    "process_tree": "pstree -p",
+    "zombie_processes": "ps aux | grep -w Z",
     "pidof": "pidof {process_name}",
     "pgrep": "pgrep -fl {process_name}",
     "ps_pid": "ps -C {process_name} -o pid,cmd --no-headers",
     "topcpu": "ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 11",
     "topmem": "ps -eo pid,comm,%mem,%cpu --sort=-%mem | head -n 11",
     "psaux_grep": "ps aux | grep {process_name} | grep -v grep",
+    "process_count": "ps aux | wc -l",
+    
+    # System Information
+    "uptime": "uptime",
+    "hostname": "hostname",
+    "uname": "uname -a",
+    "kernel": "uname -r",
+    "os_version": "cat /etc/os-release",
+    "lscpu": "lscpu",
+    "hardware": "lshw -short 2>/dev/null || dmidecode -t system 2>/dev/null | head -20",
+    "architecture": "arch",
+    
+    # Users and Sessions
+    "who": "who",
+    "whoami": "whoami",
+    "last_login": "last | head -10",
+    "active_users": "w",
+    "user_groups": "groups",
+    "logged_users": "users",
+    
+    # Services and Daemons
+    "systemctl": "systemctl list-units --type=service --state=active | head -20",
+    "failed_services": "systemctl list-units --failed",
+    "enabled_services": "systemctl list-unit-files --state=enabled | head -20",
+    "service_status": "systemctl status {service_name}",
+    
+    # System Monitoring
+    "vmstat": "vmstat 1 2",
+    "iostat": "iostat -x 1 1",
+    "sar_cpu": "sar -u 1 3 2>/dev/null || echo 'sar not available'",
+    "sar_memory": "sar -r 1 3 2>/dev/null || echo 'sar not available'",
     "top": "top -b -n1 | head -20",
+    "htop_snapshot": "htop -d 1 -n 1 2>/dev/null || top -b -n1 | head -20",
+    
+    # Time and Date
+    "date": "date",
+    "timezone": "timedatectl 2>/dev/null || date +%Z",
+    "ntp_status": "timedatectl status 2>/dev/null || ntpq -p 2>/dev/null | head -10",
+    
+    # Log Analysis
+    "dmesg": "dmesg | tail -20",
+    "kern_log": "tail -20 /var/log/kern.log 2>/dev/null || echo 'kern.log not accessible'",
+    "auth_log": "tail -10 /var/log/auth.log 2>/dev/null || echo 'auth.log not accessible'",
+    "syslog": "tail -20 /var/log/syslog 2>/dev/null || journalctl -n 20 2>/dev/null",
+    
+    # Environment
+    "env": "env | head -20",
+    "path": "echo $PATH",
+    "shell": "echo $SHELL",
+    "locale": "locale",
+    
+    # Package Management (safe read-only commands)
+    "installed_packages": "dpkg -l | head -20 2>/dev/null || rpm -qa | head -20 2>/dev/null || echo 'Package manager not detected'",
+    "package_count": "dpkg -l | wc -l 2>/dev/null || rpm -qa | wc -l 2>/dev/null || echo 'Package manager not detected'"
 }
 
 BLOCKED_PATTERNS = [
     r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
     r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
-    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b"
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
+    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
+    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
-
-# Custom prompt template to avoid LIKE clauses
-CUSTOM_PROMPT = PromptTemplate.from_template("""
-You are a MySQL expert. Given an input question, create a syntactically correct MySQL query to run.
-Unless the user specifically asks for pattern matching, you should always use exact matches (=) instead of LIKE in your queries.
-Never query for all columns from a table. You must query only the columns that are needed to answer the question.
-
-Use the following format:
-Question: "Question here"
-SQLQuery: "SQL Query to run"
-
-Only use the following tables:
-{table_info}
-
-Question: {question}
-SQLQuery:""")
 
 logging.basicConfig(
     filename=os.path.expanduser("~/.unified_ai.log"),
@@ -102,34 +160,49 @@ def is_dangerous(text: str) -> bool:
 
 def detect_query_type(question: str) -> str:
     question = question.lower()
+    
+    # Enhanced system patterns with more keywords
     system_patterns = [
-        r'\b(cpu|memory|ram|disk|storage|uptime|load|processes|running|network|port|iostat|vmstat)\b',
-        r'\b(show|check|what|how much|current|live|real.?time)\b.*\b(cpu|memory|disk|load|system|server)\b',
-        r'\b(top|ps|free|df|netstat|who|hostname|uname)\b',
-        r'\bsystem\b.*\b(status|info|usage|performance|health)\b',
-        r'\b(server|linux|unix)\b.*\b(status|info|performance)\b',
-        r'\bhow\s+(much|many)\b.*\b(cpu|memory|disk|process|running)\b'
+        r'\b(cpu|processor|memory|ram|disk|storage|uptime|load|processes|running|network|port|iostat|vmstat|temperature|temp|cores|frequency)\b',
+        r'\b(show|check|what|how much|current|live|real.?time|monitor|status)\b.*\b(cpu|memory|disk|load|system|server|performance|hardware)\b',
+        r'\b(top|ps|free|df|netstat|who|hostname|uname|lscpu|sensors|htop)\b',
+        r'\bsystem\b.*\b(status|info|usage|performance|health|monitor|metrics)\b',
+        r'\b(server|linux|unix|kernel|os)\b.*\b(status|info|performance|version)\b',
+        r'\bhow\s+(much|many|fast|hot)\b.*\b(cpu|memory|disk|process|running|temperature)\b',
+        r'\b(bandwidth|throughput|io|input|output|swap|cache|buffer)\b',
+        r'\b(service|daemon|systemd|systemctl|failed|enabled|active)\b',
+        r'\b(log|dmesg|syslog|kernel|auth|journal)\b',
+        r'\b(environment|env|path|shell|locale|timezone|ntp)\b'
     ]
+    
+    # Enhanced team patterns
     team_patterns = [
-        r'\b(team|user|employee|staff|member|person|people)\b',
-        r'\b(show|list|find|get|count|search)\b.*\b(employee|user|team|staff)\b',
-        r'\b(who|which\s+user|which\s+employee)\b',
-        r'\bname.*\b(john|smith|portal|eis|project)\b',
-        r'\b(portal|eis|project)\b.*\b(team|user|employee)\b'
+        r'\b(team|user|employee|staff|member|person|people|worker|developer)\b',
+        r'\b(show|list|find|get|count|search|display|retrieve)\b.*\b(employee|user|team|staff|member|developer)\b',
+        r'\b(who|which\s+user|which\s+employee|what\s+user|what\s+employee)\b',
+        r'\bname.*\b(john|smith|portal|eis|project|like|similar|contain)\b',
+        r'\b(portal|eis|project|department|division)\b.*\b(team|user|employee|staff|member)\b',
+        r'\b(search|find|look)\b.*\b(employee|user|name|person)\b.*\b(like|similar|contain|match)\b'
     ]
+    
+    # Enhanced process patterns
     process_patterns = [
-        r'\b(process|pid|far|details)\b.*\b(database|table|stored|history|log)\b',
-        r'\b(which|what|show|list)\b.*\bprocess\b.*\b(memory|cpu|usage|database)\b',
+        r'\b(process|pid|far|details|procedure|execution)\b.*\b(database|table|stored|history|log|like|similar)\b',
+        r'\b(which|what|show|list|find|search)\b.*\bprocess\b.*\b(memory|cpu|usage|database|like|similar|contain)\b',
         r'\bfar\s*details\b',
-        r'\bprocess\b.*\b(sorted|maximum|minimum|highest|lowest)\b',
-        r'\b(database|table|stored)\b.*\bprocess\b'
+        r'\bprocess\b.*\b(sorted|maximum|minimum|highest|lowest|like|similar|contain)\b',
+        r'\b(database|table|stored)\b.*\bprocess\b.*\b(like|similar|contain|match)\b'
     ]
+    
+    # Enhanced system database patterns
     system_db_patterns = [
-        r'\b(metrics|monitoring|historical|logged|stored)\b.*\b(cpu|memory|disk|system)\b',
-        r'\b(average|total|sum|count|maximum|minimum)\b.*\b(cpu|memory|disk|usage)\b',
-        r'\b(system|server)\b.*\b(metrics|monitoring|database|table|history)\b',
-        r'\b(latest|recent|last|previous)\b.*\b(system|metric|entry)\b'
+        r'\b(metrics|monitoring|historical|logged|stored|recorded)\b.*\b(cpu|memory|disk|system|like|similar)\b',
+        r'\b(average|total|sum|count|maximum|minimum|trend|pattern)\b.*\b(cpu|memory|disk|usage|like|similar)\b',
+        r'\b(system|server)\b.*\b(metrics|monitoring|database|table|history|like|similar|contain)\b',
+        r'\b(latest|recent|last|previous|historical)\b.*\b(system|metric|entry|like|similar)\b'
     ]
+    
+    # Check patterns in order of specificity
     for pattern in system_patterns:
         if re.search(pattern, question):
             return "system"
@@ -142,20 +215,28 @@ def detect_query_type(question: str) -> str:
     for pattern in system_db_patterns:
         if re.search(pattern, question):
             return "system_db"
+    
+    # Word-based detection with expanded keywords
     words = question.split()
-    if any(word in ['current', 'now', 'live', 'real-time', 'status', 'running'] for word in words):
-        if any(word in ['cpu', 'memory', 'disk', 'process', 'system', 'server'] for word in words):
+    
+    # Real-time system queries
+    if any(word in ['current', 'now', 'live', 'real-time', 'status', 'running', 'active', 'online'] for word in words):
+        if any(word in ['cpu', 'memory', 'disk', 'process', 'system', 'server', 'network', 'service'] for word in words):
             return "system"
-    if any(word in ['count', 'total', 'average', 'maximum', 'minimum', 'list', 'show', 'find'] for word in words):
-        if any(word in ['employee', 'user', 'team', 'staff', 'member'] for word in words):
+    
+    # Database queries with LIKE operations
+    if any(word in ['count', 'total', 'average', 'maximum', 'minimum', 'list', 'show', 'find', 'search', 'like', 'similar', 'contain'] for word in words):
+        if any(word in ['employee', 'user', 'team', 'staff', 'member', 'person', 'developer'] for word in words):
             return "team"
-        elif any(word in ['process', 'pid', 'far'] for word in words):
+        elif any(word in ['process', 'pid', 'far', 'procedure', 'execution'] for word in words):
             return "process"
-        elif any(word in ['metric', 'monitoring', 'system', 'database'] for word in words):
+        elif any(word in ['metric', 'monitoring', 'system', 'database', 'historical'] for word in words):
             return "system_db"
+    
     return "general"
 
 def clean_sql(raw_sql: str) -> str:
+    # Extract SQL from code blocks
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1)
@@ -163,18 +244,19 @@ def clean_sql(raw_sql: str) -> str:
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
     
-    # Replace all LIKE clauses with exact matches
-    sql = re.sub(r"LIKE\s+['\"](%?)([^%'\" ]+)(%?)['\"]", 
-                 lambda m: f"= '{m.group(2)}'", 
-                 sql, flags=re.IGNORECASE)
+    # Replace = with LIKE for string comparisons (preserve = for numeric comparisons)
+    sql = re.sub(r"(\w+)\s*=\s*'([^']*)'", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"(\w+)\s*=\s*\"([^\"]*)\"", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
     
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
     if not result:
         return "No data found for your request."
+    
     if len(result) == 1 and len(result[0]) == 1:
         return f"Result: {result[0][0]}"
+    
     if columns and len(result) <= 10:
         output = []
         col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
@@ -188,6 +270,7 @@ def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> s
         if len(result) > 10:
             output.append(f"... and {len(result) - 10} more rows")
         return "\n".join(output)
+    
     rows = []
     for row in result[:20]:
         rows.append(" | ".join(str(val) for val in row))
@@ -212,16 +295,17 @@ class UnifiedAIAssistant:
         try:
             print("🔧 Initializing AI Assistant...")
             self.llm = OllamaLLM(model="mistral:latest", temperature=0.1)
+            
             for category, config in DB_CONFIGS.items():
                 try:
                     db_cfg = config['db_config']
                     uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
                     db_for_llm = SQLDatabase.from_uri(uri, include_tables=config.get("include_tables"))
                     
-                    # Use our custom prompt that instructs to avoid LIKE
-                    chain = create_sql_query_chain(self.llm, db_for_llm, prompt=CUSTOM_PROMPT)
-                    
+                    # Enhanced chain with LIKE preference
+                    chain = create_sql_query_chain(self.llm, db_for_llm)
                     db_conn = pymysql.connect(**db_cfg)
+                    
                     self.db_handlers[category] = {
                         'chain': chain,
                         'connection': db_conn,
@@ -231,6 +315,7 @@ class UnifiedAIAssistant:
                 except Exception as e:
                     print(f"⚠️  Failed to connect to {config['name']}: {e}")
                     logger.error(f"DB connection failed for {category}: {e}")
+            
             self.initialized = True
             print("✅ AI Assistant initialized successfully!")
             return True
@@ -266,84 +351,188 @@ class UnifiedAIAssistant:
 
     def run_system_command(self, question: str) -> str:
         question_lower = question.lower()
+        
+        # Enhanced command mapping with more keywords
         command_map = {
+            # CPU and Performance
             'cpu': ['cpu usage', 'cpu percent', 'cpu utilization', 'cpu load', 'processor usage', 'processor utilization'],
             'cpu_util': ['cpu stat', 'cpu statistics', 'cpu total', 'average cpu'],
-            'memory': ['memory usage', 'ram usage', 'mem usage'],
-            'disk': ['disk usage', 'storage usage', 'space usage', 'filesystem'],
-            'uptime': ['uptime', 'boot time', 'system running'],
+            'cpu_cores': ['cpu core', 'core count', 'processor core', 'number of core'],
+            'cpu_freq': ['cpu frequency', 'processor speed', 'cpu speed', 'cpu mhz'],
+            'cpu_temp': ['cpu temperature', 'processor temperature', 'cpu temp', 'thermal', 'heat'],
             'load': ['load average', 'system load'],
-            'processes': ['process list', 'running processes', 'ps', 'processes'],
-            'netstat': ['network', 'open port', 'connection', 'port', 'socket'],
-            'iostat': ['io', 'input', 'output'],
-            'vmstat': ['virtual', 'vm'],
-            'who': ['logged user', 'who is logged in', 'session'],
-            'hostname': ['hostname', 'host name', 'server name'],
-            'uname': ['kernel version', 'os version', 'uname'],
-            'lscpu': ['cpu info', 'processor info'],
+            'load_avg': ['load avg', 'current load'],
+            
+            # Memory
+            'memory': ['memory usage', 'ram usage', 'mem usage'],
+            'memory_detailed': ['memory detail', 'detailed memory', 'memory breakdown'],
+            'swap': ['swap usage', 'swap space', 'virtual memory'],
+            'buffer_cache': ['buffer', 'cache', 'buffer cache'],
+            'memory_usage': ['memory process', 'ram process', 'memory hog'],
+            
+            # Disk and Storage
+            'disk': ['disk usage', 'storage usage', 'space usage', 'filesystem'],
+            'disk_usage': ['disk space', 'large file', 'directory size'],
+            'disk_io': ['disk io', 'io stat', 'disk performance'],
+            'disk_speed': ['disk speed', 'disk benchmark', 'storage speed'],
             'lsblk': ['block device', 'disk device'],
             'mount': ['mounted device', 'mount point'],
-            'systemctl': ['service', 'daemon', 'systemctl'],
+            'filesystem': ['file system', 'filesystem'],
+            
+            # Network
+            'netstat': ['network', 'open port', 'connection', 'port', 'socket'],
+            'network_interfaces': ['network interface', 'ip address', 'network card'],
+            'network_stats': ['network statistics', 'network stat', 'network traffic'],
+            'routing': ['route', 'routing table', 'gateway'],
+            'arp': ['arp table', 'mac address', 'neighbor'],
+            'ping_gateway': ['ping gateway', 'test gateway', 'gateway connectivity'],
+            'bandwidth': ['bandwidth', 'network usage', 'traffic usage'],
+            
+            # Process Management
+            'processes': ['process list', 'running processes', 'ps', 'processes'],
+            'process_tree': ['process tree', 'parent process', 'child process'],
+            'zombie_processes': ['zombie process', 'defunct process'],
             'pidof': ['pid of', 'process id of', 'find pid', 'get pid'],
             'pgrep': ['pid for', 'pgrep', 'process name'],
             'ps_pid': ['process id', 'ps -C'],
             'psaux_grep': ['search process', 'grep process', 'find process'],
+            'process_count': ['process count', 'number of process'],
             'topcpu': ['top cpu', 'most cpu', 'highest cpu', 'max cpu', 'cpu hog'],
             'topmem': ['top memory', 'most memory', 'highest memory', 'max memory', 'memory hog'],
+            
+            # System Information
+            'uptime': ['uptime', 'boot time', 'system running'],
+            'hostname': ['hostname', 'host name', 'server name'],
+            'uname': ['kernel version', 'os version', 'uname'],
+            'kernel': ['kernel', 'kernel version'],
+            'os_version': ['os version', 'operating system', 'distribution'],
+            'lscpu': ['cpu info', 'processor info'],
+            'hardware': ['hardware info', 'system info', 'hardware detail'],
+            'architecture': ['architecture', 'arch', 'cpu arch'],
+            
+            # Users and Sessions
+            'who': ['logged user', 'who is logged in', 'session'],
+            'last_login': ['last login', 'login history', 'user login'],
+            'active_users': ['active user', 'current user', 'logged user'],
+            'user_groups': ['user group', 'group membership'],
+            'logged_users': ['logged user', 'current session'],
+            
+            # Services
+            'systemctl': ['service', 'daemon', 'systemctl'],
+            'failed_services': ['failed service', 'broken service', 'service error'],
+            'enabled_services': ['enabled service', 'startup service'],
+            'service_status': ['service status', 'daemon status'],
+            
+            # Monitoring
+            'vmstat': ['virtual', 'vm', 'vmstat'],
+            'iostat': ['io', 'input', 'output'],
+            'sar_cpu': ['sar cpu', 'system activity'],
+            'sar_memory': ['sar memory', 'memory activity'],
             'top': ['top'],
+            'htop_snapshot': ['htop', 'interactive top'],
+            
+            # Time and Date
+            'date': ['date', 'current time'],
+            'timezone': ['timezone', 'time zone'],
+            'ntp_status': ['ntp', 'time sync', 'clock sync'],
+            
+            # Logs
+            'dmesg': ['dmesg', 'kernel message', 'boot message'],
+            'kern_log': ['kernel log', 'kern log'],
+            'auth_log': ['authentication log', 'auth log', 'login log'],
+            'syslog': ['system log', 'syslog'],
+            
+            # Environment
+            'env': ['environment', 'environment variable'],
+            'path': ['path', 'executable path'],
+            'shell': ['shell', 'command shell'],
+            'locale': ['locale', 'language setting'],
+            
+            # Package Management
+            'installed_packages': ['installed package', 'package list', 'installed software'],
+            'package_count': ['package count', 'number of package']
         }
+        
+        # Check for process-specific commands
         process_name = None
         cmd = None
+        
+        # Enhanced process pattern matching
         pid_patterns = [
             (r'(?:pid of|process id of|get pid for|find pid for)\s+([a-zA-Z0-9_\-\.]+)', 'pidof'),
             (r'(?:pid for|pgrep|process name)\s+([a-zA-Z0-9_\-\.]+)', 'pgrep'),
             (r'(?:process id|ps -c)\s+([a-zA-Z0-9_\-\.]+)', 'ps_pid'),
-            (r'(?:search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', 'psaux_grep')
+            (r'(?:search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', 'psaux_grep'),
+            (r'(?:service status|daemon status)\s+([a-zA-Z0-9_\-\.]+)', 'service_status')
         ]
+        
         for pattern, key in pid_patterns:
             match = re.search(pattern, question_lower)
             if match:
                 process_name = match.group(1)
-                cmd = SAFE_COMMANDS[key].format(process_name=process_name)
+                if key in SAFE_COMMANDS:
+                    cmd = SAFE_COMMANDS[key].format(process_name=process_name, service_name=process_name)
                 break
+        
+        # If no process-specific command found, find general command
         if not cmd:
             matched_cmd = None
             for cmd_key, keywords in command_map.items():
                 if any(keyword in question_lower for keyword in keywords):
-                    if cmd_key in ['pidof', 'pgrep', 'ps_pid', 'psaux_grep']:
-                        proc_match = re.search(r'(?:pid of|get pid for|pgrep|process id for|process id|ps -c|search process|grep process|find process)\s+([a-zA-Z0-9_\-\.]+)', question_lower)
-                        if proc_match:
-                            process_name = proc_match.group(1)
-                            cmd = SAFE_COMMANDS[cmd_key].format(process_name=process_name)
-                            matched_cmd = cmd
+                    if cmd_key in ['pidof', 'pgrep', 'ps_pid', 'psaux_grep', 'service_status']:
+                        # These need process/service names
+                        proc_patterns = [
+                            r'(?:pid of|get pid for|pgrep|process id for|process id|ps -c|search process|grep process|find process|service status|daemon status)\s+([a-zA-Z0-9_\-\.]+)',
+                            r'([a-zA-Z0-9_\-\.]+)\s+(?:pid|process id|service status)'
+                        ]
+                        for pattern in proc_patterns:
+                            proc_match = re.search(pattern, question_lower)
+                            if proc_match:
+                                process_name = proc_match.group(1)
+                                cmd = SAFE_COMMANDS[cmd_key].format(process_name=process_name, service_name=process_name)
+                                matched_cmd = cmd
+                                break
+                        if matched_cmd:
                             break
                         else:
                             continue
                     else:
                         matched_cmd = SAFE_COMMANDS.get(cmd_key)
                         break
+            
+            # Default to process list if no specific command found
             if not matched_cmd:
                 matched_cmd = SAFE_COMMANDS['processes']
+            
             if not cmd:
                 cmd = matched_cmd
+        
         try:
+            # Execute the command
             output = subprocess.getoutput(cmd)
+            
+            # Build context for AI interpretation
             context = ""
             for turn in self.chat_history[-5:]:
                 context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            
             context += f"User: {question}\nAssistant:"
             context += f"""
 Here's the system command output:
 {output}
 
-Please provide a clear, helpful response that directly answers the user's question based on this system information. Be concise but informative. Focus on what the user specifically asked about.
+Please provide a clear, helpful response that directly answers the user's question based on this system information. Be concise but informative. Focus on what the user specifically asked about. If the data shows concerning values (high CPU, low memory, etc.), mention it.
 """
+            
+            # Check for relevant feedback
             feedback = self.find_relevant_feedback(question)
             if feedback:
                 context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
             ai_response = self.llm.invoke(context)
             self.chat_history.append({"user": question, "assistant": ai_response})
             return ai_response
+            
         except Exception as e:
             logger.error(f"System command error: {e}")
             return f"❌ Error getting system information: {e}"
@@ -351,41 +540,61 @@ Please provide a clear, helpful response that directly answers the user's questi
     def query_database(self, question: str, category: str) -> str:
         if category not in self.db_handlers:
             return f"❌ Database category '{category}' not available."
+        
         handler = self.db_handlers[category]
         try:
-            # Add instruction to avoid LIKE in the prompt
-            modified_question = f"{question} (Note: Please use exact matches with = instead of LIKE in SQL queries)"
-            raw_sql = handler['chain'].invoke({"question": modified_question})
+            # Enhanced prompt for LIKE-based queries
+            enhanced_question = f"""
+            {question}
+            
+            Important: When searching for names or text fields, use LIKE with wildcards (%) instead of exact matches (=). 
+            For example: 
+            - Use "name LIKE '%john%'" instead of "name = 'john'"
+            - Use "department LIKE '%portal%'" instead of "department = 'portal'"
+            - Use "status LIKE '%active%'" instead of "status = 'active'"
+            """
+            
+            raw_sql = handler['chain'].invoke({"question": enhanced_question})
             sql = clean_sql(raw_sql)
-            print(sql)
+            print(f"Generated SQL: {sql}")
+            
             if not is_select_query(sql):
                 return "🚫 Only SELECT queries are allowed for security."
+            
             with handler['connection'].cursor() as cursor:
-                print("connection established")
+                print("Connection established")
                 cursor.execute(sql)
                 result = cursor.fetchall()
-                print(result)
+                print(f"Query result: {result}")
                 columns = [desc[0] for desc in cursor.description] if cursor.description else None
+            
             if not result:
-                return "No data found matching your query."
-            print(result)
+                return "No data found matching your query. Try using broader search terms."
+            
             formatted_result = format_answer(result, columns)
+            
+            # Build context for AI interpretation
             context = ""
             for turn in self.chat_history[-5:]:
                 context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            
             context += f"""User: {question}
 Assistant:
 
 Database query results:
 {formatted_result}
 
-Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful."""
+Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful. If the results show partial matches due to LIKE queries, explain that these are similar/related entries."""
+            
+            # Check for relevant feedback
             feedback = self.find_relevant_feedback(question)
             if feedback:
                 context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
             ai_interpretation = self.llm.invoke(context)
             self.chat_history.append({"user": question, "assistant": ai_interpretation})
             return ai_interpretation
+            
         except Exception as e:
             logger.error(f"Database query error: {e}")
             return f"❌ Unable to retrieve that information: {e}"
@@ -395,17 +604,22 @@ Please provide a clear, natural language response that directly answers the user
             context = ""
             for turn in self.chat_history[-5:]:
                 context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            
             context += f"""User: {question}
 Assistant:
 You are a helpful AI assistant with expertise in system administration, databases, and general technical knowledge.
 
-Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational."""
+Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational. If the user is asking about system monitoring or database queries, suggest specific commands or query patterns they could use."""
+            
+            # Check for relevant feedback
             feedback = self.find_relevant_feedback(question)
             if feedback:
                 context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+            
             response = self.llm.invoke(context)
             self.chat_history.append({"user": question, "assistant": response})
             return response
+            
         except Exception as e:
             logger.error(f"AI response error: {e}")
             return f"❌ Unable to process your question: {e}"
@@ -413,9 +627,12 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
     def process_question(self, question: str) -> str:
         if not self.initialized:
             return "❌ Assistant not initialized. Please restart."
+        
         if is_dangerous(question):
             return "🚫 Question blocked for security reasons."
+        
         query_type = detect_query_type(question)
+        
         if query_type == "system":
             return self.run_system_command(question)
         elif query_type in ["team", "process", "system_db"]:
@@ -426,75 +643,144 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
 
     def show_help(self):
         help_text = """
-📖 UNIFIED AI ASSISTANT HELP
+📖 ENHANCED UNIFIED AI ASSISTANT HELP
 
-🖥️  SYSTEM COMMANDS:
-  - "Show CPU usage" / "What's the CPU load?"
-  - "Check memory usage" / "How much RAM is used?"
-  - "Show disk space" / "What's the disk usage?"
-  - "Show running processes" / "List active processes"
-  - "System uptime" / "How long has system been running?"
-  - "Show network connections" / "What ports are open?"
-  - "PID of httpd" / "Get PID for sshd"
-  - "Top CPU process" / "Top memory process"
+🖥️  SYSTEM COMMANDS (Expanded):
+  CPU & Performance:
+  - "Show CPU usage" / "What's the CPU load?" / "CPU temperature"
+  - "How many CPU cores?" / "CPU frequency" / "Load average"
+  
+  Memory Management:
+  - "Check memory usage" / "Show RAM details" / "Swap usage"
+  - "Buffer cache usage" / "Top memory processes"
+  
+  Disk & Storage:
+  - "Show disk space" / "Large files" / "Disk IO performance"
+  - "Disk speed test" / "Block devices" / "Filesystem info"
+  
+  Network:
+  - "Network interfaces" / "IP addresses" / "Routing table"
+  - "ARP table" / "Ping gateway" / "Bandwidth usage"
+  
+  Processes:
+  - "Running processes" / "Process tree" / "Zombie processes"
+  - "PID of httpd" / "Search process nginx" / "Process count"
+  - "Top CPU processes" / "Top memory processes"
+  
+  System Information:
+  - "System uptime" / "Kernel version" / "OS version"
+  - "Hardware info" / "CPU architecture" / "Hostname"
+  
+  Users & Sessions:
+  - "Who is logged in" / "Last logins" / "Active users"
+  - "User groups" / "Current sessions"
+  
+  Services:
+  - "Active services" / "Failed services" / "Service status nginx"
+  - "Enabled services" / "Systemctl status"
+  
+  Monitoring:
+  - "System activity" / "IO statistics" / "Virtual memory"
+  - "System logs" / "Kernel messages" / "Authentication logs"
+  
+  Environment:
+  - "Environment variables" / "PATH variable" / "Current shell"
+  - "Locale settings" / "Timezone" / "NTP status"
+  
+  Packages:
+  - "Installed packages" / "Package count" / "Software list"
 
-💾 DATABASE QUERIES:
+💾 DATABASE QUERIES (Enhanced with LIKE):
   Team/User Info:
-  - "Show all employees in Portal team"
-  - "Give me details of employee named John"
-  - "Count employees in EIS project"
+  - "Find employees like John" / "Users similar to Smith"
+  - "Show employees in Portal team" / "Count users like admin"
+  - "Search for developers" / "Find staff containing 'dev'"
 
   Process Info:
-  - "Which process uses maximum memory?"
-  - "List all processes run by root"
-  - "Show processes sorted by CPU usage"
+  - "Processes like httpd" / "Find processes containing web"
+  - "Search FAR details similar to error" / "Processes like backup"
+  - "Show processes containing database"
 
   System Metrics:
-  - "What is the latest system metric?"
-  - "Show average CPU usage from database"
-  - "List all disk usage values"
+  - "Latest system metrics" / "CPU usage like high"
+  - "Memory entries similar to critical" / "Disk usage containing full"
+  - "Search metrics like warning"
 
 🤖 GENERAL AI:
-  - Ask any general question
-  - Get explanations and help
-  - Technical assistance
+  - Ask any technical or general question
+  - Get explanations and troubleshooting help
+  - System administration guidance
+  - Best practices and recommendations
 
 💡 COMMANDS:
-  - 'help' - Show this help
+  - 'help' - Show this comprehensive help
   - 'clear' - Clear screen
-  - 'status' - Show system status
+  - 'status' - Show detailed system status
   - 'exit' - Quit assistant
 
-🔒 SECURITY:
+🔒 ENHANCED SECURITY:
   - Only safe, read-only operations allowed
-  - Dangerous commands are blocked
-  - Database writes are prevented
-  - Uses exact matches in database queries (no LIKE)
+  - Dangerous commands blocked (rm, kill, sudo, etc.)
+  - Database writes prevented
+  - SQL queries automatically use LIKE for flexible searches
+  - System commands expanded but still secure
+
+🔍 SEARCH IMPROVEMENTS:
+  - Database queries now use LIKE instead of exact matches
+  - Partial name matching supported
+  - Wildcard searches automatic
+  - More flexible text searching
+  - Better pattern recognition
+
+📊 NEW MONITORING FEATURES:
+  - Temperature monitoring
+  - Bandwidth usage
+  - Service status checking
+  - Log analysis
+  - Hardware information
+  - Network diagnostics
+  - Package management info
         """
         print(help_text)
 
     def show_status(self):
-        print("🔍 SYSTEM STATUS")
+        print("🔍 ENHANCED SYSTEM STATUS")
         print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"🤖 AI Model: Initialized ({'✅' if self.initialized else '❌'})")
         print(f"💾 Database Connections: {len(self.db_handlers)}")
         for category, handler in self.db_handlers.items():
             status = "✅" if handler['connection'].open else "❌"
             print(f"   - {handler['config']['name']}: {status}")
+        
+        print(f"🛠️  Available Commands: {len(SAFE_COMMANDS)}")
+        print(f"🔒 Security Patterns: {len(BLOCKED_PATTERNS)}")
+        print(f"💬 Chat History: {len(self.chat_history)} exchanges")
+        
+        # Show quick system overview
+        try:
+            uptime_out = subprocess.getoutput("uptime")
+            print(f"⏱️  {uptime_out}")
+        except:
+            pass
 
     def start_interactive_session(self):
         if not self.initialize():
             return
+        
         clear_screen()
-        print("🤖 AI Assistant Ready")
+        print("🚀 ENHANCED AI ASSISTANT READY")
+        print("Now with LIKE-based database queries and expanded system monitoring!")
         print("Ask me anything about your system, databases, or general questions...")
-        print("Type 'exit' to quit\n")
+        print("Type 'help' for comprehensive command list, 'exit' to quit\n")
+        
         while True:
             try:
                 question = input("💬 ").strip()
                 if not question:
                     continue
+                
                 question_lower = question.lower()
+                
                 if question_lower in ['exit', 'quit', 'q']:
                     print("👋 Goodbye!")
                     break
@@ -507,21 +793,31 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
                 elif question_lower == 'status':
                     self.show_status()
                     continue
+                
                 response = self.process_question(question)
                 print(f"\n{response}\n")
-                feedback = input("Was this answer helpful? (yes/no/correction): ")
-                if feedback.lower() not in ['yes', 'y']:
-                    self.save_feedback(question, response, feedback)
+                
+                # Enhanced feedback system
+                feedback = input("Was this answer helpful? (yes/no/correction): ").strip()
+                if feedback.lower() not in ['yes', 'y', '']:
+                    if feedback.lower() in ['no', 'n']:
+                        correction = input("What would be a better answer? ")
+                        self.save_feedback(question, response, correction)
+                    else:
+                        self.save_feedback(question, response, feedback)
+                    
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 break
             except Exception as e:
                 print(f"\n❌ Error: {e}")
                 logger.error(f"Session error: {e}", exc_info=True)
+        
+        # Clean up database connections
         for handler in self.db_handlers.values():
             if handler['connection'].open:
                 handler['connection'].close()
-        print("Connection closed.")
+        print("Connections closed.")
 
 def main():
     assistant = UnifiedAIAssistant()
