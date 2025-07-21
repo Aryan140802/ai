@@ -311,16 +311,16 @@ class UnifiedAIAssistant:
                         'connection': db_conn,
                         'config': config
                     }
-                    print(f"✅ {config['name']} database connected")
+                    print(f" {config['name']} database connected")
                 except Exception as e:
-                    print(f"⚠️  Failed to connect to {config['name']}: {e}")
+                    print(f"Failed to connect to {config['name']}: {e}")
                     logger.error(f"DB connection failed for {category}: {e}")
             
             self.initialized = True
-            print("✅ AI Assistant initialized successfully!")
+            print("AI Assistant initialized successfully!")
             return True
         except Exception as e:
-            print(f"❌ Initialization failed: {e}")
+            print(f"Initialization failed: {e}")
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
 
@@ -535,11 +535,11 @@ Please provide a clear, helpful response that directly answers the user's questi
             
         except Exception as e:
             logger.error(f"System command error: {e}")
-            return f"❌ Error getting system information: {e}"
+            return f" Error getting system information: {e}"
 
     def query_database(self, question: str, category: str) -> str:
         if category not in self.db_handlers:
-            return f"❌ Database category '{category}' not available."
+            return f"Database category '{category}' not available."
         
         handler = self.db_handlers[category]
         try:
@@ -559,7 +559,7 @@ Please provide a clear, helpful response that directly answers the user's questi
             print(f"Generated SQL: {sql}")
             
             if not is_select_query(sql):
-                return "🚫 Only SELECT queries are allowed for security."
+                return " Only SELECT queries are allowed for security."
             
             with handler['connection'].cursor() as cursor:
                 print("Connection established")
@@ -597,7 +597,7 @@ Please provide a clear, natural language response that directly answers the user
             
         except Exception as e:
             logger.error(f"Database query error: {e}")
-            return f"❌ Unable to retrieve that information: {e}"
+            return f"Unable to retrieve that information: {e}"
 
     def general_ai_response(self, question: str) -> str:
         try:
@@ -622,14 +622,14 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
             
         except Exception as e:
             logger.error(f"AI response error: {e}")
-            return f"❌ Unable to process your question: {e}"
+            return f" Unable to process your question: {e}"
 
     def process_question(self, question: str) -> str:
         if not self.initialized:
-            return "❌ Assistant not initialized. Please restart."
+            return " Assistant not initialized. Please restart."
         
         if is_dangerous(question):
-            return "🚫 Question blocked for security reasons."
+            return "Question blocked for security reasons."
         
         query_type = detect_query_type(question)
         
@@ -643,9 +643,9 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
 
     def show_help(self):
         help_text = """
-📖 ENHANCED UNIFIED AI ASSISTANT HELP
+ENHANCED UNIFIED AI ASSISTANT HELP
 
-🖥️  SYSTEM COMMANDS (Expanded):
+ SYSTEM COMMANDS (Expanded):
   CPU & Performance:
   - "Show CPU usage" / "What's the CPU load?" / "CPU temperature"
   - "How many CPU cores?" / "CPU frequency" / "Load average"
@@ -690,7 +690,7 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
   Packages:
   - "Installed packages" / "Package count" / "Software list"
 
-💾 DATABASE QUERIES (Enhanced with LIKE):
+ DATABASE QUERIES (Enhanced with LIKE):
   Team/User Info:
   - "Find employees like John" / "Users similar to Smith"
   - "Show employees in Portal team" / "Count users like admin"
@@ -706,33 +706,33 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
   - "Memory entries similar to critical" / "Disk usage containing full"
   - "Search metrics like warning"
 
-🤖 GENERAL AI:
+ GENERAL AI:
   - Ask any technical or general question
   - Get explanations and troubleshooting help
   - System administration guidance
   - Best practices and recommendations
 
-💡 COMMANDS:
+ COMMANDS:
   - 'help' - Show this comprehensive help
   - 'clear' - Clear screen
   - 'status' - Show detailed system status
   - 'exit' - Quit assistant
 
-🔒 ENHANCED SECURITY:
+ ENHANCED SECURITY:
   - Only safe, read-only operations allowed
   - Dangerous commands blocked (rm, kill, sudo, etc.)
   - Database writes prevented
   - SQL queries automatically use LIKE for flexible searches
   - System commands expanded but still secure
 
-🔍 SEARCH IMPROVEMENTS:
+SEARCH IMPROVEMENTS:
   - Database queries now use LIKE instead of exact matches
   - Partial name matching supported
   - Wildcard searches automatic
   - More flexible text searching
   - Better pattern recognition
 
-📊 NEW MONITORING FEATURES:
+ NEW MONITORING FEATURES:
   - Temperature monitoring
   - Bandwidth usage
   - Service status checking
@@ -744,22 +744,22 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
         print(help_text)
 
     def show_status(self):
-        print("🔍 ENHANCED SYSTEM STATUS")
-        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🤖 AI Model: Initialized ({'✅' if self.initialized else '❌'})")
-        print(f"💾 Database Connections: {len(self.db_handlers)}")
+        print(" ENHANCED SYSTEM STATUS")
+        print(f" Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f" AI Model: Initialized ({'✅' if self.initialized else '❌'})")
+        print(f" Database Connections: {len(self.db_handlers)}")
         for category, handler in self.db_handlers.items():
-            status = "✅" if handler['connection'].open else "❌"
+            status = "" if handler['connection'].open else "❌"
             print(f"   - {handler['config']['name']}: {status}")
         
-        print(f"🛠️  Available Commands: {len(SAFE_COMMANDS)}")
-        print(f"🔒 Security Patterns: {len(BLOCKED_PATTERNS)}")
-        print(f"💬 Chat History: {len(self.chat_history)} exchanges")
+        print(f"  Available Commands: {len(SAFE_COMMANDS)}")
+        print(f" Security Patterns: {len(BLOCKED_PATTERNS)}")
+        print(f" Chat History: {len(self.chat_history)} exchanges")
         
         # Show quick system overview
         try:
             uptime_out = subprocess.getoutput("uptime")
-            print(f"⏱️  {uptime_out}")
+            print(f"  {uptime_out}")
         except:
             pass
 
@@ -768,21 +768,21 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
             return
         
         clear_screen()
-        print("🚀 ENHANCED AI ASSISTANT READY")
+        print(" ENHANCED AI ASSISTANT READY")
         print("Now with LIKE-based database queries and expanded system monitoring!")
         print("Ask me anything about your system, databases, or general questions...")
         print("Type 'help' for comprehensive command list, 'exit' to quit\n")
         
         while True:
             try:
-                question = input("💬 ").strip()
+                question = input(" ").strip()
                 if not question:
                     continue
                 
                 question_lower = question.lower()
                 
                 if question_lower in ['exit', 'quit', 'q']:
-                    print("👋 Goodbye!")
+                    print(" Goodbye!")
                     break
                 elif question_lower == 'help':
                     self.show_help()
@@ -807,10 +807,10 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
                         self.save_feedback(question, response, feedback)
                     
             except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
+                print("\n Goodbye!")
                 break
             except Exception as e:
-                print(f"\n❌ Error: {e}")
+                print(f"\n Error: {e}")
                 logger.error(f"Session error: {e}", exc_info=True)
         
         # Clean up database connections
