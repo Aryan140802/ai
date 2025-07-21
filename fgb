@@ -11,6 +11,7 @@ import json
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
+from langchain.prompts import PromptTemplate
 
 # --- CONFIGURATION ---
 
@@ -72,6 +73,22 @@ BLOCKED_PATTERNS = [
     r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
     r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b"
 ]
+
+# Custom prompt template to avoid LIKE clauses
+CUSTOM_PROMPT = PromptTemplate.from_template("""
+You are a MySQL expert. Given an input question, create a syntactically correct MySQL query to run.
+Unless the user specifically asks for pattern matching, you should always use exact matches (=) instead of LIKE in your queries.
+Never query for all columns from a table. You must query only the columns that are needed to answer the question.
+
+Use the following format:
+Question: "Question here"
+SQLQuery: "SQL Query to run"
+
+Only use the following tables:
+{table_info}
+
+Question: {question}
+SQLQuery:""")
 
 logging.basicConfig(
     filename=os.path.expanduser("~/.unified_ai.log"),
@@ -145,6 +162,12 @@ def clean_sql(raw_sql: str) -> str:
     else:
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Replace all LIKE clauses with exact matches
+    sql = re.sub(r"LIKE\s+['\"](%?)([^%'\" ]+)(%?)['\"]", 
+                 lambda m: f"= '{m.group(2)}'", 
+                 sql, flags=re.IGNORECASE)
+    
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
@@ -194,7 +217,10 @@ class UnifiedAIAssistant:
                     db_cfg = config['db_config']
                     uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
                     db_for_llm = SQLDatabase.from_uri(uri, include_tables=config.get("include_tables"))
-                    chain = create_sql_query_chain(self.llm, db_for_llm)
+                    
+                    # Use our custom prompt that instructs to avoid LIKE
+                    chain = create_sql_query_chain(self.llm, db_for_llm, prompt=CUSTOM_PROMPT)
+                    
                     db_conn = pymysql.connect(**db_cfg)
                     self.db_handlers[category] = {
                         'chain': chain,
@@ -327,7 +353,9 @@ Please provide a clear, helpful response that directly answers the user's questi
             return f"❌ Database category '{category}' not available."
         handler = self.db_handlers[category]
         try:
-            raw_sql = handler['chain'].invoke({"question": question})
+            # Add instruction to avoid LIKE in the prompt
+            modified_question = f"{question} (Note: Please use exact matches with = instead of LIKE in SQL queries)"
+            raw_sql = handler['chain'].invoke({"question": modified_question})
             sql = clean_sql(raw_sql)
             print(sql)
             if not is_select_query(sql):
@@ -441,6 +469,7 @@ Please provide a clear, helpful, and accurate response. If this is a technical q
   - Only safe, read-only operations allowed
   - Dangerous commands are blocked
   - Database writes are prevented
+  - Uses exact matches in database queries (no LIKE)
         """
         print(help_text)
 
