@@ -537,27 +537,68 @@ Please provide a clear, helpful response that directly answers the user's questi
             logger.error(f"System command error: {e}")
             return f" Error getting system information: {e}"
 
+   # ... [all your previous imports and code unchanged above] ...
+
     def query_database(self, question: str, category: str) -> str:
         if category not in self.db_handlers:
             return f"Database category '{category}' not available."
         
         handler = self.db_handlers[category]
         try:
+            # --- ENFORCE CORRECT USER FIELDS FOR TEAM/USERMASTER QUERIES ---
+            enforce_user_fields = (
+                category == "team"
+                and ("user" in question.lower() or "employee" in question.lower())
+            )
+
             # Enhanced prompt for LIKE-based queries
-            enhanced_question = f"""
-            {question}
-            
-            Important: When searching for names or text fields, use LIKE with wildcards (%) instead of exact matches (=). 
-            For example: 
-            - Use "name LIKE '%john%'" instead of "name = 'john'"
-            - Use "department LIKE '%portal%'" instead of "department = 'portal'"
-            - Use "status LIKE '%active%'" instead of "status = 'active'"
-            """
-            
+            # Add explicit guidance for user fields if needed
+            if enforce_user_fields:
+                enhanced_question = f"""
+                {question}
+
+                Important:
+                - When searching for user or employee information in the UserMaster table, always select these columns:
+                  Uid AS 'Employee ID',
+                  EmpName AS 'Employee Name',
+                  Project,
+                  Team AS 'Team Name',
+                  Contact AS 'Phone Number',
+                  TcsEmail AS 'TCS Email',
+                  SbiEmail AS 'SBI Email'
+                - The 'Contact' column is the phone number. Ignore the 'Phone' column.
+                - Use LIKE with wildcards (%) for text fields.
+                """
+            else:
+                enhanced_question = f"""
+                {question}
+                
+                Important: When searching for names or text fields, use LIKE with wildcards (%) instead of exact matches (=). 
+                For example: 
+                - Use "name LIKE '%john%'" instead of "name = 'john'"
+                - Use "department LIKE '%portal%'" instead of "department = 'portal'"
+                - Use "status LIKE '%active%'" instead of "status = 'active'"
+                """
+
             raw_sql = handler['chain'].invoke({"question": enhanced_question})
             sql = clean_sql(raw_sql)
             print(f"Generated SQL: {sql}")
-            
+
+            # --- FORCE CORRECT SELECT FIELDS IF USER/EMPLOYEE INFO ---
+            if enforce_user_fields and "usermaster" in sql.lower():
+                # Replace entire SELECT fields with only the correct ones if not already present
+                select_pattern = re.compile(
+                    r"select\s+(.*?)\s+from\s+usermaster", re.IGNORECASE | re.DOTALL
+                )
+                correct_fields = (
+                    "Uid AS 'Employee ID', EmpName AS 'Employee Name', Project, Team AS 'Team Name', "
+                    "Contact AS 'Phone Number', TcsEmail AS 'TCS Email', SbiEmail AS 'SBI Email'"
+                )
+                sql = select_pattern.sub(
+                    f"SELECT {correct_fields} FROM UserMaster", sql
+                )
+                print(f"Enforced fields SQL: {sql}")
+
             if not is_select_query(sql):
                 return " Only SELECT queries are allowed for security."
             
@@ -571,6 +612,20 @@ Please provide a clear, helpful response that directly answers the user's questi
             if not result:
                 return "No data found matching your query. Try using broader search terms."
             
+            # For user info, always display columns with correct output names
+            if enforce_user_fields and columns:
+                # Map columns to pretty output as needed
+                column_map = {
+                    "Uid": "Employee ID",
+                    "EmpName": "Employee Name",
+                    "Project": "Project",
+                    "Team": "Team Name",
+                    "Contact": "Phone Number",
+                    "TcsEmail": "TCS Email",
+                    "SbiEmail": "SBI Email"
+                }
+                columns = [column_map.get(c, c) for c in columns]
+
             formatted_result = format_answer(result, columns)
             
             # Build context for AI interpretation
@@ -599,30 +654,6 @@ Please provide a clear, natural language response that directly answers the user
             logger.error(f"Database query error: {e}")
             return f"Unable to retrieve that information: {e}"
 
-    def general_ai_response(self, question: str) -> str:
-        try:
-            context = ""
-            for turn in self.chat_history[-5:]:
-                context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
-            
-            context += f"""User: {question}
-Assistant:
-You are a helpful AI assistant with expertise in system administration, databases, and general technical knowledge.
-
-Please provide a clear, helpful, and accurate response. If this is a technical question, provide practical advice. If it's a general question, be informative and conversational. If the user is asking about system monitoring or database queries, suggest specific commands or query patterns they could use."""
-            
-            # Check for relevant feedback
-            feedback = self.find_relevant_feedback(question)
-            if feedback:
-                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
-            
-            response = self.llm.invoke(context)
-            self.chat_history.append({"user": question, "assistant": response})
-            return response
-            
-        except Exception as e:
-            logger.error(f"AI response error: {e}")
-            return f" Unable to process your question: {e}"
 
     def process_question(self, question: str) -> str:
         if not self.initialized:
