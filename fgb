@@ -294,7 +294,7 @@ class UnifiedAIAssistant:
     def initialize(self):
         try:
             print("🔧 Initializing AI Assistant...")
-            self.llm = OllamaLLM(model="mistral:latest", temperature=0.1)
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
             
             for category, config in DB_CONFIGS.items():
                 try:
