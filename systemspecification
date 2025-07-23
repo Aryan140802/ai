@@ -2,6 +2,7 @@
 import os
 import subprocess
 import time
+import json
 from datetime import datetime
 
 def get_timestamp():
@@ -17,116 +18,139 @@ def run_command(cmd):
     except subprocess.CalledProcessError as e:
         return f"Error: {e.stderr.strip()}"
 
-def format_table(title, headers, rows):
-    """Format data as a markdown-style table"""
-    # Calculate column widths
-    col_widths = [len(header) for header in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            col_widths[i] = max(col_widths[i], len(str(cell)))
-    
-    # Build table
-    separator = "+" + "+".join(["-"*(w+2) for w in col_widths]) + "+"
-    header_row = "| " + " | ".join([h.ljust(col_widths[i]) for i, h in enumerate(headers)]) + " |"
-    table = [f"\n=== {title.upper()} ===", separator, header_row, separator]
-    
-    for row in rows:
-        table.append("| " + " | ".join([str(cell).ljust(col_widths[i]) for i, cell in enumerate(row)]) + " |")
-    
-    table.append(separator)
-    return "\n".join(table)
+def parse_key_value(command, delimiter=':'):
+    """Parse command output into key-value pairs"""
+    result = {}
+    for line in run_command(command).split('\n'):
+        if delimiter in line:
+            key, val = line.split(delimiter, 1)
+            result[key.strip()] = val.strip()
+    return result
 
 def get_system_info():
-    sections = []
-    
-    # Header with timestamp
-    sections.append(f"=== SYSTEM REPORT ===\nGenerated: {get_timestamp()}\n")
-    
+    report = {
+        "metadata": {
+            "generated_at": get_timestamp(),
+            "system": "Red Hat Enterprise Linux"
+        },
+        "system": {},
+        "resources": {},
+        "storage": {},
+        "processes": {},
+        "services": {},
+        "network": {}
+    }
+
     # 1. System Overview
-    sections.append(format_table("System Overview",
-        ["Metric", "Value"],
-        [
-            ["OS", run_command("cat /etc/redhat-release")],
-            ["Kernel", run_command("uname -r")],
-            ["Uptime", run_command("uptime -p")],
-            ["Load Avg", run_command("cat /proc/loadavg | awk '{print $1, $2, $3}'")]
-        ]))
-    
+    report["system"] = {
+        "os_release": run_command("cat /etc/redhat-release"),
+        "kernel": run_command("uname -r"),
+        "architecture": run_command("uname -m"),
+        "uptime": run_command("uptime -p"),
+        "load_avg": run_command("cat /proc/loadavg | awk '{print $1, $2, $3}'")
+    }
+
     # 2. CPU Information
-    cpu_info = run_command("lscpu | grep -E 'Model name|Socket|Core|CPU MHz'")
-    sections.append(format_table("CPU Information",
-        ["Property", "Value"],
-        [
-            ["Model", run_command("lscpu | grep 'Model name' | cut -d: -f2 | sed 's/^[ \\t]*//'")],
-            ["Sockets", run_command("lscpu | grep 'Socket(s)' | cut -d: -f2 | tr -d ' '")],
-            ["Cores", run_command("lscpu | grep 'Core(s)' | cut -d: -f2 | tr -d ' '")],
-            ["Threads", run_command("lscpu | grep 'CPU(s)' | head -1 | cut -d: -f2 | tr -d ' '")],
-            ["Avg Freq", f"{run_command('lscpu | grep 'CPU MHz' | cut -d: -f2 | tr -d ' '")} MHz"]
-        ]))
-    
-    # 3. Memory Usage
-    mem_info = run_command("free -h | awk '/Mem:/ {print $2,$3,$4,$7}'").split()
-    sections.append(format_table("Memory Usage (GB)",
-        ["Total", "Used", "Free", "Available"],
-        [mem_info]))
-    
+    cpu_info = parse_key_value("lscpu")
+    report["resources"]["cpu"] = {
+        "model": cpu_info.get("Model name", "").strip(),
+        "sockets": int(cpu_info.get("Socket(s)", "0")),
+        "cores": int(cpu_info.get("Core(s) per socket", "0")) * int(cpu_info.get("Socket(s)", "1")),
+        "threads": int(cpu_info.get("CPU(s)", "0")),
+        "frequency": f"{cpu_info.get('CPU MHz', '0')} MHz",
+        "utilization": run_command("mpstat 1 1 | awk '/Average/ {print 100-$12}'") + "%"
+    }
+
+    # 3. Memory Information
+    mem_info = run_command("free -b | awk '/Mem:/ {print $2,$3,$4,$7}'").split()
+    report["resources"]["memory"] = {
+        "total": f"{int(mem_info[0])/1024**3:.2f} GB",
+        "used": f"{int(mem_info[1])/1024**3:.2f} GB",
+        "free": f"{int(mem_info[2])/1024**3:.2f} GB",
+        "available": f"{int(mem_info[3])/1024**3:.2f} GB"
+    }
+
     # 4. Disk Information
-    disk_rows = []
+    disks = []
     for line in run_command("df -hT --output=source,fstype,size,used,avail,pcent,target").split('\n')[1:]:
         if line.strip():
             parts = line.split()
-            disk_rows.append([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]])
-    
-    sections.append(format_table("Disk Usage",
-        ["Device", "Type", "Size", "Used", "Avail", "Use%", "Mounted"],
-        disk_rows))
-    
-    # 5. Top Processes
-    top_procs = []
-    for line in run_command("ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu | head -n 6").split('\n')[1:]:
+            disks.append({
+                "device": parts[0],
+                "type": parts[1],
+                "size": parts[2],
+                "used": parts[3],
+                "available": parts[4],
+                "use_percent": parts[5],
+                "mounted_on": parts[6]
+            })
+    report["storage"]["disks"] = disks
+
+    # 5. LVM Information
+    report["storage"]["lvm"] = {
+        "physical_volumes": run_command("pvs --units g --noheadings | awk '{print $1,$2,$3,$4,$5}'"),
+        "volume_groups": run_command("vgs --units g --noheadings | awk '{print $1,$2,$3,$4,$5,$6}'"),
+        "logical_volumes": run_command("lvs --units g --noheadings | awk '{print $1,$2,$3,$4,$5}'")
+    }
+
+    # 6. Top Processes
+    processes = []
+    for line in run_command("ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu | head -n 5").split('\n')[1:]:
         if line.strip():
-            parts = line.split()
-            top_procs.append([parts[0], parts[1], f"{parts[2]}%", f"{parts[3]}%", ' '.join(parts[4:])])
-    
-    sections.append(format_table("Top Processes by CPU",
-        ["PID", "User", "CPU%", "Mem%", "Command"],
-        top_procs))
-    
-    # 6. Services Status
-    service_rows = []
-    for line in run_command("systemctl list-units --type=service --state=running --no-pager | head -n 6").split('\n'):
+            parts = line.split(maxsplit=4)
+            processes.append({
+                "pid": parts[0],
+                "user": parts[1],
+                "cpu_percent": parts[2],
+                "mem_percent": parts[3],
+                "command": parts[4]
+            })
+    report["processes"]["top_by_cpu"] = processes
+
+    # 7. Services Status
+    services = []
+    for line in run_command("systemctl list-units --type=service --state=running --no-pager | head -n 5").split('\n'):
         if line.strip():
-            parts = line.split()[:4]
-            service_rows.append([parts[0], parts[1], ' '.join(parts[2:])])
-    
-    sections.append(format_table("Running Services",
-        ["Unit", "Load", "Active"],
-        service_rows))
-    
-    # 7. Network Connections
-    net_rows = []
-    for line in run_command("ss -tulnp | head -n 6").split('\n')[1:]:
+            parts = line.split(maxsplit=3)
+            services.append({
+                "unit": parts[0],
+                "load": parts[1],
+                "active": parts[2],
+                "description": parts[3] if len(parts) > 3 else ""
+            })
+    report["services"]["running"] = services
+
+    # 8. Network Information
+    connections = []
+    for line in run_command("ss -tulnp | head -n 5").split('\n')[1:]:
         if line.strip():
-            parts = line.split()
-            net_rows.append([parts[0], parts[4], parts[5]])
-    
-    sections.append(format_table("Network Connections",
-        ["Type", "Local Address", "Process"],
-        net_rows))
-    
-    return "\n\n".join(sections)
+            parts = line.split(maxsplit=5)
+            connections.append({
+                "type": parts[0],
+                "local_address": parts[4],
+                "process": parts[5] if len(parts) > 5 else ""
+            })
+    report["network"]["connections"] = connections
+
+    # 9. Security Information
+    report["security"] = {
+        "selinux": parse_key_value("sestatus"),
+        "firewall": run_command("sudo firewall-cmd --state")
+    }
+
+    return report
 
 def save_to_file(content, filename=None):
     if not filename:
-        filename = f"system_report_table_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        filename = f"system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     
     with open(filename, 'w') as f:
-        f.write(content)
+        json.dump(content, f, indent=2)
     
     return filename
 
 def main():
-    print("Generating tabular system report...")
+    print("Generating JSON system report...")
     start_time = time.time()
     
     report = get_system_info()
@@ -135,7 +159,7 @@ def main():
     print(f"\nReport generated in {time.time()-start_time:.2f} seconds")
     print(f"Saved to: {os.path.abspath(output_file)}")
     print("\n=== REPORT PREVIEW ===")
-    print('\n'.join(report.split('\n')[:30]) + "\n...")
+    print(json.dumps({k: report[k] for k in list(report.keys())[:2]}, indent=2) + "\n...")
 
 if __name__ == "__main__":
     main()
