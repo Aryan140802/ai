@@ -118,7 +118,34 @@ def remove_sensitive_fields(sql: str) -> str:
         sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)
         sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)
         sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)
-        sql = re.sub(r'WHERE\s*
+        sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE)
+        
+        return sql.strip()
+    except Exception as e:
+        logger.error(f"Error removing sensitive fields: {e}")
+        return sql
+
+def preprocess_query(question: str) -> str:
+    """Preprocess user query to map common terms to database fields"""
+    processed_query = question.lower()
+    
+    # Replace common terms with database field names
+    for term, field in FIELD_MAPPINGS.items():
+        pattern = rf'\b{re.escape(term)}\b'
+        processed_query = re.sub(pattern, field, processed_query, flags=re.IGNORECASE)
+    
+    # Add helpful context for better SQL generation
+    context_additions = {
+        'phone': 'Contact field contains phone numbers',
+        'contact': 'Contact field contains phone numbers', 
+        'mobile': 'Contact field contains phone numbers'
+    }
+    
+    for key, context in context_additions.items():
+        if key in processed_query:
+            processed_query += f" (Note: {context})"
+    
+    return processed_query
 
 def enhance_sql_for_partial_matching(sql: str) -> str:
     """
@@ -259,7 +286,8 @@ class DatabaseAssistant:
     def find_relevant_feedback(self, question):
         """Find relevant feedback from previous queries"""
         try:
-            with open("feedback_log.jsonl", "r") as f:
+            feedback_file = os.getenv('FEEDBACK_LOG_PATH', '/var/log/feedback_log.jsonl')
+            with open(feedback_file, "r") as f:
                 lines = f.readlines()
             for line in lines[::-1]:
                 entry = json.loads(line)
@@ -543,415 +571,6 @@ def main():
     else:
         print("❌ Failed to initialize Database Assistant")
         exit(1)
-
-if __name__ == "__main__":
-    main(), '', sql, flags=re.IGNORECASE)
-        
-        return sql.strip()
-    except Exception as e:
-        logger.error(f"Error removing sensitive fields: {e}")
-        return sql
-
-def preprocess_query(question: str) -> str:
-    """Preprocess user query to map common terms to database fields"""
-    processed_query = question.lower()
-    
-    # Replace common terms with database field names
-    for term, field in FIELD_MAPPINGS.items():
-        pattern = rf'\b{re.escape(term)}\b'
-        processed_query = re.sub(pattern, field, processed_query, flags=re.IGNORECASE)
-    
-    # Add helpful context for better SQL generation
-    context_additions = {
-        'phone': 'Contact field contains phone numbers',
-        'contact': 'Contact field contains phone numbers', 
-        'mobile': 'Contact field contains phone numbers'
-    }
-    
-    for key, context in context_additions.items():
-        if key in processed_query:
-            processed_query += f" (Note: {context})"
-    
-    return processed_query
-
-def enhance_sql_for_partial_matching(sql: str) -> str:
-    """
-    Convert exact match (=) operations to LIKE operations for better search results
-    """
-    try:
-        # Pattern to find WHERE conditions with = operator for string values
-        # This matches patterns like: column_name = 'value' or column_name = "value"
-        pattern = r"(\w+)\s*=\s*(['\"])(.*?)\2"
-        
-        def replace_with_like(match):
-            column = match.group(1)
-            quote = match.group(2)
-            value = match.group(3)
-            # Convert to LIKE with wildcards for partial matching
-            return f"{column} LIKE {quote}%{value}%{quote}"
-        
-        enhanced_sql = re.sub(pattern, replace_with_like, sql, flags=re.IGNORECASE)
-        
-        # Also handle cases where there might be spaces around the equals sign
-        pattern2 = r"(\w+)\s*=\s*(['\"][^'\"]*['\"])"
-        def replace_with_like2(match):
-            column = match.group(1)
-            quoted_value = match.group(2)
-            # Extract the value without quotes
-            value = quoted_value[1:-1]
-            quote = quoted_value[0]
-            return f"{column} LIKE {quote}%{value}%{quote}"
-        
-        enhanced_sql = re.sub(pattern2, replace_with_like2, enhanced_sql, flags=re.IGNORECASE)
-        
-        logger.info(f"SQL enhanced from: {sql} to: {enhanced_sql}")
-        return enhanced_sql
-        
-    except Exception as e:
-        logger.error(f"Error enhancing SQL: {e}")
-        return sql  # Return original SQL if enhancement fails
-
-def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
-    """Format database results for display"""
-    if not result:
-        return "No data found for your request."
-    
-    if len(result) == 1 and len(result[0]) == 1:
-        return f"Result: {result[0][0]}"
-    
-    if columns and len(result) <= 10:
-        output = []
-        col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
-        header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
-        separator = "-+-".join("-" * width for width in col_widths)
-        output.append(header)
-        output.append(separator)
-        for row in result[:10]:
-            formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
-            output.append(formatted_row)
-        if len(result) > 10:
-            output.append(f"... and {len(result) - 10} more rows")
-        return "\n".join(output)
-    
-    rows = []
-    for row in result[:20]:
-        rows.append(" | ".join(str(val) for val in row))
-    if len(result) > 20:
-        rows.append(f"... and {len(result) - 20} more rows")
-    return "\n".join(rows)
-
-def is_select_query(sql: str) -> bool:
-    """Check if the query is a SELECT statement"""
-    return sql.strip().lower().startswith('select')
-
-def clear_screen():
-    """Clear the terminal screen"""
-    os.system("cls" if os.name == "nt" else "clear")
-
-class DatabaseAssistant:
-    def __init__(self):
-        self.llm = None
-        self.db_handlers = {}
-        self.initialized = False
-        self.chat_history = []
-
-    def initialize(self):
-        """Initialize the database assistant"""
-        try:
-            print("🔧 Initializing Database Assistant...")
-            self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
-            
-            for category, config in DB_CONFIGS.items():
-                try:
-                    db_cfg = config['db_config']
-                    uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
-                    db_for_llm = SQLDatabase.from_uri(uri, include_tables=config.get("include_tables"))
-                    chain = create_sql_query_chain(self.llm, db_for_llm)
-                    db_conn = pymysql.connect(**db_cfg)
-                    
-                    self.db_handlers[category] = {
-                        'chain': chain,
-                        'connection': db_conn,
-                        'config': config
-                    }
-                    print(f"✅ {config['name']} database connected")
-                except Exception as e:
-                    print(f"⚠️  Failed to connect to {config['name']}: {e}")
-                    logger.error(f"DB connection failed for {category}: {e}")
-            
-            self.initialized = True
-            print("✅ Database Assistant initialized successfully!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Initialization failed: {e}")
-            logger.error(f"Initialization failed: {e}", exc_info=True)
-            return False
-
-    def get_available_tokens(self) -> Dict[str, Dict]:
-        """Return available static tokens for frontend integration"""
-        return STATIC_TOKENS
-
-    def save_feedback(self, question, answer, feedback):
-        """Save user feedback for future improvements"""
-        data = {
-            "question": question,
-            "answer": answer,
-            "feedback": feedback,
-            "timestamp": datetime.now().isoformat()
-        }
-        try:
-            with open("feedback_log.jsonl", "a") as f:
-                f.write(json.dumps(data) + "\n")
-        except Exception as e:
-            logger.error(f"Failed to save feedback: {e}")
-
-    def find_relevant_feedback(self, question):
-        """Find relevant feedback from previous queries"""
-        try:
-            with open("feedback_log.jsonl", "r") as f:
-                lines = f.readlines()
-            for line in lines[::-1]:
-                entry = json.loads(line)
-                if entry["question"].strip().lower() in question.strip().lower():
-                    return entry["feedback"]
-        except Exception:
-            pass
-        return None
-
-    def query_database(self, question: str, category: str = "team") -> str:
-        """Execute database query and return formatted results"""
-        if category not in self.db_handlers:
-            return f"❌ Database category '{category}' not available."
-        
-        handler = self.db_handlers[category]
-        try:
-            # Generate SQL query using chain
-            raw_sql = handler['chain'].invoke({"question": question})
-            sql = clean_sql(raw_sql)
-            
-            logger.info(f"Generated SQL: {sql}")
-            
-            if not is_select_query(sql):
-                return "🚫 Only SELECT queries are allowed for security."
-            
-            # Execute query
-            with handler['connection'].cursor() as cursor:
-                cursor.execute(sql)
-                result = cursor.fetchall()
-                columns = [desc[0] for desc in cursor.description] if cursor.description else None
-            
-            if not result:
-                return "No data found matching your query."
-            
-            # Format and return results
-            formatted_result = format_answer(result, columns)
-            
-            # Generate natural language response
-            context = f"""
-Database query executed: {sql}
-Results: {formatted_result}
-
-User question: {question}
-
-Please provide a clear, natural language response that directly answers the user's question based on this data. Make it conversational and helpful.
-"""
-            feedback = self.find_relevant_feedback(question)
-            if feedback:
-                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
-            
-            ai_interpretation = self.llm.invoke(context)
-            self.chat_history.append({"user": question, "assistant": ai_interpretation})
-            return ai_interpretation
-            
-        except Exception as e:
-            logger.error(f"Database query error: {e}")
-            return f"❌ Unable to retrieve that information: {e}"
-
-    def process_question_with_token(self, user_input: str) -> Dict[str, Any]:
-        """
-        Main method for frontend integration - processes database questions with static token
-        Returns structured response for API consumption
-        """
-        if not self.initialized:
-            return {
-                "success": False,
-                "error": "Assistant not initialized",
-                "response": "❌ Assistant not initialized. Please restart."
-            }
-        
-        # Extract token and query
-        token, actual_query = extract_token_and_query(user_input)
-        
-        # Default to DB_QUERY if no token provided
-        if not token or token not in STATIC_TOKENS:
-            token = "DB_QUERY"
-        
-        try:
-            # Process database query
-            response = self.query_database(actual_query, "team")
-            
-            return {
-                "success": True,
-                "token_used": token,
-                "category": "database",
-                "original_query": actual_query,
-                "response": response,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Processing error: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "response": f"❌ Error processing your request: {e}"
-            }
-
-    def process_question(self, question: str) -> str:
-        """Backward compatibility method"""
-        result = self.process_question_with_token(question)
-        return result["response"]
-
-    def show_tokens(self):
-        """Display available tokens for reference"""
-        print("🏷️  AVAILABLE STATIC TOKENS:")
-        print("=" * 50)
-        for token, info in STATIC_TOKENS.items():
-            print(f"Token: {token}")
-            print(f"Category: {info['category']}")
-            print(f"Description: {info['description']}")
-            print(f"Examples: {', '.join(info['examples'])}")
-            print("-" * 30)
-
-    def show_help(self):
-        """Display help information"""
-        help_text = """
-📖 DATABASE ASSISTANT HELP
-
-🏷️  STATIC TOKEN (for Frontend Integration):
-  Usage: "DB_QUERY: your question"
-  
-  Available Token:
-  - DB_QUERY: For database queries
-
-💾 DATABASE QUERIES:
-  Examples:
-  - "DB_QUERY: Show all employees"
-  - "DB_QUERY: Find user containing John"
-  - "DB_QUERY: List all team members"
-  - "DB_QUERY: Count total employees"
-  - "DB_QUERY: Search for users with Smith in name"
-
-💡 FEATURES:
-  - Partial name matching (uses LIKE instead of exact match)
-  - Natural language to SQL conversion
-  - Formatted result display
-  - User feedback collection
-
-💡 COMMANDS:
-  - 'help' - Show this help
-  - 'tokens' - Show available tokens
-  - 'clear' - Clear screen
-  - 'status' - Show system status
-  - 'exit' - Quit assistant
-
-📡 API Integration:
-  Use process_question_with_token() method for structured responses
-        """
-        print(help_text)
-
-    def show_status(self):
-        """Display system status"""
-        print("🔍 SYSTEM STATUS")
-        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🤖 AI Model: Initialized ({'✅' if self.initialized else '❌'})")
-        print(f"💾 Database Connections: {len(self.db_handlers)}")
-        for category, handler in self.db_handlers.items():
-            status = "✅" if handler['connection'].open else "❌"
-            print(f"   - {handler['config']['name']}: {status}")
-        print(f"🏷️  Available Tokens: {len(STATIC_TOKENS)}")
-
-    def start_interactive_session(self):
-        """Start interactive command-line session"""
-        if not self.initialize():
-            return
-            
-        clear_screen()
-        print("🤖 Database Assistant Ready")
-        print("Ask me about database information...")
-        print("Type 'exit' to quit, 'help' for commands\n")
-        
-        while True:
-            try:
-                question = input("💬 ").strip()
-                if not question:
-                    continue
-                
-                question_lower = question.lower()
-                if question_lower in ['exit', 'quit', 'q']:
-                    print("👋 Goodbye!")
-                    break
-                elif question_lower == 'help':
-                    self.show_help()
-                    continue
-                elif question_lower == 'tokens':
-                    self.show_tokens()
-                    continue
-                elif question_lower == 'clear':
-                    clear_screen()
-                    continue
-                elif question_lower == 'status':
-                    self.show_status()
-                    continue
-                
-                result = self.process_question_with_token(question)
-                print(f"\n🏷️  Token Used: {result.get('token_used', 'N/A')}")
-                print(f"📂 Category: {result.get('category', 'N/A')}")
-                print(f"📝 Response: {result['response']}\n")
-                
-                if result['success']:
-                    feedback = input("Was this answer helpful? (yes/no/correction): ")
-                    if feedback.lower() not in ['yes', 'y']:
-                        self.save_feedback(result.get('original_query', question), result['response'], feedback)
-                        
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                break
-            except Exception as e:
-                print(f"\n❌ Error: {e}")
-                logger.error(f"Session error: {e}", exc_info=True)
-        
-        # Close database connections
-        for handler in self.db_handlers.values():
-            if handler['connection'].open:
-                handler['connection'].close()
-        print("Connections closed.")
-
-def main():
-    """Main function"""
-    assistant = DatabaseAssistant()
-    
-    # Example usage for frontend integration
-    print("=== Frontend Integration Examples ===")
-    assistant.initialize()
-    
-    # Example 1: With static token
-    example1 = "DB_QUERY: Show me all employees"
-    result1 = assistant.process_question_with_token(example1)
-    print(f"Input: {example1}")
-    print(f"Result: {result1}")
-    print()
-    
-    # Example 2: Partial name search
-    example2 = "DB_QUERY: Find users with John in their name"
-    result2 = assistant.process_question_with_token(example2)
-    print(f"Input: {example2}")
-    print(f"Result: {result2}")
-    print()
-    
-    # Start interactive session
-    assistant.start_interactive_session()
 
 if __name__ == "__main__":
     main()
