@@ -1,6 +1,195 @@
-Your question about the system report: what is the top service
+import os
+import re
+import logging
+from datetime import datetime
+from typing import List, Dict
 
-Analyzing...
+from langchain_ollama import OllamaLLM
 
-/tmp/ai_sys.py:78: LangChainDeprecationWarning: The method `BaseLLM.__call__` was deprecated in langchain-core 0.1.7 and will be removed in 1.0. Use :meth:`~invoke` instead.
-  response = self.llm(prompt)
+class SystemReportAnalyzer:
+    def __init__(self):
+        self.llm = None
+        self.report_content = ""
+        self.chat_history = []
+        
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
+        
+    def initialize_llm(self):
+        """Initialize the Ollama LLM connection"""
+        try:
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
+            self.logger.info("Connected to LLM model: myllm:latest")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to connect to LLM: {str(e)}")
+            return False
+    
+    def load_report(self, report_path: str):
+        """Load the system report from a file"""
+        try:
+            with open(report_path, 'r') as f:
+                self.report_content = f.read()
+            self.logger.info(f"Successfully loaded report from {report_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to load report: {str(e)}")
+            return False
+    
+    def analyze_report(self, question: str) -> str:
+        """Analyze the report content using the LLM"""
+        if not self.llm:
+            return "LLM not initialized. Please connect first."
+        
+        if not self.report_content:
+            return "No report loaded. Please load a report first."
+        
+        try:
+            # Create a focused prompt with just the relevant sections
+            relevant_sections = self._extract_relevant_sections(question)
+            
+            prompt = f"""
+            Analyze this Linux system report section and answer the question concisely:
+            
+            {relevant_sections}
+            
+            Question: {question}
+            
+            Provide only the most relevant information. If the answer isn't in the report, say "Information not found in report".
+            """
+            
+            # Use invoke() instead of __call__ to avoid deprecation warning
+            response = self.llm.invoke(prompt)
+            
+            # Clean up the response
+            cleaned_response = response.strip()
+            
+            # Save to chat history
+            self.chat_history.append({
+                "user": question,
+                "assistant": cleaned_response
+            })
+            
+            return cleaned_response
+        
+        except Exception as e:
+            self.logger.error(f"Analysis failed: {str(e)}")
+            return f"Error analyzing report: {str(e)}"
+    
+    def _extract_relevant_sections(self, question: str) -> str:
+        """Extract only relevant sections based on the question"""
+        question_lower = question.lower()
+        
+        # Determine which sections might be relevant
+        relevant_sections = []
+        
+        if any(word in question_lower for word in ['service', 'daemon', 'running', 'failed']):
+            if "=== Service Status ===" in self.report_content:
+                start = self.report_content.index("=== Service Status ===")
+                end = self.report_content.find("===", start + 1)
+                relevant_sections.append(self.report_content[start:end])
+        
+        if any(word in question_lower for word in ['cpu', 'memory', 'load']):
+            if "=== Top Processes ===" in self.report_content:
+                start = self.report_content.index("=== Top Processes ===")
+                end = self.report_content.find("===", start + 1)
+                relevant_sections.append(self.report_content[start:end])
+            if "=== CPU Utilization ===" in self.report_content:
+                start = self.report_content.index("=== CPU Utilization ===")
+                end = self.report_content.find("===", start + 1)
+                relevant_sections.append(self.report_content[start:end])
+        
+        if not relevant_sections:
+            # Fallback to first 2000 characters if no specific sections found
+            return self.report_content[:2000]
+        
+        return "\n".join(relevant_sections)
+    
+    def interactive_session(self):
+        """Start an interactive terminal session"""
+        print("\n" + "="*50)
+        print("System Report Analyzer (Optimized)")
+        print("="*50 + "\n")
+        
+        # Initialize LLM
+        print("Initializing LLM connection...")
+        if not self.initialize_llm():
+            print("Failed to initialize LLM. Exiting.")
+            return
+        
+        # Load report
+        report_path = input("Enter path to system report file: ").strip()
+        print(f"Loading report from {report_path}...")
+        if not self.load_report(report_path):
+            print("Failed to load report. Exiting.")
+            return
+        
+        print("\nSystem report loaded successfully.")
+        print("Type 'exit' to quit the session.\n")
+        
+        # Main interaction loop
+        while True:
+            try:
+                question = input("Your question about the system report: ").strip()
+                
+                if question.lower() in ['exit', 'quit']:
+                    print("Exiting...")
+                    break
+                    
+                if not question:
+                    print("Please enter a question.")
+                    continue
+                
+                if question.lower() == 'help':
+                    self.show_help()
+                    continue
+                
+                print("\nAnalyzing...")
+                response = self.analyze_report(question)
+                print("\nAnalysis Result:")
+                print("-"*50)
+                print(response)
+                print("-"*50 + "\n")
+                
+            except KeyboardInterrupt:
+                print("\nExiting...")
+                break
+            except Exception as e:
+                self.logger.error(f"Error during interaction: {str(e)}")
+                print(f"An error occurred: {str(e)}")
+    
+    def show_help(self):
+        """Display help information"""
+        help_text = """
+SYSTEM REPORT ANALYZER HELP
+
+For faster responses, ask specific questions about:
+
+- Services (running/failed)
+- CPU/Memory usage
+- Top processes
+- Disk usage
+- Network connections
+
+Example questions:
+- "List all running services"
+- "What's using the most CPU?"
+- "Are there any failed services?"
+- "Show memory usage"
+- "What are the top 5 processes?"
+
+General questions will take longer to process.
+"""
+        print(help_text)
+
+def main():
+    analyzer = SystemReportAnalyzer()
+    analyzer.interactive_session()
+
+if __name__ == "__main__":
+    main()
