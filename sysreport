@@ -1,0 +1,495 @@
+=== Red Hat System Report === 2025-07-23 16:56:47
+
+
+=== System Overview ===
+
+Red Hat Enterprise Linux release 9.6 (Plow)
+
+Linux eispr-prt1-01 5.14.0-570.19.1.el9_6.x86_64 #1 SMP PREEMPT_DYNAMIC Sat May 24 15:55:19 EDT 2025 x86_64 x86_64 x86_64 GNU/Linux
+
+
+=== Top Processes ===
+
+top - 16:56:48 up 36 days, 19:40,  4 users,  load average: 3.95, 5.60, 7.31
+Tasks: 662 total,   2 running, 656 sleeping,   0 stopped,   4 zombie
+%Cpu(s):  2.8 us,  2.4 sy,  0.0 ni, 94.8 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
+MiB Mem :  63779.9 total,  12972.3 free,  11713.2 used,  41122.1 buff/cache
+MiB Swap:  10240.0 total,   9632.9 free,    607.1 used.  52066.8 avail Mem
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+3829202 root      20   0 9246772 596924  62360 S  35.3   0.9 156:45.52 ds_am
+4175570 root      20   0   11720   5376   3840 R  17.6   0.0   0:00.04 top
+   1912 root      20   0 3915772 938056  27492 S  11.8   1.4  21023:31 ds_agent
+4175586 root      20   0   22404  12032  10240 S  11.8   0.0   0:00.02 sshd
+      1 root      20   0  176416  16828  10496 R   5.9   0.0   3380:17 systemd
+   1880 mysql     20   0   11.9g   1.4g  38144 S   5.9   2.2   1196:23 mysqld
+  99364 root      20   0 9951.9m 553692  32752 S   5.9   0.8 636:18.61 vls_am
+ 162360 root      20   0  259824  18788  14080 S   5.9   0.0  52:20.18 Network+
+3826008 root      20   0       0      0      0 I   5.9   0.0   0:00.32 kworker+
+      2 root      20   0       0      0      0 S   0.0   0.0   0:15.27 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_wo+
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+
+
+=== Service Status ===
+
+  UNIT                          LOAD   ACTIVE SUB     DESCRIPTION
+  auditd.service                loaded active running Security Auditing Service
+  chronyd.service               loaded active running NTP client/server
+  commvault.Instance001.service loaded active running commvault Service
+  crond.service                 loaded active running Command Scheduler
+  Database_dev.service          loaded active running DJango Development Server
+  dbus-broker.service           loaded active running D-Bus System Message Bus
+  Django_dev.service            loaded active running DJango Development Server
+  ds_agent.service              loaded active running Trend Micro Deep Security Agent
+  firewalld.service             loaded active running firewalld - dynamic firewall daemon
+  getty@tty1.service            loaded active running Getty on tty1
+  gssproxy.service              loaded active running GSSAPI Proxy Daemon
+  httpd.service                 loaded active running The Apache HTTP Server
+  irqbalance.service            loaded active running irqbalance daemon
+  mysqld.service                loaded active running MySQL 8.0 database server
+  NetworkManager.service        loaded active running Network Manager
+  nginx.service                 loaded active running nginx - high performance web server
+  oneagent.service              loaded active running Dynatrace OneAgent
+  php-fpm.service               loaded active running The PHP FastCGI Process Manager
+  polkit.service                loaded active running Authorization Manager
+  portal.api.service            loaded active running Node(Port_monitoring) backend
+  rhsmcertd.service             loaded active running Enable periodic update of entitlement certificates.
+  rscd.service                  loaded active running BladeLogic Remote System Call Daemon
+  rsyslog.service               loaded active running System Logging Service
+  serial-getty@ttyS0.service    loaded active running Serial Getty on ttyS0
+  sshd.service                  loaded active running OpenSSH server daemon
+  systemd-journald.service      loaded active running Journal Service
+  systemd-logind.service        loaded active running User Login Management
+  systemd-udevd.service         loaded active running Rule-based Manager for Device Events and Files
+  Test_dev.service              loaded active running DJango Development Server
+  tmxbc.service                 loaded active running Endpoint Basecamp service
+  tuned.service                 loaded active running Dynamic System Tuning Daemon
+  user@0.service                loaded active running User Manager for UID 0
+  user@1001.service             loaded active running User Manager for UID 1001
+  vls_agent.service             loaded active running Trend Micro Vision One Endpoint Agent
+
+LOAD   = Reflects whether the unit definition was properly loaded.
+ACTIVE = The high-level unit activation state, i.e. generalization of SUB.
+SUB    = The low-level unit activation state, values depend on unit type.
+34 loaded units listed.
+
+
+=== Failed Services ===
+
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+0 loaded units listed.
+
+
+=== CPU Utilization ===
+
+Linux 5.14.0-570.19.1.el9_6.x86_64 (eispr-prt1-01)      07/23/25        _x86_64_        (32 CPU)
+
+16:56:48     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+16:56:49     all    2.42    0.00    1.79    0.03    0.00    0.00    0.00    0.00    0.00   95.76
+16:56:49       0    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+16:56:49       1   11.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   89.00
+16:56:49       2    3.03    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   94.95
+16:56:49       3    1.00    0.00    3.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
+16:56:49       4    2.04    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   95.92
+16:56:49       5    0.00    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   98.99
+16:56:49       6    2.02    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   95.96
+16:56:49       7    1.02    0.00    1.02    0.00    0.00    0.00    0.00    0.00    0.00   97.96
+16:56:49       8    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
+16:56:49       9    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+16:56:49      10    3.03    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   93.94
+16:56:49      11    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+16:56:49      12    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
+16:56:49      13    3.00    0.00    1.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
+16:56:49      14    2.02    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   96.97
+16:56:49      15   10.10    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   88.89
+16:56:49      16    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
+16:56:49      17    1.00    0.00    2.00    0.00    0.00    0.00    0.00    0.00    0.00   97.00
+16:56:49      18    2.00    0.00    5.00    0.00    0.00    0.00    0.00    0.00    0.00   93.00
+16:56:49      19    1.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   99.00
+16:56:49      20    3.03    0.00    6.06    0.00    0.00    0.00    0.00    0.00    0.00   90.91
+16:56:49      21    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+16:56:49      22    5.05    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   91.92
+16:56:49      23    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+16:56:49      24    3.88    0.00    2.91    0.97    0.00    0.00    0.00    0.00    0.00   92.23
+16:56:49      25    0.99    0.00    0.99    0.00    0.00    0.00    0.00    0.00    0.00   98.02
+16:56:49      26    5.05    0.00    4.04    0.00    0.00    0.00    0.00    0.00    0.00   90.91
+16:56:49      27    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+16:56:49      28    3.06    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   94.90
+16:56:49      29    2.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   98.00
+16:56:49      30    3.09    0.00    2.06    0.00    0.00    0.00    0.00    0.00    0.00   94.85
+16:56:49      31    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+
+Average:     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+Average:     all    2.42    0.00    1.79    0.03    0.00    0.00    0.00    0.00    0.00   95.76
+Average:       0    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+Average:       1   11.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   89.00
+Average:       2    3.03    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   94.95
+Average:       3    1.00    0.00    3.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
+Average:       4    2.04    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   95.92
+Average:       5    0.00    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   98.99
+Average:       6    2.02    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   95.96
+Average:       7    1.02    0.00    1.02    0.00    0.00    0.00    0.00    0.00    0.00   97.96
+Average:       8    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
+Average:       9    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+Average:      10    3.03    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   93.94
+Average:      11    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+Average:      12    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
+Average:      13    3.00    0.00    1.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
+Average:      14    2.02    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   96.97
+Average:      15   10.10    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   88.89
+Average:      16    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
+Average:      17    1.00    0.00    2.00    0.00    0.00    0.00    0.00    0.00    0.00   97.00
+Average:      18    2.00    0.00    5.00    0.00    0.00    0.00    0.00    0.00    0.00   93.00
+Average:      19    1.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   99.00
+Average:      20    3.03    0.00    6.06    0.00    0.00    0.00    0.00    0.00    0.00   90.91
+Average:      21    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+Average:      22    5.05    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   91.92
+Average:      23    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+Average:      24    3.88    0.00    2.91    0.97    0.00    0.00    0.00    0.00    0.00   92.23
+Average:      25    0.99    0.00    0.99    0.00    0.00    0.00    0.00    0.00    0.00   98.02
+Average:      26    5.05    0.00    4.04    0.00    0.00    0.00    0.00    0.00    0.00   90.91
+Average:      27    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+Average:      28    3.06    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   94.90
+Average:      29    2.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   98.00
+Average:      30    3.09    0.00    2.06    0.00    0.00    0.00    0.00    0.00    0.00   94.85
+Average:      31    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
+
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        40 bits physical, 57 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               32
+On-line CPU(s) list:                  0-31
+Vendor ID:                            GenuineIntel
+BIOS Vendor ID:                       QEMU
+Model name:                           Intel Xeon Processor (Icelake)
+BIOS Model name:                      pc-i440fx-4.2
+CPU family:                           6
+Model:                                134
+Thread(s) per core:                   2
+Core(s) per socket:                   16
+Socket(s):                            1
+Stepping:                             0
+BogoMIPS:                             5187.92
+Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves wbnoinvd arat vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 md_clear arch_capabilities
+Virtualization:                       VT-x
+Hypervisor vendor:                    KVM
+Virtualization type:                  full
+L1d cache:                            1 MiB (32 instances)
+L1i cache:                            1 MiB (32 instances)
+L2 cache:                             64 MiB (16 instances)
+L3 cache:                             16 MiB (1 instance)
+NUMA node(s):                         1
+NUMA node0 CPU(s):                    0-31
+Vulnerability Gather data sampling:   Not affected
+Vulnerability Itlb multihit:          Not affected
+Vulnerability L1tf:                   Not affected
+Vulnerability Mds:                    Not affected
+Vulnerability Meltdown:               Not affected
+Vulnerability Mmio stale data:        Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Reg file data sampling: Vulnerable: No microcode
+Vulnerability Retbleed:               Not affected
+Vulnerability Spec rstack overflow:   Not affected
+Vulnerability Spec store bypass:      Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:             Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:             Mitigation; Enhanced / Automatic IBRS; IBPB conditional; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                  Not affected
+Vulnerability Tsx async abort:        Not affected
+
+
+=== CPU Frequency ===
+
+analyzing CPU 10:
+  no or unknown cpufreq driver is active on this CPU
+  CPUs which run at the same hardware frequency: Not Available
+  CPUs which need to have their frequency coordinated by software: Not Available
+  maximum transition latency:  Cannot determine or is not supported.
+Not Available
+  available cpufreq governors: Not Available
+  Unable to determine current policy
+  current CPU frequency: Unable to call hardware
+  current CPU frequency:  Unable to call to kernel
+  boost state support:
+    Supported: no
+    Active: no
+
+
+=== Memory Usage ===
+
+               total        used        free      shared  buff/cache   available
+Mem:            62Gi        11Gi        12Gi       1.3Gi        40Gi        50Gi
+Swap:            9Gi       607Mi       9.4Gi
+
+
+=== Huge Pages ===
+
+AnonHugePages:   4313088 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       0
+HugePages_Free:        0
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:               0 kB
+
+
+=== Disk Usage ===
+
+Filesystem                       Type      Size  Used Avail Use% Mounted on
+devtmpfs                         devtmpfs  4.0M     0  4.0M   0% /dev
+tmpfs                            tmpfs      32G  8.0K   32G   1% /dev/shm
+tmpfs                            tmpfs      13G  1.3G   12G  11% /run
+/dev/mapper/rootvg-rootlv        xfs        30G   16G   15G  53% /
+/dev/mapper/rootvg-usrlv         xfs        10G  4.4G  5.7G  44% /usr
+/dev/mapper/rootvg-homelv        xfs        30G   18G   13G  59% /home
+/dev/mapper/rootvg-varlv         xfs        30G   25G  5.9G  81% /var
+/dev/mapper/rootvg-optlv         xfs        20G   13G  7.8G  62% /opt
+/dev/mapper/rootvg-tmplv         xfs        10G  673M  9.4G   7% /tmp
+/dev/mapper/portal-mysql         xfs        50G   33G   18G  65% /mysql
+/dev/sda3                        xfs      1014M  424M  591M  42% /boot
+/dev/mapper/rootvg-homescriptslv xfs       5.0G  2.3G  2.8G  46% /home/scripts
+/dev/mapper/portal-PortalHub     xfs       100G   78G   23G  78% /opt/apache-tomcat
+/dev/mapper/portal-audit_log     xfs        99G   17G   83G  17% /var/log/audit
+/dev/sda2                        vfat      200M  7.0M  193M   4% /efi
+tmpfs                            tmpfs     6.3G     0  6.3G   0% /run/user/1001
+tmpfs                            tmpfs     6.3G     0  6.3G   0% /run/user/0
+/dev/loop0                       iso9660    11G   11G     0 100% /var/www/html
+
+
+=== LVM Information ===
+
+  PV         VG     Fmt  Attr PSize    PFree
+  /dev/sda4  rootvg lvm2 a--   135.00g       0
+  /dev/sda5  rootvg lvm2 a--   <13.80g   <3.80g
+  /dev/sdb1  portal lvm2 a--  <250.00g 1020.00m
+
+  VG     #PV #LV #SN Attr   VSize    VFree
+  portal   1   3   0 wz--n- <250.00g 1020.00m
+  rootvg   2   8   0 wz--n- <148.80g   <3.80g
+
+  LV            VG     Attr       LSize   Pool Origin Data%  Meta%  Move Log Cpy%Sync Convert
+  PortalHub     portal -wi-ao---- 100.00g
+  audit_log     portal -wi-ao----  99.00g
+  mysql         portal -wi-ao----  50.00g
+  homelv        rootvg -wi-ao----  30.00g
+  homescriptslv rootvg -wi-ao----   5.00g
+  optlv         rootvg -wi-ao----  20.00g
+  rootlv        rootvg -wi-ao----  30.00g
+  swap          rootvg -wi-ao----  10.00g
+  tmplv         rootvg -wi-ao----  10.00g
+  usrlv         rootvg -wi-ao----  10.00g
+  varlv         rootvg -wi-ao----  30.00g
+
+
+=== Large Directories ===
+
+
+--- / ---
+
+85G     //opt
+52G     //var
+32G     //mysql
+18G     //home
+8.5G    //mysql-data
+4.2G    //usr
+2.5G    //apache-tomcat_avinash.tar
+2.4G    //scripts_30_09_2024.tar
+1.3G    //run
+842M    //log_temp
+648M    //root
+569M    //tmp
+390M    //webapps_30_09_2024.tar
+385M    //boot
+188M    //chatBot
+152M    //messages-20240922_26092024.gz
+28M     //etc
+7.0M    //efi
+232K    //nmap-ncat-7.91-12.el9.x86_64.rpm
+40K     //sop_portal
+
+
+--- /home ---
+
+12G     /home/eisuser
+2.3G    /home/mysql_BKUP
+2.2G    /home/scripts
+1.5G    /home/tcs919358
+681M    /home/New_Folder
+35M     /home/addmitam
+180K    /home/SOCVA
+112K    /home/nginx
+32K     /home/home
+28K     /home/splunk
+20K     /home/cloud-user
+16K     /home/test
+4.0K    /home/eissftp
+4.0K    /home/EISHOME
+
+
+--- /var ---
+
+22G     /var/www
+18G     /var/log
+9.9G    /var/spool
+2.2G    /var/lib
+760M    /var/opt
+36M     /var/cache
+52K     /var/mqsi
+4.0K    /var/tmp
+0       /var/yp
+0       /var/run
+0       /var/preserve
+0       /var/nis
+0       /var/mqm
+0       /var/mail
+0       /var/lock
+0       /var/local
+0       /var/kerberos
+0       /var/games
+0       /var/ftp
+0       /var/empty
+
+
+--- /var/log ---
+
+16G     /var/log/audit
+695M    /var/log/messages
+320M    /var/log/secure
+154M    /var/log/nginx
+108M    /var/log/warn
+78M     /var/log/commvault
+75M     /var/log/messages_10072025.tar.gz
+69M     /var/log/wtmp-20250701
+65M     /var/log/messages_18072025.gz
+64M     /var/log/secure_10072025.tar.gz
+58M     /var/log/sa
+55M     /var/log/secure_18072025.gz
+49M     /var/log/mail_07072025.gz
+49M     /var/log/mail.info_07072025.gz
+42M     /var/log/messages_15072025.gz
+41M     /var/log/messages_22072025.tar.gz
+41M     /var/log/dynatrace
+40M     /var/log/messages-20250713.gz
+36M     /var/log/secure_22072025.tar.gz
+36M     /var/log/secure_15072025.gz
+
+
+--- /opt ---
+
+77G     /opt/apache-tomcat
+4.2G    /opt/IBM
+1.5G    /opt/dynatrace
+1.1G    /opt/commvault
+690M    /opt/splunkforwarder
+217M    /opt/ds_agent
+200M    /opt/TrendMicro
+109M    /opt/bmc
+32K     /opt/apache-tomcat_bad_bkp
+0       /opt/mqm
+
+
+--- /usr ---
+
+1.8G    /usr/lib
+840M    /usr/share
+813M    /usr/lib64
+350M    /usr/bin
+198M    /usr/libexec
+136M    /usr/src
+55M     /usr/sbin
+36M     /usr/local
+31M     /usr/include
+0       /usr/tmp
+0       /usr/java
+0       /usr/games
+0       /usr/etc
+
+
+=== Network Connections ===
+
+Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+udp   UNCONN 0      0            0.0.0.0:111        0.0.0.0:*    users:(("systemd",pid=1,fd=68))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+udp   UNCONN 0      0          127.0.0.1:323        0.0.0.0:*    users:(("chronyd",pid=1459,fd=5))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+udp   UNCONN 0      0          127.0.0.1:18125      0.0.0.0:*    users:(("oneagentsources",pid=72633,fd=7))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+udp   UNCONN 0      0               [::]:111           [::]:*    users:(("systemd",pid=1,fd=70))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+udp   UNCONN 0      0              [::1]:323           [::]:*    users:(("chronyd",pid=1459,fd=6))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=1577,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+tcp   LISTEN 0      511          0.0.0.0:80         0.0.0.0:*    users:(("nginx",pid=2801537,fd=6),("nginx",pid=2801535,fd=6),("nginx",pid=2801534,fd=6),("nginx",pid=2801533,fd=6),("nginx",pid=2801532,fd=6),("nginx",pid=2801530,fd=6),("nginx",pid=2801527,fd=6),("nginx",pid=2801524,fd=6),("nginx",pid=2801519,fd=6),("nginx",pid=2801513,fd=6),("nginx",pid=2801509,fd=6),("nginx",pid=2801499,fd=6),("nginx",pid=2801498,fd=6),("nginx",pid=2801495,fd=6),("nginx",pid=2801489,fd=6),("nginx",pid=2801487,fd=6),("nginx",pid=2801486,fd=6),("nginx",pid=2801483,fd=6),("nginx",pid=2801480,fd=6),("nginx",pid=2801478,fd=6),("nginx",pid=2801476,fd=6),("nginx",pid=2801474,fd=6),("nginx",pid=2801473,fd=6),("nginx",pid=2801472,fd=6),("nginx",pid=2801471,fd=6),("nginx",pid=2801469,fd=6),("nginx",pid=2801466,fd=6),("nginx",pid=2801465,fd=6),("nginx",pid=2801463,fd=6),("nginx",pid=2801462,fd=6),("nginx",pid=2801461,fd=6),("nginx",pid=2801460,fd=6),("nginx",pid=2801458,fd=6))
+tcp   LISTEN 0      4096         0.0.0.0:111        0.0.0.0:*    users:(("systemd",pid=1,fd=67))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+tcp   LISTEN 0      8            0.0.0.0:34099      0.0.0.0:*    users:(("ClMgrS",pid=508372,fd=13))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      4096         0.0.0.0:39579      0.0.0.0:*    users:(("cvfwd",pid=508371,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+tcp   LISTEN 0      100          0.0.0.0:8090       0.0.0.0:*    users:(("java",pid=1614296,fd=131))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      100          0.0.0.0:8009       0.0.0.0:*    users:(("java",pid=1614296,fd=134))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      511          0.0.0.0:5443       0.0.0.0:*    users:(("httpd",pid=3745495,fd=3),("httpd",pid=3745494,fd=3),("httpd",pid=3745490,fd=3),("httpd",pid=2780404,fd=3),("httpd",pid=1690938,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+tcp   LISTEN 0      8            0.0.0.0:44019      0.0.0.0:*    users:(("cvd",pid=508370,fd=6))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+tcp   LISTEN 0      4096         0.0.0.0:8403       0.0.0.0:*    users:(("cvfwd",pid=508371,fd=12))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+tcp   LISTEN 0      64           0.0.0.0:8400       0.0.0.0:*    users:(("cvd",pid=508370,fd=5))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+tcp   LISTEN 0      511          0.0.0.0:9090       0.0.0.0:*    users:(("nginx",pid=2801537,fd=7),("nginx",pid=2801535,fd=7),("nginx",pid=2801534,fd=7),("nginx",pid=2801533,fd=7),("nginx",pid=2801532,fd=7),("nginx",pid=2801530,fd=7),("nginx",pid=2801527,fd=7),("nginx",pid=2801524,fd=7),("nginx",pid=2801519,fd=7),("nginx",pid=2801513,fd=7),("nginx",pid=2801509,fd=7),("nginx",pid=2801499,fd=7),("nginx",pid=2801498,fd=7),("nginx",pid=2801495,fd=7),("nginx",pid=2801489,fd=7),("nginx",pid=2801487,fd=7),("nginx",pid=2801486,fd=7),("nginx",pid=2801483,fd=7),("nginx",pid=2801480,fd=7),("nginx",pid=2801478,fd=7),("nginx",pid=2801476,fd=7),("nginx",pid=2801474,fd=7),("nginx",pid=2801473,fd=7),("nginx",pid=2801472,fd=7),("nginx",pid=2801471,fd=7),("nginx",pid=2801469,fd=7),("nginx",pid=2801466,fd=7),("nginx",pid=2801465,fd=7),("nginx",pid=2801463,fd=7),("nginx",pid=2801462,fd=7),("nginx",pid=2801461,fd=7),("nginx",pid=2801460,fd=7),("nginx",pid=2801458,fd=7))
+tcp   LISTEN 0      100          0.0.0.0:9091       0.0.0.0:*    users:(("java",pid=1614296,fd=133))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      128    10.188.24.100:9966       0.0.0.0:*    users:(("python3.9",pid=537317,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+tcp   LISTEN 0      200        127.0.0.1:41835      0.0.0.0:*    users:(("cvd",pid=508370,fd=11))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+tcp   LISTEN 0      4096       127.0.0.1:11434      0.0.0.0:*    users:(("ollama",pid=1550163,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      15         127.0.0.1:14118      0.0.0.0:*    users:(("vls_agent",pid=3758192,fd=15))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+tcp   LISTEN 0      128        127.0.0.1:14499      0.0.0.0:*    users:(("oneagentextensi",pid=4732,fd=18))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+tcp   LISTEN 0      1000       127.0.0.1:3306       0.0.0.0:*    users:(("mysqld",pid=1880,fd=23))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+tcp   LISTEN 0      10         127.0.0.1:5345       0.0.0.0:*    users:(("python3.9",pid=2965094,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+tcp   LISTEN 0      10         127.0.0.1:5543       0.0.0.0:*    users:(("python3.9",pid=453807,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+tcp   LISTEN 0      10         127.0.0.1:5544       0.0.0.0:*    users:(("python3.11",pid=825557,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+tcp   LISTEN 0      1          127.0.0.1:8005       0.0.0.0:*    users:(("java",pid=1614296,fd=148))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=1577,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+tcp   LISTEN 0      4096            [::]:111           [::]:*    users:(("systemd",pid=1,fd=69))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+tcp   LISTEN 0      70                 *:33060            *:*    users:(("mysqld",pid=1880,fd=21))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+tcp   LISTEN 0      4096               *:39577            *:*    users:(("cvfwd",pid=508371,fd=8))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+tcp   LISTEN 0      15                 *:4118             *:*    users:(("ds_agent",pid=1912,fd=15))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+tcp   LISTEN 0      4096               *:4750             *:*    users:(("rscd",pid=245560,fd=5))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
+tcp   LISTEN 0      511                *:5554             *:*    users:(("node",pid=1792740,fd=30))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+
+
+=== Firewall Status ===
+
+running
+
+public (active)
+  target: default
+  icmp-block-inversion: no
+  interfaces: eth0
+  sources:
+  services: cockpit dhcpv6-client ssh
+  ports: 9966/tcp 8400/tcp 8403/tcp 8401/tcp 5443/tcp 4750/tcp
+  protocols:
+  forward: yes
+  masquerade: no
+  forward-ports:
+  source-ports:
+  icmp-blocks:
+  rich rules:
+
+
+=== SELinux Status ===
+
+SELinux status:                 disabled
+
+
+=== Available Updates ===
+
+Updating Subscription Management repositories.
+Unable to read consumer identity
+
+This system is not registered with an entitlement server. You can use subscription-manager to register.
+
+Last metadata expiration check: 2:47:16 ago on Wed Jul 23 14:09:44 2025.
+
+
+=== System Uptime ===
+
+ 16:57:01 up 36 days, 19:40,  4 users,  load average: 4.04, 5.56, 7.28
+
+4.04 5.56 7.28 4/1745 4177893
+
+
+=== Kernel Messages ===
+
+-- No entries --
