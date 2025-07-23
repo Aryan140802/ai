@@ -13,92 +13,74 @@ def run_command(cmd):
                               stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE,
                               text=True)
-        return result.stdout
+        return result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        return f"Error running command: {e}\n{e.stderr}"
+        return f"Error: {e.stderr.strip()}"
+
+def format_section(title, content):
+    """Format a section with consistent headers and spacing"""
+    return f"\n=== {title.upper()} ===\n\n{content}\n"
 
 def get_system_info():
-    info = []
+    sections = []
     
     # Header with timestamp
-    info.append(f"=== Red Hat System Report === {get_timestamp()}\n")
+    sections.append(f"=== RED HAT SYSTEM REPORT ===\nGenerated: {get_timestamp()}\n")
     
     # 1. System overview
-    info.append("\n=== System Overview ===\n")
-    info.append(run_command("cat /etc/redhat-release"))
-    info.append(run_command("uname -a"))
+    sections.append(format_section("System Overview", 
+        f"OS Release: {run_command('cat /etc/redhat-release')}\n"
+        f"Kernel Info: {run_command('uname -a')}\n"
+        f"Uptime: {run_command('uptime')}\n"
+        f"Load Average: {run_command('cat /proc/loadavg')}"))
     
-    # 2. Top processes
-    info.append("\n=== Top Processes ===\n")
-    info.append(run_command("top -b -n 1 | head -n 20"))
+    # 2. Hardware information
+    sections.append(format_section("Hardware Information",
+        f"CPU Architecture:\n{run_command('lscpu')}\n\n"
+        f"CPU Frequency:\n{run_command('cpupower frequency-info')}"))
     
-    # 3. Service status (using systemctl)
-    info.append("\n=== Service Status ===\n")
-    info.append(run_command("systemctl list-units --type=service --state=running"))
-    info.append("\n=== Failed Services ===\n")
-    info.append(run_command("systemctl --failed"))
+    # 3. Resource utilization
+    sections.append(format_section("Resource Utilization",
+        f"CPU Usage (mpstat):\n{run_command('mpstat -P ALL 1 1')}\n\n"
+        f"Memory Usage:\n{run_command('free -h')}\n\n"
+        f"Top Processes by CPU:\n{run_command('ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 10')}\n\n"
+        f"Top Processes by Memory:\n{run_command('ps -eo pid,comm,%mem,%cpu --sort=-%mem | head -n 10')}"))
     
-    # 4. CPU utilization (specific to RHEL)
-    info.append("\n=== CPU Utilization ===\n")
-    info.append(run_command("mpstat -P ALL 1 1"))
-    info.append(run_command("lscpu"))
-    info.append("\n=== CPU Frequency ===\n")
-    info.append(run_command("cpupower frequency-info"))
+    # 4. Storage information
+    sections.append(format_section("Storage Information",
+        f"Disk Usage:\n{run_command('df -hT')}\n\n"
+        f"LVM Overview:\n{run_command('vgs && lvs')}\n\n"
+        f"Large Directories:\n{run_command('du -sh /* 2>/dev/null | sort -rh | head -n 15')}"))
     
-    # 5. Memory usage
-    info.append("\n=== Memory Usage ===\n")
-    info.append(run_command("free -h"))
-    info.append("\n=== Huge Pages ===\n")
-    info.append(run_command("cat /proc/meminfo | grep -i huge"))
+    # 5. Services and daemons
+    sections.append(format_section("Services Status",
+        f"Running Services:\n{run_command('systemctl list-units --type=service --state=running --no-pager')}\n\n"
+        f"Failed Services:\n{run_command('systemctl --failed --no-pager')}"))
     
-    # 6. Disk utilization (with LVM info)
-    info.append("\n=== Disk Usage ===\n")
-    info.append(run_command("df -hT"))
-    info.append("\n=== LVM Information ===\n")
-    info.append(run_command("pvs"))
-    info.append(run_command("vgs"))
-    info.append(run_command("lvs"))
+    # 6. Network information
+    sections.append(format_section("Network Information",
+        f"Active Connections:\n{run_command('ss -tulnp')}\n\n"
+        f"Firewall Status:\n{run_command('sudo firewall-cmd --state')}\n\n"
+        f"Network Interfaces:\n{run_command('ip -br addr show')}"))
     
-    # 7. Large directories (RHEL specific locations)
-    info.append("\n=== Large Directories ===\n")
-    major_dirs = ["/", "/home", "/var", "/var/log", "/opt", "/usr"]
-    for directory in major_dirs:
-        if os.path.exists(directory):
-            info.append(f"\n--- {directory} ---\n")
-            info.append(run_command(f"du -sh {directory}/* 2>/dev/null | sort -rh | head -n 20"))
+    # 7. Security information
+    sections.append(format_section("Security Information",
+        f"SELinux Status:\n{run_command('sestatus')}\n\n"
+        f"Last Auth Logs:\n{run_command('journalctl -u sshd --since "1 hour ago" --no-pager | tail -n 20')}"))
     
-    # 8. Network connections (RHEL specific)
-    info.append("\n=== Network Connections ===\n")
-    info.append(run_command("ss -tulnp"))
-    info.append("\n=== Firewall Status ===\n")
-    info.append(run_command("sudo firewall-cmd --state"))
-    info.append(run_command("sudo firewall-cmd --list-all"))
+    # 8. Updates and packages
+    sections.append(format_section("Updates Information",
+        f"Available Updates:\n{run_command('sudo dnf check-update || sudo yum check-update')}"))
     
-    # 9. SELinux status
-    info.append("\n=== SELinux Status ===\n")
-    info.append(run_command("sestatus"))
+    # 9. System messages
+    sections.append(format_section("System Messages",
+        f"Recent Kernel Messages:\n{run_command('journalctl -k --since "1 hour ago" --no-pager | tail -n 20')}"))
     
-    # 10. YUM/DNF updates
-    info.append("\n=== Available Updates ===\n")
-    if os.path.exists("/usr/bin/dnf"):
-        info.append(run_command("sudo dnf check-update"))
-    else:
-        info.append(run_command("sudo yum check-update"))
-    
-    # 11. Uptime and load average
-    info.append("\n=== System Uptime ===\n")
-    info.append(run_command("uptime"))
-    info.append(run_command("cat /proc/loadavg"))
-    
-    # 12. Kernel messages
-    info.append("\n=== Kernel Messages ===\n")
-    info.append(run_command("journalctl -k --since '1 hour ago' | tail -n 30"))
-    
-    return "\n".join(info)
+    return "\n".join(sections)
 
 def save_to_file(content, filename=None):
     if not filename:
-        filename = f"rhel_system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        filename = f"system_report_llm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     
     with open(filename, 'w') as f:
         f.write(content)
@@ -106,16 +88,20 @@ def save_to_file(content, filename=None):
     return filename
 
 def main():
-    print("Collecting Red Hat system information...")
+    print("Generating LLM-friendly system report...")
+    start_time = time.time()
+    
     report = get_system_info()
-    
     output_file = save_to_file(report)
-    print(f"Report saved to: {os.path.abspath(output_file)}")
     
-    # Print summary to console
-    print("\n=== Report Summary ===")
+    print(f"\nReport generated in {time.time()-start_time:.2f} seconds")
+    print(f"Saved to: {os.path.abspath(output_file)}")
+    
+    # Print summary
+    print("\n=== REPORT SUMMARY ===")
     print(f"Generated at: {get_timestamp()}")
-    print(f"File size: {os.path.getsize(output_file)} bytes")
+    print(f"File size: {os.path.getsize(output_file)/1024:.1f} KB")
+    print(f"Section count: {report.count('===')//2}")
 
 if __name__ == "__main__":
     main()
