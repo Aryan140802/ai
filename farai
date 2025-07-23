@@ -2,7 +2,11 @@ import os
 import re
 import logging
 import pymysql
-from typing import List, Optional
+import traceback
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+import json
+
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
@@ -12,8 +16,8 @@ FAR_DB_CONFIG = {
     "name": "FAR Details",
     "db_config": {
         "host": "localhost", 
-        "user": "readonly_user",
-        "password": "readonly_pass", 
+        "user": "root", 
+        "password": "root123", 
         "database": "EIS_n"
     },
     "include_tables": ["FarDetailsAll"],
@@ -47,37 +51,23 @@ def clean_sql(raw_sql: str) -> str:
         sql = match.group(1)
     else:
         sql = re.sub(r"```", "", raw_sql)
-        sql = re.sub(r"^(.*?)(SELECT|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+        sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
     
-    # Convert exact matches to LIKE for text fields (except Far_Id)
-    sql = re.sub(r"(\w+)\s*=\s*'([^']*)'", 
-                lambda m: f"{m.group(1)} = '{m.group(2)}'" if m.group(1).lower() == 'far_id' 
-                         else f"{m.group(1)} LIKE '%{m.group(2)}%'", 
-                sql, flags=re.IGNORECASE)
-    
-    sql = re.sub(r"(\w+)\s*=\s*\"([^\"]*)\"", 
-                lambda m: f"{m.group(1)} = \"{m.group(2)}\"" if m.group(1).lower() == 'far_id' 
-                         else f"{m.group(1)} LIKE \"%{m.group(2)}%\"", 
-                sql, flags=re.IGNORECASE)
-    
+    sql = re.sub(r"(\w+)\s*=\s*'([^']*)'", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"(\w+)\s*=\s*\"([^\"]*)\"", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
     """Format database results for display"""
     if not result:
-        return "No results found."
+        return "No FAR details found for your request."
     
-    # Special formatting for common FAR queries
-    if columns and len(result) == 1 and 'far_id' in [col.lower() for col in columns]:
-        output = []
-        for col, val in zip(columns, result[0]):
-            output.append(f"{col}: {val}")
-        return "\n".join(output)
+    if len(result) == 1 and len(result[0]) == 1:
+        return f"Result: {result[0][0]}"
     
     if columns and len(result) <= 10:
         output = []
-        col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) 
-                     for i, col in enumerate(columns)]
+        col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
         header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
         separator = "-+-".join("-" * width for width in col_widths)
         output.append(header)
@@ -96,61 +86,16 @@ def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> s
         rows.append(f"... and {len(result) - 20} more rows")
     return "\n".join(rows)
 
-def is_readonly_query(sql: str) -> bool:
+def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
-    sql_lower = sql.strip().lower()
-    
-    # Must start with SELECT, WITH (for CTEs), or be a simple SHOW/DESCRIBE
-    if not sql_lower.startswith(('select', 'with', 'show', 'describe', 'explain')):
-        return False
-    
-    # Check for any blocked SQL keywords in the query
-    blocked_keywords = [
-        'insert', 'update', 'delete', 'drop', 'alter', 'create',
-        'truncate', 'grant', 'revoke', 'replace', 'merge', ';'
-    ]
-    
-    for keyword in blocked_keywords:
-        if re.search(rf'\b{keyword}\b', sql_lower):
-            return False
-            
-    return True
-
-def validate_far_columns(sql: str) -> bool:
-    """Validate that only existing FAR Details columns are queried"""
-    allowed_columns = {
-        'far_id', 'subject', 'status', 'created', 'expires',
-        'requested_source', 'requested_destination', 'requested_service',
-        'requested_source_nat', 'requested_destination_nat',
-        'requested_port_translation', 'change_source', 'change_destination',
-        'change_service', 'change_source_nat', 'change_destination_nat',
-        'translated_destination', 'translated_service',
-        'dependent_application', 'permanent_rule', 'zone',
-        'created_op', 'expires_op'
-    }
-    
-    # Extract column names from query
-    select_match = re.search(r'select\s+(.*?)\s+from', sql.lower(), re.DOTALL)
-    if not select_match:
-        return False
-        
-    columns_part = select_match.group(1)
-    if columns_part.strip() == '*':
-        return True
-        
-    columns = []
-    for col in columns_part.split(','):
-        col = col.strip().split()[0].strip('`"[]')
-        columns.append(col)
-    
-    # Check all columns are allowed
-    return all(col in allowed_columns for col in columns)
+    return sql.strip().lower().startswith('select')
 
 class FarDetailsAssistant:
     def __init__(self):
         self.llm = None
         self.db_handler = None
         self.initialized = False
+        self.chat_history = []
 
     def initialize(self):
         """Initialize the FAR Details Assistant"""
@@ -178,41 +123,28 @@ class FarDetailsAssistant:
             return False
 
     def query_far_details(self, question: str) -> str:
-        """Query FAR details database with table-specific optimizations"""
+        """Query FAR details database"""
         if not self.db_handler:
-            return "Database connection not available."
+            return "FAR Details database not available."
         
         try:
-            # Enhanced prompt with table-specific guidance
             enhanced_question = f"""
             {question}
             
-            Database Schema:
-            - Table: FarDetailsAll
-            - Columns:
-              * Far_Id (integer, primary key) - use exact matches
-              * Subject, Status, Created, Expires (text)
-              * Requested_* (network source/destination/service/NAT)
-              * Change_* (modified network parameters)
-              * Translated_* (final network parameters)
-              * Dependent_application, Permanent_Rule, ZONE
+            Important: When searching for FAR details, processes, or any text fields, use LIKE with wildcards (%) instead of exact matches (=). 
+            For example: 
+            - Use "process_name LIKE '%web%'" instead of "process_name = 'web'"
+            - Use "details LIKE '%error%'" instead of "details = 'error'"
+            - Use "status LIKE '%active%'" instead of "status = 'active'"
             
-            Query Guidelines:
-            1. For Far_Id use exact matches: Far_Id = 123
-            2. For text fields use LIKE: Status LIKE '%Approved%'
-            3. Keep queries simple and focused
-            4. Only query existing columns
+            Focus on the FarDetailsAll table for process information.
             """
-            
+
             raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
             sql = clean_sql(raw_sql)
-            
-            # Validate the query
-            if not is_readonly_query(sql):
-                return "Error: Only read-only queries are allowed."
-                
-            if not validate_far_columns(sql):
-                return "Error: Query contains invalid columns for FAR Details."
+
+            if not is_select_query(sql):
+                return "Only SELECT queries are allowed for security."
             
             with self.db_handler['connection'].cursor() as cursor:
                 cursor.execute(sql)
@@ -220,40 +152,34 @@ class FarDetailsAssistant:
                 columns = [desc[0] for desc in cursor.description] if cursor.description else None
             
             if not result:
-                return "No matching FAR records found."
+                return "No FAR details found matching your query."
             
             formatted_result = format_answer(result, columns)
             
-            # Get interpretation of results
+            # Send the original question again with the results for accurate interpretation
             context = f"""
-            Question about FAR details: {question}
+Original question: {question}
+
+Database query results:
+{formatted_result}
+
+Please provide a clear, concise answer to the original question based on these results.
+"""
             
-            Query Results:
-            {formatted_result}
+            ai_interpretation = self.llm.invoke(context)
+            return ai_interpretation
             
-            Provide a concise answer focusing on:
-            - Key identifiers (Far_Id if present)
-            - Current status and dates
-            - Important network parameters
-            - Any notable details from Subject field
-            """
-            
-            return self.llm.invoke(context)
-            
-        except pymysql.Error as e:
-            logger.error(f"Database error: {e}")
-            return f"Database error: {str(e)}"
         except Exception as e:
-            logger.error(f"Query processing error: {e}")
-            return f"Error processing request: {str(e)}"
+            logger.error(f"FAR details query error: {e}")
+            return f"Unable to retrieve FAR details: {e}"
 
     def process_question(self, question: str) -> str:
         """Process all questions as FAR-related queries"""
         if not self.initialized:
-            return "Assistant not ready. Please try again later."
+            return "FAR Details Assistant not initialized."
         
         if is_dangerous(question):
-            return "Invalid request."
+            return "Question blocked for security reasons."
         
         return self.query_far_details(question)
 
@@ -266,7 +192,7 @@ class FarDetailsAssistant:
         
         while True:
             try:
-                question = input("FAR Query: ").strip()
+                question = input("Query: ").strip()
                 if not question:
                     continue
                 
