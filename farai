@@ -46,6 +46,7 @@ def is_dangerous(text: str) -> bool:
 
 def clean_sql(raw_sql: str) -> str:
     """Clean and enhance SQL for LIKE operations"""
+    # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1)
@@ -53,8 +54,11 @@ def clean_sql(raw_sql: str) -> str:
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
     
+    # Replace exact matches with LIKE for better searching
     sql = re.sub(r"(\w+)\s*=\s*'([^']*)'", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
     sql = re.sub(r"(\w+)\s*=\s*\"([^\"]*)\"", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
+    
+    # Remove any trailing semicolons and whitespace
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
@@ -62,33 +66,50 @@ def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> s
     if not result:
         return "No FAR details found for your request."
     
+    # If single value result, return it directly
     if len(result) == 1 and len(result[0]) == 1:
         return f"Result: {result[0][0]}"
     
-    if columns and len(result) <= 10:
+    # Format as table if we have column names and reasonable number of rows
+    if columns:
         output = []
-        col_widths = [max(len(str(col)), max(len(str(row[i])) for row in result)) for i, col in enumerate(columns)]
+        # Calculate column widths
+        col_widths = [
+            max(len(str(col)), max(len(str(row[i])) for row in result)) 
+            for i, col in enumerate(columns)
+        ]
+        
+        # Build header
         header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
         separator = "-+-".join("-" * width for width in col_widths)
         output.append(header)
         output.append(separator)
-        for row in result[:10]:
-            formatted_row = " | ".join(str(val).ljust(width) for val, width in zip(row, col_widths))
+        
+        # Add rows (limit to 20 for display)
+        for row in result[:20]:
+            formatted_row = " | ".join(str(val).ljust(width) if val is not None else "NULL".ljust(width) 
+                                     for val, width in zip(row, col_widths))
             output.append(formatted_row)
-        if len(result) > 10:
-            output.append(f"... and {len(result) - 10} more rows")
+        
+        if len(result) > 20:
+            output.append(f"... and {len(result) - 20} more rows")
         return "\n".join(output)
     
+    # Fallback format for when we don't have column names
     rows = []
     for row in result[:20]:
-        rows.append(" | ".join(str(val) for val in row))
+        rows.append(" | ".join(str(val) if val is not None else "NULL" for val in row))
     if len(result) > 20:
         rows.append(f"... and {len(result) - 20} more rows")
     return "\n".join(rows)
 
 def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
-    return sql.strip().lower().startswith('select')
+    sql = sql.strip().lower()
+    return sql.startswith('select') and not any(
+        kw in sql 
+        for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']
+    )
 
 class FarDetailsAssistant:
     def __init__(self):
@@ -100,14 +121,39 @@ class FarDetailsAssistant:
     def initialize(self):
         """Initialize the FAR Details Assistant"""
         try:
+            # Initialize LLM with lower temperature for more deterministic responses
             self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
             
+            # Set up database connection
             db_cfg = FAR_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
-            db_for_llm = SQLDatabase.from_uri(uri, include_tables=FAR_DB_CONFIG.get("include_tables"))
             
+            # Connect to database with longer timeout and explicit charset
+            db_for_llm = SQLDatabase.from_uri(
+                uri, 
+                include_tables=FAR_DB_CONFIG.get("include_tables"),
+                engine_args={
+                    "pool_pre_ping": True,
+                    "pool_recycle": 3600,
+                    "connect_args": {
+                        "connect_timeout": 10,
+                        "charset": "utf8mb4"
+                    }
+                }
+            )
+            
+            # Create query chain
             chain = create_sql_query_chain(self.llm, db_for_llm)
-            db_conn = pymysql.connect(**db_cfg)
+            
+            # Create direct connection for executing queries
+            db_conn = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor  # Use DictCursor for easier result handling
+            )
             
             self.db_handler = {
                 'chain': chain,
@@ -119,7 +165,7 @@ class FarDetailsAssistant:
             return True
             
         except Exception as e:
-            logger.error(f"Initialization failed: {e}", exc_info=True)
+            logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
     def query_far_details(self, question: str) -> str:
@@ -128,71 +174,116 @@ class FarDetailsAssistant:
             return "FAR Details database not available."
         
         try:
+            # Enhance the question to guide the LLM toward better queries
             enhanced_question = f"""
             {question}
             
-            Important: When searching for FAR details, processes, or any text fields, use LIKE with wildcards (%) instead of exact matches (=). 
-            For example: 
-            - Use "process_name LIKE '%web%'" instead of "process_name = 'web'"
-            - Use "details LIKE '%error%'" instead of "details = 'error'"
-            - Use "status LIKE '%active%'" instead of "status = 'active'"
+            Important Notes:
+            1. Always query from the FarDetailsAll table.
+            2. Use LIKE with wildcards (%) for text searches instead of exact matches (=).
+            3. Include relevant columns like Far_Id, Subject, Status, Created, Expires.
+            4. For date comparisons, use proper date functions if needed.
+            5. Limit results to 20 rows unless specifically asked for more.
             
-            Focus on the FarDetailsAll table for process information.
+            Example good queries:
+            - "SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Subject LIKE '%firewall%' AND Status LIKE '%active%' LIMIT 20"
+            - "SELECT COUNT(*) FROM FarDetailsAll WHERE Created > '2023-01-01'"
+            - "SELECT DISTINCT Status FROM FarDetailsAll"
             """
-
+            
+            # Generate the SQL query
             raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
+            logger.info(f"Generated SQL: {raw_sql}")
+            
+            # Clean and validate the SQL
             sql = clean_sql(raw_sql)
-
+            logger.info(f"Cleaned SQL: {sql}")
+            
             if not is_select_query(sql):
-                return "Only SELECT queries are allowed for security."
+                return "Error: Only SELECT queries are allowed for security reasons."
             
+            # Execute the query
             with self.db_handler['connection'].cursor() as cursor:
-                cursor.execute(sql)
-                result = cursor.fetchall()
-                columns = [desc[0] for desc in cursor.description] if cursor.description else None
-            
-            if not result:
-                return "No FAR details found matching your query."
-            
-            formatted_result = format_answer(result, columns)
-            
-            # Send the original question again with the results for accurate interpretation
-            context = f"""
+                try:
+                    cursor.execute(sql)
+                    result = cursor.fetchall()
+                    
+                    # Get column names if available
+                    columns = list(result[0].keys()) if result and isinstance(result[0], dict) else None
+                    
+                    # Convert dict results to tuples for consistent formatting
+                    if columns:
+                        result = [tuple(row.values()) for row in result]
+                    
+                    logger.info(f"Query returned {len(result)} rows")
+                    
+                    if not result:
+                        return "No FAR details found matching your query."
+                    
+                    # Format the raw results
+                    formatted_result = format_answer(result, columns)
+                    
+                    # Create context for the LLM to interpret results
+                    context = f"""
 Original question: {question}
 
-Database query results:
+Database query executed:
+{sql}
+
+Query results:
 {formatted_result}
 
-Please provide a clear, concise answer to the original question based on these results.
+Please provide a clear, concise answer to the original question based on these results. 
+If the results are in table format, summarize the key findings. 
+If no results were found, suggest possible reasons or alternative queries.
 """
-            
-            ai_interpretation = self.llm.invoke(context)
-            return ai_interpretation
+                    
+                    # Get interpretation from LLM
+                    ai_interpretation = self.llm.invoke(context)
+                    return ai_interpretation.strip()
+                    
+                except pymysql.Error as db_error:
+                    logger.error(f"Database error: {db_error}\n{traceback.format_exc()}")
+                    return f"Database error: {db_error}"
             
         except Exception as e:
-            logger.error(f"FAR details query error: {e}")
-            return f"Unable to retrieve FAR details: {e}"
+            logger.error(f"FAR details query error: {e}\n{traceback.format_exc()}")
+            return f"Error processing your request: {e}"
 
     def process_question(self, question: str) -> str:
         """Process all questions as FAR-related queries"""
-        if not self.initialized:
-            return "FAR Details Assistant not initialized."
+        if not self.initialized and not self.initialize():
+            return "FAR Details Assistant initialization failed. Please check logs."
         
         if is_dangerous(question):
             return "Question blocked for security reasons."
         
-        return self.query_far_details(question)
+        # Add to chat history for context
+        self.chat_history.append(f"User: {question}")
+        
+        response = self.query_far_details(question)
+        
+        # Add response to history
+        self.chat_history.append(f"Assistant: {response}")
+        
+        return response
 
     def start_interactive_session(self):
         """Start interactive session"""
         if not self.initialize():
+            print("Failed to initialize FAR Details Assistant. Check logs for details.")
             return
         
         print("FAR Details Assistant ready. Enter your query or 'exit' to quit.")
+        print("Example queries:")
+        print("- Show me all active FARs about firewalls")
+        print("- How many FARs were created last month?")
+        print("- What's the status of FAR with ID 12345?")
+        print("- List all FARs that expire in the next 30 days")
         
         while True:
             try:
-                question = input("Query: ").strip()
+                question = input("\nQuery: ").strip()
                 if not question:
                     continue
                 
@@ -203,13 +294,16 @@ Please provide a clear, concise answer to the original question based on these r
                 print(f"\n{response}\n")
                     
             except KeyboardInterrupt:
+                print("\nExiting...")
                 break
             except Exception as e:
-                print(f"Error: {e}")
-                logger.error(f"Session error: {e}", exc_info=True)
+                print(f"\nError: {e}")
+                logger.error(f"Session error: {e}\n{traceback.format_exc()}")
         
+        # Clean up
         if self.db_handler and self.db_handler['connection'].open:
             self.db_handler['connection'].close()
+        print("Session ended.")
 
 def main():
     assistant = FarDetailsAssistant()
