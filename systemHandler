@@ -1,99 +1,142 @@
-#!/usr/bin/env python3
 import os
 import re
+import logging
+import subprocess
+import pymysql
+import traceback
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-from langchain_ollama import OllamaLLM
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+import json
 
-class SystemAnalyzer:
-    def __init__(self):
-        self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-        self.analysis_history = []
+from langchain_community.utilities import SQLDatabase
+from langchain_community.llms import Ollama
+from langchain.chains import create_sql_query_chain
+
+class SystemReportAnalyzer:
+    def __init__(self, report_path: str = None):
+        self.report_path = report_path
+        self.report_content = ""
+        self.llm = None
+        self.db = None
         
-    def load_system_report(self, file_path):
-        """Load the system report from file"""
-        try:
-            with open(file_path, 'r') as f:
-                return f.read()
-        except Exception as e:
-            return f"Error loading report: {e}"
-
-    def analyze_system(self, report_text, question):
-        """Analyze the system report and answer questions"""
-        prompt_template = PromptTemplate(
-            input_variables=["report", "question"],
-            template="""
-            You are a Red Hat Enterprise Linux system administrator assistant. Analyze the following system report and provide detailed answers to the user's questions.
-            Focus on identifying issues, performance bottlenecks, security concerns, and provide actionable recommendations.
-
-            SYSTEM REPORT:
-            {report}
-
-            USER QUESTION: {question}
-
-            Provide your analysis in this format:
-            1. [Key Observation] - Brief description of what you found
-            2. [Impact] - How this affects system performance/security
-            3. [Recommendation] - Suggested actions to take
-            4. [Additional Info] - Any other relevant details
-
-            Answer concisely but thoroughly, using your Linux administration expertise.
-            """
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
         )
+        self.logger = logging.getLogger(__name__)
         
-        chain = LLMChain(llm=self.llm, prompt=prompt_template)
-        response = chain.run(report=report_text, question=question)
-        
-        # Store the analysis in history
-        self.analysis_history.append({
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "question": question,
-            "response": response
-        })
-        
-        return response
-
-    def interactive_session(self, report_file):
-        """Start an interactive Q&A session about the system"""
-        print("Loading system report...")
-        report = self.load_system_report(report_file)
-        
-        if report.startswith("Error"):
-            print(report)
-            return
+    def load_report(self, path: str = None):
+        """Load the system report from a file"""
+        if path:
+            self.report_path = path
             
-        print("\nSystem Analyzer ready. Ask questions about your Red Hat system or type 'exit' to quit.")
-        print("Example questions:")
-        print("- What's causing the high load average?")
-        print("- Are there any security concerns I should address?")
-        print("- Which processes are consuming the most resources?")
-        print("- Is there enough free disk space?")
+        if not self.report_path:
+            raise ValueError("No report path provided")
+            
+        try:
+            with open(self.report_path, 'r') as f:
+                self.report_content = f.read()
+            self.logger.info(f"Successfully loaded report from {self.report_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to load report: {str(e)}")
+            raise
+            
+    def connect_to_llm(self, model_name: str = "myllm:latest"):
+        """Connect to the local Ollama LLM"""
+        try:
+            self.llm = Ollama(model=model_name)
+            self.logger.info(f"Connected to LLM model: {model_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to connect to LLM: {str(e)}")
+            raise
+            
+    def analyze_report(self, query: str):
+        """Analyze the report content using the LLM"""
+        if not self.llm:
+            raise RuntimeError("LLM not connected. Please connect first.")
+            
+        if not self.report_content:
+            raise RuntimeError("Report not loaded. Please load first.")
+            
+        try:
+            # Combine the report and query into a prompt
+            prompt = f"""
+            System Report Analysis Task:
+            
+            Below is a system report from a Red Hat Enterprise Linux server:
+            {self.report_content[:10000]}... [truncated if too long]
+            
+            Question: {query}
+            
+            Please analyze the report and provide a detailed answer to the question.
+            """
+            
+            response = self.llm(prompt)
+            return response.strip()
+        except Exception as e:
+            self.logger.error(f"Analysis failed: {str(e)}")
+            raise
+            
+    def interactive_session(self):
+        """Start an interactive terminal session"""
+        print("\n" + "="*50)
+        print("System Report Analyzer")
+        print("="*50 + "\n")
         
+        # Load the report
+        if not self.report_content:
+            report_path = input("Enter path to system report file (or press Enter to use default): ").strip()
+            if report_path:
+                self.load_report(report_path)
+            else:
+                self.load_report()
+                
+        # Connect to LLM
+        model_name = input("Enter Ollama model name (default: myllm:latest): ").strip() or "myllm:latest"
+        self.connect_to_llm(model_name)
+        
+        print("\nConnected to LLM and loaded report successfully.")
+        print("Type 'exit' to quit the session.\n")
+        
+        # Main interaction loop
         while True:
             try:
-                question = input("\nYour question: ").strip()
-                if not question:
+                query = input("Your question about the system report: ").strip()
+                
+                if query.lower() in ['exit', 'quit']:
+                    print("Exiting...")
+                    break
+                    
+                if not query:
+                    print("Please enter a question.")
                     continue
                     
-                if question.lower() in ['exit', 'quit', 'q']:
-                    break
-                
                 print("\nAnalyzing...\n")
-                response = self.analyze_system(report, question)
+                response = self.analyze_report(query)
+                print("\nAnalysis Result:")
+                print("-"*50)
                 print(response)
+                print("-"*50 + "\n")
                 
             except KeyboardInterrupt:
                 print("\nExiting...")
                 break
             except Exception as e:
-                print(f"\nError: {e}")
+                self.logger.error(f"Error during interaction: {str(e)}")
+                print(f"An error occurred: {str(e)}")
+
+def main():
+    analyzer = SystemReportAnalyzer()
+    
+    # You can pre-load a report if you want
+    # analyzer.load_report("path/to/your/report.txt")
+    
+    try:
+        analyzer.interactive_session()
+    except Exception as e:
+        print(f"Fatal error: {str(e)}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    analyzer = SystemAnalyzer()
-    
-    # Specify the path to your system report file
-    report_file = "rhel_system_report_20250723_165647.txt"  # Update this path
-    
-    # Start interactive session
-    analyzer.interactive_session(report_file)
+    main()
