@@ -1,24 +1,19 @@
 import os
 import re
 import logging
-import json
+import subprocess
+import pymysql
+import traceback
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-from typing import Optional
+import json
 
-from langchain_community.llms import Ollama
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from langchain_community.utilities import SQLDatabase
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
 
 class SystemReportAnalyzer:
-    def __init__(self, model_name: str = "myllm:latest"):
-        self.model_name = model_name
+    def __init__(self):
         self.llm = None
         self.report_content = ""
         self.chat_history = []
@@ -26,8 +21,8 @@ class SystemReportAnalyzer:
     def initialize_llm(self):
         """Initialize the Ollama LLM connection"""
         try:
-            self.llm = Ollama(model=self.model_name, temperature=0.1)
-            logger.info(f"Connected to LLM model: {self.model_name}")
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
+            logger.info("Connected to LLM model: myllm:latest")
             return True
         except Exception as e:
             logger.error(f"Failed to connect to LLM: {str(e)}")
@@ -44,8 +39,8 @@ class SystemReportAnalyzer:
             logger.error(f"Failed to load report: {str(e)}")
             return False
     
-    def analyze_question(self, question: str) -> str:
-        """Analyze the question about the system report"""
+    def analyze_report(self, question: str) -> str:
+        """Analyze the report content using the LLM"""
         if not self.llm:
             return "LLM not initialized. Please connect first."
         
@@ -53,51 +48,42 @@ class SystemReportAnalyzer:
             return "No report loaded. Please load a report first."
         
         try:
-            # Create a prompt template
-            prompt_template = PromptTemplate(
-                input_variables=["report", "question", "history"],
-                template="""
-                You are a senior Linux system administrator analyzing a system report.
-                Below is a system report from a Red Hat Enterprise Linux server:
-                
-                {report}
-                
-                Conversation history:
-                {history}
-                
-                Current question: {question}
-                
-                Please analyze the report and provide:
-                1. A concise answer to the question
-                2. Relevant metrics from the report
-                3. Any concerning findings
-                4. Recommendations if issues are found
-                
-                Answer in clear, professional language suitable for a sysadmin.
-                """
-            )
+            # Create a SQL database chain (even though we're not using SQL here)
+            # We'll repurpose it for general question answering
+            db_chain = create_sql_query_chain(self.llm, SQLDatabase.from_uri("sqlite:///:memory:"))
             
-            # Format the chat history
-            history_str = "\n".join(
-                f"User: {item['user']}\nAssistant: {item['assistant']}" 
-                for item in self.chat_history[-3:]
-            )
+            # Build the prompt with report context
+            prompt = f"""
+            System Report Analysis:
             
-            # Create and run the chain
-            chain = LLMChain(llm=self.llm, prompt=prompt_template)
-            response = chain.run({
-                "report": self.report_content[:10000],  # Limit to first 10k chars
-                "question": question,
-                "history": history_str
-            })
+            Below is a system report from a Red Hat Enterprise Linux server:
+            {self.report_content[:10000]}... [truncated if too long]
+            
+            Question: {question}
+            
+            Please analyze the report and provide:
+            1. A concise answer to the question
+            2. Relevant metrics from the report
+            3. Any concerning findings
+            4. Recommendations if issues are found
+            
+            Answer in clear, professional language suitable for a sysadmin.
+            """
+            
+            # Use the chain to get a response
+            response = db_chain.invoke({"question": prompt})
+            
+            # Clean up the response
+            cleaned_response = re.sub(r"```sql.*?```", "", response, flags=re.DOTALL)
+            cleaned_response = cleaned_response.strip()
             
             # Save to chat history
             self.chat_history.append({
                 "user": question,
-                "assistant": response
+                "assistant": cleaned_response
             })
             
-            return response.strip()
+            return cleaned_response
         
         except Exception as e:
             logger.error(f"Analysis failed: {str(e)}")
@@ -107,7 +93,6 @@ class SystemReportAnalyzer:
         """Start an interactive terminal session"""
         print("\n" + "="*50)
         print("System Report Analyzer")
-        print(f"Using LLM model: {self.model_name}")
         print("="*50 + "\n")
         
         # Initialize LLM
@@ -142,7 +127,7 @@ class SystemReportAnalyzer:
                     continue
                 
                 print("\nAnalyzing...\n")
-                response = self.analyze_question(question)
+                response = self.analyze_report(question)
                 print("\nAnalysis Result:")
                 print("-"*50)
                 print(response)
@@ -160,7 +145,7 @@ class SystemReportAnalyzer:
         help_text = """
 SYSTEM REPORT ANALYZER HELP
 
-This tool helps analyze Linux system reports using AI. You can ask questions about:
+You can ask questions about:
 
 System Overview:
 - What's the system uptime?
@@ -181,7 +166,7 @@ Storage:
 Services:
 - List all running services
 - Are there any failed services?
-- Show status of specific service (nginx, mysql, etc.)
+- Show status of specific service
 
 Network:
 - Show open network ports
@@ -193,12 +178,6 @@ Security:
 - Show firewall status
 - List security services running
 
-Examples:
-- "What's the current load average?"
-- "Show top 5 processes by memory usage"
-- "Is MySQL service running?"
-- "What's using the most space in /var?"
-
 Commands:
 - help: Show this help
 - exit: Quit the analyzer
@@ -206,7 +185,14 @@ Commands:
         print(help_text)
 
 def main():
-    analyzer = SystemReportAnalyzer(model_name="myllm:latest")
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    
+    analyzer = SystemReportAnalyzer()
     analyzer.interactive_session()
 
 if __name__ == "__main__":
