@@ -1,34 +1,23 @@
-mysql> desc UserMaster;
-+---------------+--------------+------+-----+---------+-------+
-| Field         | Type         | Null | Key | Default | Extra |
-+---------------+--------------+------+-----+---------+-------+
-| Uid           | int unsigned | NO   | PRI | 0       |       | employee id
-| EmpName       | varchar(80)  | NO   |     | NULL    |       | Employee name
-| Pwd           | varchar(45)  | NO   |     | NULL    |       | password
-| SecQ          | varchar(45)  | NO   |     | NULL    |       | secuirty question
-| SecA          | varchar(45)  | NO   |     | NULL    |       | security answer
-| Project       | varchar(45)  | NO   |     | NULL    |       | project
-| Team          | varchar(45)  | NO   |     | NULL    |       | team name
-| Rid           | int unsigned | YES  | MUL | NULL    |       | 
-| Level         | varchar(10)  | YES  |     | NULL    |       |
-| Contact       | varchar(11)  | YES  |     | NULL    |       | phone number
-| Mandatory     | varchar(10)  | YES  |     | NULL    |       | 
-| SuperLevel    | varchar(10)  | YES  |     | NULL    |       | 
-| Tid           | int          | YES  |     | NULL    |       |
-| Enable        | int          | YES  |     | NULL    |       |
-| TcsDoj        | varchar(20)  | YES  |     | NULL    |       |
-| SbiDoj        | varchar(20)  | YES  |     | NULL    |       |
-| TcsEmail      | varchar(80)  | YES  | UNI | NULL    |       | tcs email
-| SbiEmail      | varchar(80)  | YES  |     | NULL    |       | sbi email
-| AdId          | varchar(30)  | YES  | UNI | NULL    |       | ad id 
-| IdCard        | varchar(30)  | YES  | UNI | NULL    |       |
-| AccessCard    | varchar(30)  | YES  | UNI | NULL    |       |
-| Onboarding    | varchar(20)  | YES  |     | NULL    |       |
-| OnboardedOn   | date         | YES  |     | NULL    |       |
-| PvcAppId      | varchar(30)  | YES  | UNI | NULL    |       |
-| PvcStatus     | varchar(30)  | YES  |     | NULL    |       |
-| PvcActionDate | varchar(30)  | YES  |     | NULL    |       |
-| BACompany     | varchar(80)  | YES  |     | NULL    |       |
-| Phone         | varchar(4)   | YES  |     | NULL    |       |
-| Position      | varchar(20)  | YES  |     | NULL    |       |
-+---------------+--------------+------+-----+---------+-------+
+ Far_Id                     | int      | NO   | PRI | NULL    |       |
+| Subject                    | longtext | YES  |     | NULL    |       | far subject line
+| Status                     | longtext | NO   |     | NULL    |       | stauts of far
+| Created                    | longtext | NO   |     | NULL    |       | creation day
+| Expires                    | longtext | YES  |     | NULL    |       | expiry date 
+| Requested_Source           | longtext | NO   |     | NULL    |       |   
+| Requested_Destination      | longtext | NO   |     | NULL    |       | 
+| Requested_Service          | longtext | NO   |     | NULL    |       |
+| Requested_Source_NAT       | longtext | YES  |     | NULL    |       |
+| Requested_Destination_NAT  | longtext | YES  |     | NULL    |       |
+| Requested_Port_Translation | longtext | YES  |     | NULL    |       |
+| Change_Source              | longtext | YES  |     | NULL    |       |
+| Change_Destination         | longtext | YES  |     | NULL    |       |
+| Change_Service             | longtext | YES  |     | NULL    |       |
+| Change_Source_NAT          | longtext | YES  |     | NULL    |       |
+| Change_Destination_NAT     | longtext | YES  |     | NULL    |       |
+| Translated_Destination     | longtext | YES  |     | NULL    |       |
+| Translated_Service         | longtext | YES  |     | NULL    |       |
+| Dependent_application      | longtext | YES  |     | NULL    |       |
+| Permanent_Rule             | longtext | YES  |     | NULL    |       |
+| ZONE                       | longtext | YES  |     | NULL    |       |
+| Created_op                 | longtext | YES  |     | NULL    |       |
+| Expires_op                 | longtext | YES  |     | NULL    |       |
