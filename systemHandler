@@ -1,195 +1,602 @@
+#!/usr/bin/env python3
 import os
 import re
 import logging
+import json
+import glob
+import traceback
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
-from typing import List, Dict
+import sqlite3
+from pathlib import Path
 
 from langchain_ollama import OllamaLLM
 
-class SystemReportAnalyzer:
+# --- CONFIGURATION ---
+
+REPORT_CONFIG = {
+    "name": "System Reports",
+    "report_directory": ".",  # Directory containing system report JSON files
+    "db_file": "system_reports.db",  # SQLite database for indexed reports
+    "supported_patterns": ["system_report_*.json"]
+}
+
+logging.basicConfig(
+    filename=os.path.expanduser("~/.system_report_query_ai.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def clean_query_response(raw_response: str) -> str:
+    """Clean and extract meaningful response from LLM"""
+    # Remove any code blocks or formatting
+    response = re.sub(r"```[\w]*\s*(.*?)\s*```", r"\1", raw_response, flags=re.DOTALL)
+    return response.strip()
+
+def format_answer(data: Any, max_items: int = 20) -> str:
+    """Format query results for display"""
+    if not data:
+        return "No data found for your request."
+    
+    if isinstance(data, (str, int, float, bool)):
+        return f"Result: {data}"
+    
+    if isinstance(data, dict):
+        if len(data) == 1:
+            key, value = next(iter(data.items()))
+            return f"{key}: {format_answer(value, max_items)}"
+        
+        output = []
+        for key, value in list(data.items())[:max_items]:
+            if isinstance(value, (dict, list)) and len(str(value)) > 100:
+                output.append(f"{key}: [Complex data - {len(value) if isinstance(value, (list, dict)) else 'N/A'} items]")
+            else:
+                output.append(f"{key}: {value}")
+        
+        if len(data) > max_items:
+            output.append(f"... and {len(data) - max_items} more items")
+        return "\n".join(output)
+    
+    if isinstance(data, list):
+        if not data:
+            return "Empty list"
+        
+        output = []
+        for i, item in enumerate(data[:max_items]):
+            if isinstance(item, dict):
+                # Show key fields for dictionary items
+                if 'name' in item:
+                    output.append(f"{i+1}. {item['name']}: {item}")
+                elif 'command' in item:
+                    output.append(f"{i+1}. {item['command']}: CPU:{item.get('cpu_percent', 'N/A')}% MEM:{item.get('memory_percent', 'N/A')}%")
+                elif 'device' in item:
+                    output.append(f"{i+1}. {item['device']}: {item.get('size', 'N/A')} ({item.get('usage_percent', 'N/A')} used)")
+                else:
+                    output.append(f"{i+1}. {item}")
+            else:
+                output.append(f"{i+1}. {item}")
+        
+        if len(data) > max_items:
+            output.append(f"... and {len(data) - max_items} more items")
+        return "\n".join(output)
+    
+    return str(data)
+
+def clear_screen():
+    """Clear terminal screen"""
+    os.system("cls" if os.name == "nt" else "clear")
+
+class SystemReportQueryAssistant:
     def __init__(self):
         self.llm = None
-        self.report_content = ""
+        self.reports_data = {}
+        self.db_connection = None
+        self.initialized = False
         self.chat_history = []
-        
-        # Initialize logger
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        self.logger.addHandler(handler)
-        
-    def initialize_llm(self):
-        """Initialize the Ollama LLM connection"""
+
+    def initialize(self):
+        """Initialize the system report query assistant"""
         try:
-            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-            self.logger.info("Connected to LLM model: myllm:latest")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to connect to LLM: {str(e)}")
-            return False
-    
-    def load_report(self, report_path: str):
-        """Load the system report from a file"""
-        try:
-            with open(report_path, 'r') as f:
-                self.report_content = f.read()
-            self.logger.info(f"Successfully loaded report from {report_path}")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to load report: {str(e)}")
-            return False
-    
-    def analyze_report(self, question: str) -> str:
-        """Analyze the report content using the LLM"""
-        if not self.llm:
-            return "LLM not initialized. Please connect first."
-        
-        if not self.report_content:
-            return "No report loaded. Please load a report first."
-        
-        try:
-            # Create a focused prompt with just the relevant sections
-            relevant_sections = self._extract_relevant_sections(question)
+            print("🔧 Initializing System Report Query Assistant...")
             
+            # Initialize LLM
+            self.llm = OllamaLLM(model="mistral:7b-instruct-q4_K_M", temperature=0.1)
+            
+            # Load system report files
+            self.load_system_reports()
+            
+            # Initialize SQLite database for advanced queries
+            self.init_database()
+            
+            self.initialized = True
+            print("✅ System Report Query Assistant initialized successfully!")
+            return True
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}", exc_info=True)
+            return False
+
+    def load_system_reports(self):
+        """Load all system report JSON files from the directory"""
+        try:
+            report_dir = REPORT_CONFIG['report_directory']
+            patterns = REPORT_CONFIG['supported_patterns']
+            
+            loaded_count = 0
+            for pattern in patterns:
+                file_pattern = os.path.join(report_dir, pattern)
+                for file_path in glob.glob(file_pattern):
+                    try:
+                        with open(file_path, 'r') as f:
+                            report_data = json.load(f)
+                            
+                        # Use filename as key
+                        file_key = os.path.basename(file_path)
+                        self.reports_data[file_key] = {
+                            'data': report_data,
+                            'file_path': file_path,
+                            'loaded_at': datetime.now().isoformat(),
+                            'file_size': os.path.getsize(file_path)
+                        }
+                        loaded_count += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to load {file_path}: {e}")
+                        print(f"⚠️  Failed to load {file_path}: {e}")
+            
+            if loaded_count == 0:
+                print("⚠️  No system report files found. Please ensure system report JSON files exist in the current directory.")
+                print("📁 Looking for files matching:", patterns)
+                return False
+            
+            print(f"✅ Loaded {loaded_count} system report files")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to load system reports: {e}")
+            logger.error(f"Failed to load system reports: {e}")
+            return False
+
+    def init_database(self):
+        """Initialize SQLite database for complex queries"""
+        try:
+            db_path = REPORT_CONFIG['db_file']
+            self.db_connection = sqlite3.connect(db_path)
+            cursor = self.db_connection.cursor()
+            
+            # Create tables for different data types
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS system_info (
+                    report_file TEXT,
+                    hostname TEXT,
+                    os_release TEXT,
+                    kernel TEXT,
+                    architecture TEXT,
+                    uptime TEXT,
+                    generated_at TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS processes (
+                    report_file TEXT,
+                    pid INTEGER,
+                    user TEXT,
+                    cpu_percent REAL,
+                    memory_percent REAL,
+                    command TEXT,
+                    process_type TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS storage (
+                    report_file TEXT,
+                    device TEXT,
+                    filesystem_type TEXT,
+                    size TEXT,
+                    used TEXT,
+                    available TEXT,
+                    usage_percent TEXT,
+                    mount_point TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS services (
+                    report_file TEXT,
+                    name TEXT,
+                    load_state TEXT,
+                    active_state TEXT,
+                    sub_state TEXT,
+                    description TEXT,
+                    service_type TEXT
+                )
+            ''')
+            
+            # Clear existing data
+            cursor.execute('DELETE FROM system_info')
+            cursor.execute('DELETE FROM processes')
+            cursor.execute('DELETE FROM storage')
+            cursor.execute('DELETE FROM services')
+            
+            # Populate database with loaded reports
+            for file_key, report_info in self.reports_data.items():
+                self.index_report_data(file_key, report_info['data'])
+            
+            self.db_connection.commit()
+            print("✅ Database indexed successfully")
+            
+        except Exception as e:
+            print(f"⚠️  Database initialization failed: {e}")
+            logger.error(f"Database init failed: {e}")
+
+    def index_report_data(self, file_key: str, report_data: Dict):
+        """Index report data into SQLite database"""
+        cursor = self.db_connection.cursor()
+        
+        try:
+            # Index system info
+            system_info = report_data.get('system_overview', {})
+            cursor.execute('''
+                INSERT INTO system_info 
+                (report_file, hostname, os_release, kernel, architecture, uptime, generated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                file_key,
+                system_info.get('hostname', ''),
+                system_info.get('os_release', ''),
+                system_info.get('kernel', ''),
+                system_info.get('architecture', ''),
+                system_info.get('uptime', ''),
+                report_data.get('metadata', {}).get('generated_at', '')
+            ))
+            
+            # Index processes
+            processes = report_data.get('processes', {})
+            for process_type in ['top_by_cpu', 'top_by_memory']:
+                process_list = processes.get(process_type, [])
+                for proc in process_list:
+                    cursor.execute('''
+                        INSERT INTO processes 
+                        (report_file, pid, user, cpu_percent, memory_percent, command, process_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        file_key,
+                        proc.get('pid', 0),
+                        proc.get('user', ''),
+                        proc.get('cpu_percent', 0.0),
+                        proc.get('memory_percent', 0.0),
+                        proc.get('command', ''),
+                        process_type
+                    ))
+            
+            # Index storage
+            storage_disks = report_data.get('storage', {}).get('disks', [])
+            for disk in storage_disks:
+                cursor.execute('''
+                    INSERT INTO storage 
+                    (report_file, device, filesystem_type, size, used, available, usage_percent, mount_point)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    file_key,
+                    disk.get('device', ''),
+                    disk.get('filesystem_type', ''),
+                    disk.get('size', ''),
+                    disk.get('used', ''),
+                    disk.get('available', ''),
+                    disk.get('usage_percent', ''),
+                    disk.get('mount_point', '')
+                ))
+            
+            # Index services
+            services = report_data.get('services', {})
+            for service_type in ['running', 'failed']:
+                service_list = services.get(service_type, [])
+                for service in service_list:
+                    cursor.execute('''
+                        INSERT INTO services 
+                        (report_file, name, load_state, active_state, sub_state, description, service_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        file_key,
+                        service.get('name', ''),
+                        service.get('load_state', ''),
+                        service.get('active_state', ''),
+                        service.get('sub_state', ''),
+                        service.get('description', ''),
+                        service_type
+                    ))
+            
+        except Exception as e:
+            logger.error(f"Failed to index {file_key}: {e}")
+
+    def query_reports_direct(self, question: str) -> str:
+        """Query reports directly using natural language processing"""
+        try:
+            # Create context from all loaded reports
+            context_data = {}
+            for file_key, report_info in self.reports_data.items():
+                context_data[file_key] = report_info['data']
+            
+            # Prepare prompt for the LLM
             prompt = f"""
-            Analyze this Linux system report section and answer the question concisely:
-            
-            {relevant_sections}
-            
-            Question: {question}
-            
-            Provide only the most relevant information. If the answer isn't in the report, say "Information not found in report".
-            """
-            
-            # Use invoke() instead of __call__ to avoid deprecation warning
+You are a system administrator assistant analyzing system reports. Answer the user's question based on the provided system report data.
+
+User Question: {question}
+
+System Reports Data:
+{json.dumps(context_data, indent=2)}
+
+Instructions:
+1. Analyze the system report data to answer the user's question
+2. Provide specific details from the reports
+3. If comparing multiple reports, mention the differences
+4. Include relevant metrics, numbers, and technical details
+5. If the question cannot be answered from the data, say so clearly
+6. Format your response in a clear, structured way
+
+Answer:"""
+
             response = self.llm.invoke(prompt)
+            return clean_query_response(response)
             
-            # Clean up the response
-            cleaned_response = response.strip()
-            
-            # Save to chat history
-            self.chat_history.append({
-                "user": question,
-                "assistant": cleaned_response
-            })
-            
-            return cleaned_response
-        
         except Exception as e:
-            self.logger.error(f"Analysis failed: {str(e)}")
-            return f"Error analyzing report: {str(e)}"
-    
-    def _extract_relevant_sections(self, question: str) -> str:
-        """Extract only relevant sections based on the question"""
-        question_lower = question.lower()
+            logger.error(f"Direct query error: {e}")
+            return f"❌ Error processing query: {str(e)}"
+
+    def query_reports_sql(self, question: str) -> str:
+        """Query reports using SQL database for structured queries"""
+        if not self.db_connection:
+            return "❌ Database not available for structured queries."
         
-        # Determine which sections might be relevant
-        relevant_sections = []
+        try:
+            # Generate SQL based on question
+            sql_prompt = f"""
+Generate a SQL query to answer this question about system reports: {question}
+
+Available tables and their columns:
+- system_info: report_file, hostname, os_release, kernel, architecture, uptime, generated_at
+- processes: report_file, pid, user, cpu_percent, memory_percent, command, process_type
+- storage: report_file, device, filesystem_type, size, used, available, usage_percent, mount_point
+- services: report_file, name, load_state, active_state, sub_state, description, service_type
+
+Generate only a SELECT query. Use LIKE with wildcards (%) for text searches.
+SQL Query:"""
+
+            sql_response = self.llm.invoke(sql_prompt)
+            sql = clean_query_response(sql_response)
+            
+            # Extract SQL from response
+            sql_match = re.search(r"SELECT.*?(?:;|$)", sql, re.DOTALL | re.IGNORECASE)
+            if sql_match:
+                sql = sql_match.group(0).rstrip(';')
+            
+            # Execute SQL
+            cursor = self.db_connection.cursor()
+            cursor.execute(sql)
+            results = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            
+            if not results:
+                return "No matching data found in the reports."
+            
+            # Format results
+            formatted_results = []
+            for i, row in enumerate(results[:10]):  # Limit to 10 rows
+                row_dict = dict(zip(columns, row))
+                formatted_results.append(f"{i+1}. {row_dict}")
+            
+            if len(results) > 10:
+                formatted_results.append(f"... and {len(results) - 10} more results")
+            
+            result_text = "\n".join(formatted_results)
+            
+            return f"Query Results ({len(results)} total):\n{result_text}\n\n📊 SQL executed: {sql}"
+            
+        except Exception as e:
+            logger.error(f"SQL query error: {e}")
+            return f"❌ Error executing structured query: {str(e)}"
+
+    def process_question(self, question: str) -> Dict[str, Any]:
+        """Process system report question and return structured response"""
+        if not self.initialized:
+            return {
+                "success": False,
+                "error": "Assistant not initialized",
+                "response": "❌ Assistant not initialized. Please restart."
+            }
         
-        if any(word in question_lower for word in ['service', 'daemon', 'running', 'failed']):
-            if "=== Service Status ===" in self.report_content:
-                start = self.report_content.index("=== Service Status ===")
-                end = self.report_content.find("===", start + 1)
-                relevant_sections.append(self.report_content[start:end])
-        
-        if any(word in question_lower for word in ['cpu', 'memory', 'load']):
-            if "=== Top Processes ===" in self.report_content:
-                start = self.report_content.index("=== Top Processes ===")
-                end = self.report_content.find("===", start + 1)
-                relevant_sections.append(self.report_content[start:end])
-            if "=== CPU Utilization ===" in self.report_content:
-                start = self.report_content.index("=== CPU Utilization ===")
-                end = self.report_content.find("===", start + 1)
-                relevant_sections.append(self.report_content[start:end])
-        
-        if not relevant_sections:
-            # Fallback to first 2000 characters if no specific sections found
-            return self.report_content[:2000]
-        
-        return "\n".join(relevant_sections)
-    
-    def interactive_session(self):
-        """Start an interactive terminal session"""
-        print("\n" + "="*50)
-        print("System Report Analyzer (Optimized)")
-        print("="*50 + "\n")
-        
-        # Initialize LLM
-        print("Initializing LLM connection...")
-        if not self.initialize_llm():
-            print("Failed to initialize LLM. Exiting.")
-            return
-        
-        # Load report
-        report_path = input("Enter path to system report file: ").strip()
-        print(f"Loading report from {report_path}...")
-        if not self.load_report(report_path):
-            print("Failed to load report. Exiting.")
-            return
-        
-        print("\nSystem report loaded successfully.")
-        print("Type 'exit' to quit the session.\n")
-        
-        # Main interaction loop
-        while True:
-            try:
-                question = input("Your question about the system report: ").strip()
-                
-                if question.lower() in ['exit', 'quit']:
-                    print("Exiting...")
-                    break
-                    
-                if not question:
-                    print("Please enter a question.")
-                    continue
-                
-                if question.lower() == 'help':
-                    self.show_help()
-                    continue
-                
-                print("\nAnalyzing...")
-                response = self.analyze_report(question)
-                print("\nAnalysis Result:")
-                print("-"*50)
-                print(response)
-                print("-"*50 + "\n")
-                
-            except KeyboardInterrupt:
-                print("\nExiting...")
-                break
-            except Exception as e:
-                self.logger.error(f"Error during interaction: {str(e)}")
-                print(f"An error occurred: {str(e)}")
-    
+        try:
+            # Determine query type based on question
+            question_lower = question.lower()
+            
+            # Use SQL for structured queries
+            if any(keyword in question_lower for keyword in ['top', 'highest', 'lowest', 'count', 'average', 'compare', 'list all']):
+                response = self.query_reports_sql(question)
+            else:
+                # Use direct LLM analysis for complex questions
+                response = self.query_reports_direct(question)
+            
+            self.chat_history.append({"user": question, "assistant": response})
+            
+            return {
+                "success": True,
+                "query": question,
+                "response": response,
+                "timestamp": datetime.now().isoformat(),
+                "reports_loaded": len(self.reports_data)
+            }
+            
+        except Exception as e:
+            logger.error(f"Processing error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"❌ Error processing your request: {e}"
+            }
+
+    def save_feedback(self, question, answer, feedback):
+        """Save user feedback for query improvement"""
+        data = {
+            "question": question,
+            "answer": answer,
+            "feedback": feedback,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            with open("system_report_feedback_log.jsonl", "a") as f:
+                f.write(json.dumps(data) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+
     def show_help(self):
         """Display help information"""
-        help_text = """
-SYSTEM REPORT ANALYZER HELP
+        help_text = f"""
+📖 SYSTEM REPORT QUERY ASSISTANT HELP
 
-For faster responses, ask specific questions about:
+📊 LOADED REPORTS: {len(self.reports_data)} files
+{chr(10).join(f"  - {filename}" for filename in list(self.reports_data.keys())[:5])}
+{f"  ... and {len(self.reports_data) - 5} more" if len(self.reports_data) > 5 else ""}
 
-- Services (running/failed)
-- CPU/Memory usage
-- Top processes
-- Disk usage
-- Network connections
+💾 EXAMPLE QUERIES:
+  System Information:
+  - "What is the hostname and OS version?"
+  - "Show system uptime and load average"
+  - "Compare kernel versions across reports"
+  
+  Performance Queries:
+  - "What are the top CPU consuming processes?"
+  - "Show memory usage statistics"
+  - "List processes using more than 5% CPU"
+  
+  Storage Queries:
+  - "Show disk usage information"
+  - "Which filesystems are nearly full?"
+  - "List all mounted storage devices"
+  
+  Service Queries:
+  - "What services are running?"
+  - "Show any failed services"
+  - "List services containing 'network'"
 
-Example questions:
-- "List all running services"
-- "What's using the most CPU?"
-- "Are there any failed services?"
-- "Show memory usage"
-- "What are the top 5 processes?"
+🔍 QUERY FEATURES:
+  - Natural language processing
+  - Automatic data filtering and search
+  - Multiple report comparison
+  - Structured SQL queries for complex analysis
+  - Real-time report data access
 
-General questions will take longer to process.
-"""
+💡 COMMANDS:
+  - 'help' - Show this help
+  - 'clear' - Clear screen
+  - 'status' - Show system status
+  - 'reload' - Reload report files
+  - 'exit' - Quit assistant
+        """
         print(help_text)
 
+    def show_status(self):
+        """Display system status"""
+        print("🔍 SYSTEM STATUS")
+        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🤖 AI Model: {'✅ Initialized' if self.initialized else '❌ Not Initialized'}")
+        print(f"📊 Reports Loaded: {len(self.reports_data)}")
+        print(f"💾 Database: {'✅ Connected' if self.db_connection else '❌ Not Available'}")
+        print(f"📝 Chat History: {len(self.chat_history)} queries")
+        
+        if self.reports_data:
+            print("\n📁 LOADED REPORTS:")
+            for filename, info in list(self.reports_data.items())[:3]:
+                size_kb = info['file_size'] / 1024
+                print(f"  - {filename} ({size_kb:.1f} KB)")
+            if len(self.reports_data) > 3:
+                print(f"  ... and {len(self.reports_data) - 3} more reports")
+
+    def reload_reports(self):
+        """Reload system report files"""
+        print("🔄 Reloading system reports...")
+        self.reports_data = {}
+        if self.load_system_reports():
+            if self.db_connection:
+                self.init_database()
+            print("✅ Reports reloaded successfully!")
+        else:
+            print("❌ Failed to reload reports")
+
+    def start_interactive_session(self):
+        """Start interactive query session"""
+        if not self.initialize():
+            return
+            
+        clear_screen()
+        print("📊 System Report Query Assistant Ready")
+        print(f"Loaded {len(self.reports_data)} system report files")
+        print("Ask me about your system reports using natural language...")
+        print("Type 'exit' to quit, 'help' for examples\n")
+        
+        while True:
+            try:
+                question = input("🔍 Query: ").strip()
+                if not question:
+                    continue
+                
+                question_lower = question.lower()
+                if question_lower in ['exit', 'quit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                elif question_lower == 'help':
+                    self.show_help()
+                    continue
+                elif question_lower == 'clear':
+                    clear_screen()
+                    continue
+                elif question_lower == 'status':
+                    self.show_status()
+                    continue
+                elif question_lower == 'reload':
+                    self.reload_reports()
+                    continue
+                
+                result = self.process_question(question)
+                print(f"\n📝 Response:\n{result['response']}\n")
+                
+                if result['success']:
+                    feedback = input("Was this answer helpful? (yes/no/correction): ").strip()
+                    if feedback.lower() not in ['yes', 'y', '']:
+                        self.save_feedback(question, result['response'], feedback)
+                        print("Thank you for the feedback!")
+                        
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                logger.error(f"Session error: {e}", exc_info=True)
+        
+        # Close database connection
+        if self.db_connection:
+            self.db_connection.close()
+        print("Database connection closed.")
+
 def main():
-    analyzer = SystemReportAnalyzer()
-    analyzer.interactive_session()
+    """Main function"""
+    assistant = SystemReportQueryAssistant()
+    
+    # Check for report files
+    report_files = glob.glob("system_report_*.json")
+    if not report_files:
+        print("❌ No system report files found!")
+        print("Please run the system report generator first to create report files.")
+        print("Looking for files matching: system_report_*.json")
+        return
+    
+    print("=== System Report Query Assistant ===")
+    print(f"Found {len(report_files)} report files")
+    
+    # Start interactive session
+    assistant.start_interactive_session()
 
 if __name__ == "__main__":
     main()
