@@ -12,7 +12,6 @@ from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
 
 # --- FAR DETAILS CONFIGURATION ---
-
 FAR_DB_CONFIG = {
     "name": "FAR Details",
     "db_config": {
@@ -47,7 +46,6 @@ def is_dangerous(text: str) -> bool:
 
 def clean_sql(raw_sql: str) -> str:
     """Clean and enhance SQL for LIKE operations"""
-    # Extract SQL from code blocks
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1)
@@ -55,10 +53,8 @@ def clean_sql(raw_sql: str) -> str:
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
     
-    # Replace = with LIKE for string comparisons
     sql = re.sub(r"(\w+)\s*=\s*'([^']*)'", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
     sql = re.sub(r"(\w+)\s*=\s*\"([^\"]*)\"", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
-    
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
@@ -104,15 +100,12 @@ class FarDetailsAssistant:
     def initialize(self):
         """Initialize the FAR Details Assistant"""
         try:
-            print("🔧 Initializing FAR Details Assistant...")
             self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
             
-            # Setup database connection
             db_cfg = FAR_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
             db_for_llm = SQLDatabase.from_uri(uri, include_tables=FAR_DB_CONFIG.get("include_tables"))
             
-            # Create chain for SQL generation
             chain = create_sql_query_chain(self.llm, db_for_llm)
             db_conn = pymysql.connect(**db_cfg)
             
@@ -122,51 +115,19 @@ class FarDetailsAssistant:
                 'config': FAR_DB_CONFIG
             }
             
-            print("✅ FAR Details database connected")
             self.initialized = True
-            print("🎉 FAR Details Assistant initialized successfully!")
             return True
             
         except Exception as e:
-            print(f"❌ Initialization failed: {e}")
             logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
-
-    def save_feedback(self, question, answer, feedback):
-        """Save user feedback for continuous improvement"""
-        data = {
-            "question": question,
-            "answer": answer,
-            "feedback": feedback,
-            "timestamp": datetime.now().isoformat(),
-            "module": "far_details"
-        }
-        try:
-            with open("far_feedback_log.jsonl", "a") as f:
-                f.write(json.dumps(data) + "\n")
-        except Exception as e:
-            logger.error(f"Failed to save feedback: {e}")
-
-    def find_relevant_feedback(self, question):
-        """Find relevant feedback from previous interactions"""
-        try:
-            with open("far_feedback_log.jsonl", "r") as f:
-                lines = f.readlines()
-            for line in lines[::-1]:
-                entry = json.loads(line)
-                if entry["question"].strip().lower() in question.strip().lower():
-                    return entry["feedback"]
-        except Exception:
-            pass
-        return None
 
     def query_far_details(self, question: str) -> str:
         """Query FAR details database"""
         if not self.db_handler:
-            return "❌ FAR Details database not available."
+            return "FAR Details database not available."
         
         try:
-            # Enhanced prompt for LIKE-based queries
             enhanced_question = f"""
             {question}
             
@@ -181,10 +142,9 @@ class FarDetailsAssistant:
 
             raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
             sql = clean_sql(raw_sql)
-            print(f"🔍 Generated SQL: {sql}")
 
             if not is_select_query(sql):
-                return "⚠️ Only SELECT queries are allowed for security."
+                return "Only SELECT queries are allowed for security."
             
             with self.db_handler['connection'].cursor() as cursor:
                 cursor.execute(sql)
@@ -192,176 +152,64 @@ class FarDetailsAssistant:
                 columns = [desc[0] for desc in cursor.description] if cursor.description else None
             
             if not result:
-                return "📭 No FAR details found matching your query. Try using broader search terms."
+                return "No FAR details found matching your query."
             
             formatted_result = format_answer(result, columns)
             
-            # Build context for AI interpretation
-            context = ""
-            for turn in self.chat_history[-3:]:
-                context += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
-            
-            context += f"""User: {question}
-Assistant:
+            # Send the original question again with the results for accurate interpretation
+            context = f"""
+Original question: {question}
 
-FAR Details query results:
+Database query results:
 {formatted_result}
 
-Please provide a clear, natural language response about these FAR details/processes. Make it conversational and helpful. If the results show partial matches due to LIKE queries, explain that these are similar/related entries. Focus on process-related information."""
-            
-            # Check for relevant feedback
-            feedback = self.find_relevant_feedback(question)
-            if feedback:
-                context += f"\nNote: Previously, a user provided this correction for a similar question: '{feedback}'"
+Please provide a clear, concise answer to the original question based on these results.
+"""
             
             ai_interpretation = self.llm.invoke(context)
-            self.chat_history.append({"user": question, "assistant": ai_interpretation})
             return ai_interpretation
             
         except Exception as e:
             logger.error(f"FAR details query error: {e}")
-            return f"❌ Unable to retrieve FAR details: {e}"
+            return f"Unable to retrieve FAR details: {e}"
 
     def process_question(self, question: str) -> str:
         """Process all questions as FAR-related queries"""
         if not self.initialized:
-            return "❌ FAR Details Assistant not initialized. Please restart."
+            return "FAR Details Assistant not initialized."
         
         if is_dangerous(question):
-            return "⚠️ Question blocked for security reasons."
+            return "Question blocked for security reasons."
         
-        # All questions are processed as FAR details queries
         return self.query_far_details(question)
-
-    def show_help(self):
-        """Display help information"""
-        help_text = """
-📋 FAR DETAILS ASSISTANT HELP
-
-🎯 PURPOSE:
-  Query and analyze FAR (Fixed Asset Register) details and process information
-
-🔍 EXAMPLE QUERIES:
-  Process Information:
-  - "Show all processes like 'backup'"
-  - "Find processes containing 'web'"
-  - "Search for FAR details similar to 'error'"
-  - "List processes with status like 'active'"
-  - "Count processes containing 'database'"
-  - "Show processes sorted by memory usage"
-  - "Find processes with highest CPU usage"
-  
-  FAR Details:
-  - "Show FAR details for processes like 'maintenance'"
-  - "Find FAR entries containing 'asset'"
-  - "Search for details similar to 'depreciation'"
-  - "List FAR records with amount greater than 1000"
-  - "Show recent FAR entries"
-  - "Count FAR details by category"
-
-🔧 FEATURES:
-  ✅ Flexible LIKE-based searches (automatic partial matching)
-  ✅ Natural language to SQL conversion
-  ✅ AI-powered result interpretation
-  ✅ Security-enforced (read-only operations)
-  ✅ Feedback learning system
-  ✅ Chat history context
-  ✅ All queries processed as FAR details queries
-
-🛡️ SECURITY:
-  - Only SELECT queries allowed
-  - Dangerous commands blocked
-  - Input sanitization
-  - Audit logging
-
-💡 TIPS:
-  - Use partial terms for better matches
-  - Ask about specific processes or FAR categories
-  - Questions are automatically enhanced for LIKE searches
-  - Feedback helps improve future responses
-
-📞 COMMANDS:
-  - 'help' - Show this help
-  - 'status' - Show system status
-  - 'clear' - Clear screen
-  - 'exit' - Quit assistant
-        """
-        print(help_text)
-
-    def show_status(self):
-        """Show current status"""
-        print("📊 FAR DETAILS ASSISTANT STATUS")
-        print(f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🤖 AI Model: {'✅ Initialized' if self.initialized else '❌ Not Initialized'}")
-        print(f"🗄️ Database: {'✅ Connected' if self.db_handler and self.db_handler['connection'].open else '❌ Disconnected'}")
-        print(f"💬 Chat History: {len(self.chat_history)} exchanges")
-        print(f"🛡️ Security Patterns: {len(BLOCKED_PATTERNS)} active")
-        
-        if self.db_handler:
-            try:
-                with self.db_handler['connection'].cursor() as cursor:
-                    cursor.execute("SELECT COUNT(*) FROM FarDetailsAll")
-                    count = cursor.fetchone()[0]
-                    print(f"📦 FAR Records Available: {count}")
-            except Exception as e:
-                print(f"📦 FAR Records: Unable to count ({e})")
 
     def start_interactive_session(self):
         """Start interactive session"""
         if not self.initialize():
             return
         
-        os.system("cls" if os.name == "nt" else "clear")
-        print("🎯 FAR DETAILS ASSISTANT READY")
-        print("Specialized for FAR details and process information queries!")
-        print("Ask me anything about your FAR database...")
-        print("Type 'help' for detailed usage, 'exit' to quit\n")
+        print("FAR Details Assistant ready. Enter your query or 'exit' to quit.")
         
         while True:
             try:
-                question = input("FAR❓ ").strip()
+                question = input("Query: ").strip()
                 if not question:
                     continue
                 
-                question_lower = question.lower()
-                
-                if question_lower in ['exit', 'quit', 'q']:
-                    print("👋 Goodbye!")
+                if question.lower() in ['exit', 'quit', 'q']:
                     break
-                elif question_lower == 'help':
-                    self.show_help()
-                    continue
-                elif question_lower == 'clear':
-                    os.system("cls" if os.name == "nt" else "clear")
-                    continue
-                elif question_lower == 'status':
-                    self.show_status()
-                    continue
                 
                 response = self.process_question(question)
                 print(f"\n{response}\n")
-                
-                # Feedback system
-                feedback = input("💬 Was this answer helpful? (yes/no/correction): ").strip()
-                if feedback.lower() not in ['yes', 'y', '']:
-                    if feedback.lower() in ['no', 'n']:
-                        correction = input("💡 What would be a better answer? ")
-                        self.save_feedback(question, response, correction)
-                    else:
-                        self.save_feedback(question, response, feedback)
-                    print("📝 Thank you for the feedback!")
                     
             except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
                 break
             except Exception as e:
-                print(f"\n❌ Error: {e}")
+                print(f"Error: {e}")
                 logger.error(f"Session error: {e}", exc_info=True)
         
-        # Clean up
         if self.db_handler and self.db_handler['connection'].open:
             self.db_handler['connection'].close()
-        print("🔒 Connection closed.")
 
 def main():
     assistant = FarDetailsAssistant()
