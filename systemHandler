@@ -7,7 +7,6 @@ import glob
 import traceback
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
-import sqlite3
 from pathlib import Path
 
 from langchain_ollama import OllamaLLM
@@ -17,7 +16,6 @@ from langchain_ollama import OllamaLLM
 REPORT_CONFIG = {
     "name": "System Reports",
     "report_directory": ".",  # Directory containing system report JSON files
-    "db_file": "system_reports.db",  # SQLite database for indexed reports
     "supported_patterns": ["system_report_*.json"]
 }
 
@@ -91,7 +89,6 @@ class SystemReportQueryAssistant:
     def __init__(self):
         self.llm = None
         self.reports_data = {}
-        self.db_connection = None
         self.initialized = False
         self.chat_history = []
 
@@ -105,9 +102,6 @@ class SystemReportQueryAssistant:
             
             # Load system report files
             self.load_system_reports()
-            
-            # Initialize SQLite database for advanced queries
-            self.init_database()
             
             self.initialized = True
             print("✅ System Report Query Assistant initialized successfully!")
@@ -158,162 +152,269 @@ class SystemReportQueryAssistant:
             logger.error(f"Failed to load system reports: {e}")
             return False
 
-    def init_database(self):
-        """Initialize SQLite database for complex queries"""
-        try:
-            db_path = REPORT_CONFIG['db_file']
-            self.db_connection = sqlite3.connect(db_path)
-            cursor = self.db_connection.cursor()
-            
-            # Create tables for different data types
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS system_info (
-                    report_file TEXT,
-                    hostname TEXT,
-                    os_release TEXT,
-                    kernel TEXT,
-                    architecture TEXT,
-                    uptime TEXT,
-                    generated_at TEXT
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS processes (
-                    report_file TEXT,
-                    pid INTEGER,
-                    user TEXT,
-                    cpu_percent REAL,
-                    memory_percent REAL,
-                    command TEXT,
-                    process_type TEXT
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS storage (
-                    report_file TEXT,
-                    device TEXT,
-                    filesystem_type TEXT,
-                    size TEXT,
-                    used TEXT,
-                    available TEXT,
-                    usage_percent TEXT,
-                    mount_point TEXT
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS services (
-                    report_file TEXT,
-                    name TEXT,
-                    load_state TEXT,
-                    active_state TEXT,
-                    sub_state TEXT,
-                    description TEXT,
-                    service_type TEXT
-                )
-            ''')
-            
-            # Clear existing data
-            cursor.execute('DELETE FROM system_info')
-            cursor.execute('DELETE FROM processes')
-            cursor.execute('DELETE FROM storage')
-            cursor.execute('DELETE FROM services')
-            
-            # Populate database with loaded reports
-            for file_key, report_info in self.reports_data.items():
-                self.index_report_data(file_key, report_info['data'])
-            
-            self.db_connection.commit()
-            print("✅ Database indexed successfully")
-            
-        except Exception as e:
-            print(f"⚠️  Database initialization failed: {e}")
-            logger.error(f"Database init failed: {e}")
-
-    def index_report_data(self, file_key: str, report_data: Dict):
-        """Index report data into SQLite database"""
-        cursor = self.db_connection.cursor()
+    def search_data(self, data: Any, search_terms: List[str], path: str = "") -> List[Dict]:
+        """Recursively search through data structure for relevant information"""
+        results = []
         
+        if isinstance(data, dict):
+            for key, value in data.items():
+                current_path = f"{path}.{key}" if path else key
+                
+                # Check if current key matches search terms
+                if any(term.lower() in key.lower() for term in search_terms):
+                    results.append({
+                        'path': current_path,
+                        'key': key,
+                        'value': value,
+                        'type': type(value).__name__
+                    })
+                
+                # Recursively search in nested structures
+                results.extend(self.search_data(value, search_terms, current_path))
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                current_path = f"{path}[{i}]" if path else f"[{i}]"
+                results.extend(self.search_data(item, search_terms, current_path))
+                
+        elif isinstance(data, str):
+            # Check if string value contains search terms
+            if any(term.lower() in data.lower() for term in search_terms):
+                results.append({
+                    'path': path,
+                    'value': data,
+                    'type': 'string_match'
+                })
+        
+        return results
+
+    def filter_processes(self, processes_data: Dict, criteria: Dict) -> List[Dict]:
+        """Filter processes based on criteria"""
+        results = []
+        
+        for process_type, process_list in processes_data.items():
+            if not isinstance(process_list, list):
+                continue
+                
+            for process in process_list:
+                if not isinstance(process, dict):
+                    continue
+                    
+                match = True
+                
+                # Check CPU threshold
+                if 'min_cpu' in criteria:
+                    cpu = process.get('cpu_percent', 0)
+                    if isinstance(cpu, (int, float)) and cpu < criteria['min_cpu']:
+                        match = False
+                
+                # Check memory threshold
+                if 'min_memory' in criteria:
+                    memory = process.get('memory_percent', 0)
+                    if isinstance(memory, (int, float)) and memory < criteria['min_memory']:
+                        match = False
+                
+                # Check command/name contains text
+                if 'contains' in criteria:
+                    command = process.get('command', '').lower()
+                    name = process.get('name', '').lower()
+                    search_text = criteria['contains'].lower()
+                    if search_text not in command and search_text not in name:
+                        match = False
+                
+                # Check user
+                if 'user' in criteria:
+                    if process.get('user', '') != criteria['user']:
+                        match = False
+                
+                if match:
+                    process_copy = process.copy()
+                    process_copy['source_type'] = process_type
+                    results.append(process_copy)
+        
+        return results
+
+    def filter_storage(self, storage_data: Dict, criteria: Dict) -> List[Dict]:
+        """Filter storage devices based on criteria"""
+        results = []
+        disks = storage_data.get('disks', [])
+        
+        for disk in disks:
+            if not isinstance(disk, dict):
+                continue
+                
+            match = True
+            
+            # Check usage threshold
+            if 'min_usage' in criteria:
+                usage_str = disk.get('usage_percent', '0%')
+                try:
+                    usage = float(usage_str.replace('%', ''))
+                    if usage < criteria['min_usage']:
+                        match = False
+                except (ValueError, AttributeError):
+                    match = False
+            
+            # Check device name contains text
+            if 'contains' in criteria:
+                device = disk.get('device', '').lower()
+                mount_point = disk.get('mount_point', '').lower()
+                search_text = criteria['contains'].lower()
+                if search_text not in device and search_text not in mount_point:
+                    match = False
+            
+            # Check filesystem type
+            if 'filesystem' in criteria:
+                if disk.get('filesystem_type', '') != criteria['filesystem']:
+                    match = False
+            
+            if match:
+                results.append(disk)
+        
+        return results
+
+    def filter_services(self, services_data: Dict, criteria: Dict) -> List[Dict]:
+        """Filter services based on criteria"""
+        results = []
+        
+        for service_type, service_list in services_data.items():
+            if not isinstance(service_list, list):
+                continue
+                
+            for service in service_list:
+                if not isinstance(service, dict):
+                    continue
+                    
+                match = True
+                
+                # Check service state
+                if 'state' in criteria:
+                    active_state = service.get('active_state', '').lower()
+                    if criteria['state'].lower() not in active_state:
+                        match = False
+                
+                # Check service name contains text
+                if 'contains' in criteria:
+                    name = service.get('name', '').lower()
+                    description = service.get('description', '').lower()
+                    search_text = criteria['contains'].lower()
+                    if search_text not in name and search_text not in description:
+                        match = False
+                
+                if match:
+                    service_copy = service.copy()
+                    service_copy['source_type'] = service_type
+                    results.append(service_copy)
+        
+        return results
+
+    def analyze_question_intent(self, question: str) -> Dict:
+        """Analyze question to determine intent and extract criteria"""
+        question_lower = question.lower()
+        intent = {
+            'type': 'general',
+            'criteria': {},
+            'search_terms': []
+        }
+        
+        # Extract numbers for thresholds
+        numbers = re.findall(r'\d+(?:\.\d+)?', question)
+        
+        # Determine query type
+        if any(word in question_lower for word in ['process', 'cpu', 'memory', 'running']):
+            intent['type'] = 'processes'
+            
+            # Extract CPU/memory thresholds
+            if 'cpu' in question_lower and numbers:
+                intent['criteria']['min_cpu'] = float(numbers[0])
+            if 'memory' in question_lower and numbers:
+                intent['criteria']['min_memory'] = float(numbers[0])
+            
+            # Extract process name searches
+            if 'contain' in question_lower or 'with' in question_lower:
+                # Try to extract quoted strings or common process names
+                quoted = re.findall(r'"([^"]*)"', question)
+                if quoted:
+                    intent['criteria']['contains'] = quoted[0]
+                
+        elif any(word in question_lower for word in ['disk', 'storage', 'filesystem', 'mount']):
+            intent['type'] = 'storage'
+            
+            # Extract usage thresholds
+            if any(word in question_lower for word in ['usage', 'used', 'full']) and numbers:
+                intent['criteria']['min_usage'] = float(numbers[0])
+            
+        elif any(word in question_lower for word in ['service', 'systemd', 'daemon']):
+            intent['type'] = 'services'
+            
+            # Extract service state
+            if 'running' in question_lower:
+                intent['criteria']['state'] = 'active'
+            elif 'failed' in question_lower:
+                intent['criteria']['state'] = 'failed'
+                
+        # Extract general search terms
+        # Remove common words and extract meaningful terms
+        stop_words = {'the', 'is', 'are', 'what', 'show', 'list', 'get', 'all', 'with', 'and', 'or', 'of', 'in', 'on', 'at', 'by'}
+        words = re.findall(r'\b\w+\b', question_lower)
+        intent['search_terms'] = [word for word in words if word not in stop_words and len(word) > 2]
+        
+        return intent
+
+    def query_reports_structured(self, question: str) -> str:
+        """Query reports using structured filtering based on question analysis"""
         try:
-            # Index system info
-            system_info = report_data.get('system_overview', {})
-            cursor.execute('''
-                INSERT INTO system_info 
-                (report_file, hostname, os_release, kernel, architecture, uptime, generated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                file_key,
-                system_info.get('hostname', ''),
-                system_info.get('os_release', ''),
-                system_info.get('kernel', ''),
-                system_info.get('architecture', ''),
-                system_info.get('uptime', ''),
-                report_data.get('metadata', {}).get('generated_at', '')
-            ))
+            intent = self.analyze_question_intent(question)
+            all_results = []
             
-            # Index processes
-            processes = report_data.get('processes', {})
-            for process_type in ['top_by_cpu', 'top_by_memory']:
-                process_list = processes.get(process_type, [])
-                for proc in process_list:
-                    cursor.execute('''
-                        INSERT INTO processes 
-                        (report_file, pid, user, cpu_percent, memory_percent, command, process_type)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        file_key,
-                        proc.get('pid', 0),
-                        proc.get('user', ''),
-                        proc.get('cpu_percent', 0.0),
-                        proc.get('memory_percent', 0.0),
-                        proc.get('command', ''),
-                        process_type
-                    ))
+            for file_key, report_info in self.reports_data.items():
+                report_data = report_info['data']
+                file_results = []
+                
+                if intent['type'] == 'processes' and 'processes' in report_data:
+                    filtered = self.filter_processes(report_data['processes'], intent['criteria'])
+                    file_results.extend(filtered)
+                    
+                elif intent['type'] == 'storage' and 'storage' in report_data:
+                    filtered = self.filter_storage(report_data['storage'], intent['criteria'])
+                    file_results.extend(filtered)
+                    
+                elif intent['type'] == 'services' and 'services' in report_data:
+                    filtered = self.filter_services(report_data['services'], intent['criteria'])
+                    file_results.extend(filtered)
+                    
+                else:
+                    # General search across all data
+                    if intent['search_terms']:
+                        search_results = self.search_data(report_data, intent['search_terms'])
+                        file_results.extend(search_results)
+                
+                # Add source file info to results
+                for result in file_results:
+                    result['source_file'] = file_key
+                
+                all_results.extend(file_results[:10])  # Limit per file
             
-            # Index storage
-            storage_disks = report_data.get('storage', {}).get('disks', [])
-            for disk in storage_disks:
-                cursor.execute('''
-                    INSERT INTO storage 
-                    (report_file, device, filesystem_type, size, used, available, usage_percent, mount_point)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    file_key,
-                    disk.get('device', ''),
-                    disk.get('filesystem_type', ''),
-                    disk.get('size', ''),
-                    disk.get('used', ''),
-                    disk.get('available', ''),
-                    disk.get('usage_percent', ''),
-                    disk.get('mount_point', '')
-                ))
+            if not all_results:
+                return "No matching data found for your query."
             
-            # Index services
-            services = report_data.get('services', {})
-            for service_type in ['running', 'failed']:
-                service_list = services.get(service_type, [])
-                for service in service_list:
-                    cursor.execute('''
-                        INSERT INTO services 
-                        (report_file, name, load_state, active_state, sub_state, description, service_type)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        file_key,
-                        service.get('name', ''),
-                        service.get('load_state', ''),
-                        service.get('active_state', ''),
-                        service.get('sub_state', ''),
-                        service.get('description', ''),
-                        service_type
-                    ))
+            # Sort results by relevance (you can customize this)
+            if intent['type'] == 'processes':
+                # Sort by CPU usage if available
+                all_results.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
+            elif intent['type'] == 'storage':
+                # Sort by usage percentage
+                all_results.sort(key=lambda x: float(str(x.get('usage_percent', '0%')).replace('%', '')), reverse=True)
+            
+            # Format results
+            return format_answer(all_results[:20])  # Top 20 results
             
         except Exception as e:
-            logger.error(f"Failed to index {file_key}: {e}")
+            logger.error(f"Structured query error: {e}")
+            return f"❌ Error processing structured query: {str(e)}"
 
-    def query_reports_direct(self, question: str) -> str:
-        """Query reports directly using natural language processing"""
+    def query_reports_llm(self, question: str) -> str:
+        """Query reports using LLM for complex analysis"""
         try:
             # Create context from all loaded reports
             context_data = {}
@@ -336,6 +437,7 @@ Instructions:
 4. Include relevant metrics, numbers, and technical details
 5. If the question cannot be answered from the data, say so clearly
 6. Format your response in a clear, structured way
+7. Focus on the most relevant information and avoid overwhelming details
 
 Answer:"""
 
@@ -343,61 +445,8 @@ Answer:"""
             return clean_query_response(response)
             
         except Exception as e:
-            logger.error(f"Direct query error: {e}")
+            logger.error(f"LLM query error: {e}")
             return f"❌ Error processing query: {str(e)}"
-
-    def query_reports_sql(self, question: str) -> str:
-        """Query reports using SQL database for structured queries"""
-        if not self.db_connection:
-            return "❌ Database not available for structured queries."
-        
-        try:
-            # Generate SQL based on question
-            sql_prompt = f"""
-Generate a SQL query to answer this question about system reports: {question}
-
-Available tables and their columns:
-- system_info: report_file, hostname, os_release, kernel, architecture, uptime, generated_at
-- processes: report_file, pid, user, cpu_percent, memory_percent, command, process_type
-- storage: report_file, device, filesystem_type, size, used, available, usage_percent, mount_point
-- services: report_file, name, load_state, active_state, sub_state, description, service_type
-
-Generate only a SELECT query. Use LIKE with wildcards (%) for text searches.
-SQL Query:"""
-
-            sql_response = self.llm.invoke(sql_prompt)
-            sql = clean_query_response(sql_response)
-            
-            # Extract SQL from response
-            sql_match = re.search(r"SELECT.*?(?:;|$)", sql, re.DOTALL | re.IGNORECASE)
-            if sql_match:
-                sql = sql_match.group(0).rstrip(';')
-            
-            # Execute SQL
-            cursor = self.db_connection.cursor()
-            cursor.execute(sql)
-            results = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
-            
-            if not results:
-                return "No matching data found in the reports."
-            
-            # Format results
-            formatted_results = []
-            for i, row in enumerate(results[:10]):  # Limit to 10 rows
-                row_dict = dict(zip(columns, row))
-                formatted_results.append(f"{i+1}. {row_dict}")
-            
-            if len(results) > 10:
-                formatted_results.append(f"... and {len(results) - 10} more results")
-            
-            result_text = "\n".join(formatted_results)
-            
-            return f"Query Results ({len(results)} total):\n{result_text}\n\n📊 SQL executed: {sql}"
-            
-        except Exception as e:
-            logger.error(f"SQL query error: {e}")
-            return f"❌ Error executing structured query: {str(e)}"
 
     def process_question(self, question: str) -> Dict[str, Any]:
         """Process system report question and return structured response"""
@@ -409,15 +458,15 @@ SQL Query:"""
             }
         
         try:
-            # Determine query type based on question
+            # Determine query approach based on question complexity
             question_lower = question.lower()
             
-            # Use SQL for structured queries
-            if any(keyword in question_lower for keyword in ['top', 'highest', 'lowest', 'count', 'average', 'compare', 'list all']):
-                response = self.query_reports_sql(question)
+            # Use structured filtering for simple, specific queries
+            if any(keyword in question_lower for keyword in ['top', 'highest', 'lowest', 'list', 'show', 'processes using', 'services with']):
+                response = self.query_reports_structured(question)
             else:
-                # Use direct LLM analysis for complex questions
-                response = self.query_reports_direct(question)
+                # Use LLM for complex analysis and comparisons
+                response = self.query_reports_llm(question)
             
             self.chat_history.append({"user": question, "assistant": response})
             
@@ -470,23 +519,26 @@ SQL Query:"""
   - "What are the top CPU consuming processes?"
   - "Show memory usage statistics"
   - "List processes using more than 5% CPU"
+  - "Show processes containing python"
   
   Storage Queries:
   - "Show disk usage information"
   - "Which filesystems are nearly full?"
-  - "List all mounted storage devices"
+  - "List storage with more than 80% usage"
+  - "Show all mounted storage devices"
   
   Service Queries:
   - "What services are running?"
   - "Show any failed services"
-  - "List services containing 'network'"
+  - "List services containing network"
+  - "Show active services"
 
 🔍 QUERY FEATURES:
-  - Natural language processing
-  - Automatic data filtering and search
+  - Natural language processing with LLM
+  - Direct JSON data filtering and search
   - Multiple report comparison
-  - Structured SQL queries for complex analysis
   - Real-time report data access
+  - Intelligent query type detection
 
 💡 COMMANDS:
   - 'help' - Show this help
@@ -503,7 +555,6 @@ SQL Query:"""
         print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"🤖 AI Model: {'✅ Initialized' if self.initialized else '❌ Not Initialized'}")
         print(f"📊 Reports Loaded: {len(self.reports_data)}")
-        print(f"💾 Database: {'✅ Connected' if self.db_connection else '❌ Not Available'}")
         print(f"📝 Chat History: {len(self.chat_history)} queries")
         
         if self.reports_data:
@@ -519,8 +570,6 @@ SQL Query:"""
         print("🔄 Reloading system reports...")
         self.reports_data = {}
         if self.load_system_reports():
-            if self.db_connection:
-                self.init_database()
             print("✅ Reports reloaded successfully!")
         else:
             print("❌ Failed to reload reports")
@@ -574,11 +623,6 @@ SQL Query:"""
             except Exception as e:
                 print(f"\n❌ Error: {e}")
                 logger.error(f"Session error: {e}", exc_info=True)
-        
-        # Close database connection
-        if self.db_connection:
-            self.db_connection.close()
-        print("Database connection closed.")
 
 def main():
     """Main function"""
