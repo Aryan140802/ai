@@ -3,163 +3,492 @@ import os
 import subprocess
 import time
 import json
+import re
 from datetime import datetime
 
 def get_timestamp():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """Get current timestamp in ISO format"""
+    return datetime.now().isoformat()
 
-def run_command(cmd):
+def run_command(cmd, timeout=30):
+    """
+    Run command safely with error handling and timeout
+    Returns tuple (success, output, error)
+    """
     try:
-        result = subprocess.run(cmd, shell=True, check=True,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE,
-                              text=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error: {e.stderr.strip()}"
+        result = subprocess.run(
+            cmd, 
+            shell=True, 
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout
+        )
+        return True, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return False, "", f"Command timeout after {timeout}s"
+    except Exception as e:
+        return False, "", str(e)
 
-def parse_key_value(command, delimiter=':'):
-    """Parse command output into key-value pairs"""
+def safe_int(value, default=0):
+    """Safely convert to integer"""
+    try:
+        return int(float(str(value).replace(',', '')))
+    except (ValueError, AttributeError):
+        return default
+
+def safe_float(value, default=0.0):
+    """Safely convert to float"""
+    try:
+        return float(str(value).replace(',', ''))
+    except (ValueError, AttributeError):
+        return default
+
+def parse_key_value(command, delimiter=':', timeout=10):
+    """Parse command output into key-value pairs with error handling"""
+    success, output, error = run_command(command, timeout)
     result = {}
-    for line in run_command(command).split('\n'):
+    
+    if not success:
+        result["_error"] = error
+        return result
+    
+    for line in output.split('\n'):
+        line = line.strip()
         if delimiter in line:
-            key, val = line.split(delimiter, 1)
-            result[key.strip()] = val.strip()
+            try:
+                key, val = line.split(delimiter, 1)
+                result[key.strip()] = val.strip()
+            except ValueError:
+                continue
+    
     return result
 
-def get_system_info():
+def get_system_overview():
+    """Get basic system information"""
+    info = {
+        "os_release": "Unknown",
+        "kernel": "Unknown", 
+        "architecture": "Unknown",
+        "uptime": "Unknown",
+        "load_average": {"1min": 0.0, "5min": 0.0, "15min": 0.0},
+        "hostname": "Unknown"
+    }
+    
+    # OS Release
+    success, output, _ = run_command("cat /etc/redhat-release 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '\"'")
+    if success and output:
+        info["os_release"] = output
+    
+    # Kernel
+    success, output, _ = run_command("uname -r")
+    if success and output:
+        info["kernel"] = output
+    
+    # Architecture  
+    success, output, _ = run_command("uname -m")
+    if success and output:
+        info["architecture"] = output
+    
+    # Hostname
+    success, output, _ = run_command("hostname")
+    if success and output:
+        info["hostname"] = output
+    
+    # Uptime
+    success, output, _ = run_command("uptime -p 2>/dev/null || uptime")
+    if success and output:
+        info["uptime"] = output
+    
+    # Load average
+    success, output, _ = run_command("cat /proc/loadavg")
+    if success and output:
+        load_parts = output.split()[:3]
+        if len(load_parts) >= 3:
+            info["load_average"] = {
+                "1min": safe_float(load_parts[0]),
+                "5min": safe_float(load_parts[1]), 
+                "15min": safe_float(load_parts[2])
+            }
+    
+    return info
+
+def get_cpu_info():
+    """Get CPU information with fallbacks"""
+    cpu_info = {
+        "model": "Unknown",
+        "sockets": 0,
+        "cores_per_socket": 0,
+        "total_cores": 0,
+        "threads": 0,
+        "frequency_mhz": 0.0,
+        "utilization_percent": 0.0,
+        "architecture": "Unknown"
+    }
+    
+    # Try lscpu first
+    lscpu_data = parse_key_value("lscpu")
+    if "_error" not in lscpu_data:
+        cpu_info["model"] = lscpu_data.get("Model name", "Unknown")
+        cpu_info["sockets"] = safe_int(lscpu_data.get("Socket(s)", "0"))
+        cpu_info["cores_per_socket"] = safe_int(lscpu_data.get("Core(s) per socket", "0"))
+        cpu_info["threads"] = safe_int(lscpu_data.get("CPU(s)", "0"))
+        cpu_info["frequency_mhz"] = safe_float(lscpu_data.get("CPU MHz", "0"))
+        cpu_info["architecture"] = lscpu_data.get("Architecture", "Unknown")
+        
+        # Calculate total cores
+        if cpu_info["sockets"] > 0 and cpu_info["cores_per_socket"] > 0:
+            cpu_info["total_cores"] = cpu_info["sockets"] * cpu_info["cores_per_socket"]
+    
+    # CPU utilization with fallback
+    success, output, _ = run_command("command -v mpstat >/dev/null && mpstat 1 1 | awk '/Average/ {print 100-$12}' 2>/dev/null")
+    if success and output:
+        cpu_info["utilization_percent"] = safe_float(output)
+    else:
+        # Fallback to top
+        success, output, _ = run_command("top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1")
+        if success and output:
+            cpu_info["utilization_percent"] = safe_float(output)
+    
+    return cpu_info
+
+def get_memory_info():
+    """Get memory information with multiple fallbacks"""
+    memory = {
+        "total_gb": 0.0,
+        "used_gb": 0.0,
+        "free_gb": 0.0,
+        "available_gb": 0.0,
+        "cached_gb": 0.0,
+        "usage_percent": 0.0
+    }
+    
+    # Try free command
+    success, output, _ = run_command("free -b")
+    if success and output:
+        lines = output.split('\n')
+        for line in lines:
+            if line.startswith('Mem:'):
+                parts = line.split()
+                if len(parts) >= 7:
+                    total = safe_int(parts[1])
+                    used = safe_int(parts[2]) 
+                    free = safe_int(parts[3])
+                    available = safe_int(parts[6])
+                    
+                    memory["total_gb"] = round(total / (1024**3), 2)
+                    memory["used_gb"] = round(used / (1024**3), 2)
+                    memory["free_gb"] = round(free / (1024**3), 2)
+                    memory["available_gb"] = round(available / (1024**3), 2)
+                    
+                    if total > 0:
+                        memory["usage_percent"] = round((used / total) * 100, 2)
+                break
+            elif line.startswith('Buffers/cache:'):
+                parts = line.split()
+                if len(parts) >= 3:
+                    cached = safe_int(parts[2])
+                    memory["cached_gb"] = round(cached / (1024**3), 2)
+    
+    return memory
+
+def get_storage_info():
+    """Get storage information"""
+    storage = {
+        "disks": [],
+        "total_size_gb": 0.0,
+        "total_used_gb": 0.0,
+        "total_available_gb": 0.0
+    }
+    
+    success, output, _ = run_command("df -h --output=source,fstype,size,used,avail,pcent,target | grep -v '^Filesystem'")
+    if success and output:
+        for line in output.split('\n'):
+            line = line.strip()
+            if line and not line.startswith('tmpfs') and not line.startswith('devtmpfs'):
+                parts = line.split()
+                if len(parts) >= 7:
+                    disk = {
+                        "device": parts[0],
+                        "filesystem_type": parts[1],
+                        "size": parts[2],
+                        "used": parts[3], 
+                        "available": parts[4],
+                        "usage_percent": parts[5],
+                        "mount_point": parts[6]
+                    }
+                    storage["disks"].append(disk)
+                    
+                    # Add to totals (rough conversion from human readable)
+                    size_val = re.findall(r'(\d+(?:\.\d+)?)', parts[2])
+                    if size_val:
+                        multiplier = 1
+                        if 'T' in parts[2]:
+                            multiplier = 1024
+                        elif 'M' in parts[2]:
+                            multiplier = 1/1024
+                        storage["total_size_gb"] += safe_float(size_val[0]) * multiplier
+    
+    return storage
+
+def get_process_info():
+    """Get top processes information"""
+    processes = {
+        "top_by_cpu": [],
+        "top_by_memory": [],
+        "total_processes": 0
+    }
+    
+    # Top CPU processes
+    success, output, _ = run_command("ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu --no-headers | head -n 10")
+    if success and output:
+        for line in output.split('\n'):
+            line = line.strip()
+            if line:
+                parts = line.split(None, 4)
+                if len(parts) >= 5:
+                    process = {
+                        "pid": safe_int(parts[0]),
+                        "user": parts[1],
+                        "cpu_percent": safe_float(parts[2]),
+                        "memory_percent": safe_float(parts[3]),
+                        "command": parts[4]
+                    }
+                    processes["top_by_cpu"].append(process)
+    
+    # Top memory processes  
+    success, output, _ = run_command("ps -eo pid,user,%cpu,%mem,comm --sort=-%mem --no-headers | head -n 10")
+    if success and output:
+        for line in output.split('\n'):
+            line = line.strip()
+            if line:
+                parts = line.split(None, 4)
+                if len(parts) >= 5:
+                    process = {
+                        "pid": safe_int(parts[0]),
+                        "user": parts[1],
+                        "cpu_percent": safe_float(parts[2]),
+                        "memory_percent": safe_float(parts[3]),
+                        "command": parts[4]
+                    }
+                    processes["top_by_memory"].append(process)
+    
+    # Total process count
+    success, output, _ = run_command("ps aux | wc -l")
+    if success and output:
+        processes["total_processes"] = safe_int(output) - 1  # Subtract header
+    
+    return processes
+
+def get_network_info():
+    """Get network information"""
+    network = {
+        "interfaces": [],
+        "listening_ports": [],
+        "connections_count": 0
+    }
+    
+    # Network interfaces
+    success, output, _ = run_command("ip -o link show | grep -v lo")
+    if success and output:
+        for line in output.split('\n'):
+            if line.strip():
+                parts = line.split()
+                if len(parts) >= 2:
+                    interface = {
+                        "name": parts[1].rstrip(':'),
+                        "state": "up" if "UP" in line else "down"
+                    }
+                    network["interfaces"].append(interface)
+    
+    # Listening ports
+    success, output, _ = run_command("ss -tulnp | grep LISTEN | head -n 10")
+    if success and output:
+        for line in output.split('\n'):
+            if line.strip():
+                parts = line.split()
+                if len(parts) >= 5:
+                    port_info = {
+                        "protocol": parts[0],
+                        "local_address": parts[4],
+                        "process": parts[6] if len(parts) > 6 else "unknown"
+                    }
+                    network["listening_ports"].append(port_info)
+    
+    return network
+
+def get_services_info():
+    """Get systemd services information"""
+    services = {
+        "running": [],
+        "failed": [],
+        "total_loaded": 0
+    }
+    
+    # Running services
+    success, output, _ = run_command("systemctl list-units --type=service --state=running --no-pager --no-legend | head -n 15")
+    if success and output:
+        for line in output.split('\n'):
+            if line.strip():
+                parts = line.split(None, 4)
+                if len(parts) >= 4:
+                    service = {
+                        "name": parts[0],
+                        "load_state": parts[1],
+                        "active_state": parts[2],
+                        "sub_state": parts[3],
+                        "description": parts[4] if len(parts) > 4 else ""
+                    }
+                    services["running"].append(service)
+    
+    # Failed services
+    success, output, _ = run_command("systemctl list-units --type=service --state=failed --no-pager --no-legend")
+    if success and output:
+        for line in output.split('\n'):
+            if line.strip():
+                parts = line.split(None, 4)
+                if len(parts) >= 4:
+                    service = {
+                        "name": parts[0],
+                        "load_state": parts[1],
+                        "active_state": parts[2],
+                        "sub_state": parts[3],
+                        "description": parts[4] if len(parts) > 4 else ""
+                    }
+                    services["failed"].append(service)
+    
+    return services
+
+def get_security_info():
+    """Get security-related information"""
+    security = {
+        "selinux": {
+            "status": "unknown",
+            "mode": "unknown",
+            "policy": "unknown"
+        },
+        "firewall": {
+            "status": "unknown",
+            "service": "unknown"
+        }
+    }
+    
+    # SELinux
+    selinux_data = parse_key_value("sestatus 2>/dev/null")
+    if "_error" not in selinux_data:
+        security["selinux"]["status"] = selinux_data.get("SELinux status", "unknown")
+        security["selinux"]["mode"] = selinux_data.get("Current mode", "unknown")
+        security["selinux"]["policy"] = selinux_data.get("Loaded policy name", "unknown")
+    
+    # Firewall
+    success, output, _ = run_command("systemctl is-active firewalld 2>/dev/null")
+    if success:
+        security["firewall"]["service"] = "firewalld"
+        security["firewall"]["status"] = output
+    else:
+        success, output, _ = run_command("systemctl is-active iptables 2>/dev/null")
+        if success:
+            security["firewall"]["service"] = "iptables"
+            security["firewall"]["status"] = output
+    
+    return security
+
+def generate_system_report():
+    """Generate comprehensive system report"""
+    print("Generating system report...")
+    
     report = {
         "metadata": {
             "generated_at": get_timestamp(),
-            "system": "Red Hat Enterprise Linux"
+            "report_version": "2.0",
+            "generator": "Enhanced System Reporter"
         },
-        "system": {},
-        "resources": {},
-        "storage": {},
-        "processes": {},
-        "services": {},
-        "network": {}
+        "system_overview": get_system_overview(),
+        "hardware": {
+            "cpu": get_cpu_info(),
+            "memory": get_memory_info()
+        },
+        "storage": get_storage_info(),
+        "processes": get_process_info(),
+        "network": get_network_info(),
+        "services": get_services_info(),
+        "security": get_security_info()
     }
-
-    # 1. System Overview
-    report["system"] = {
-        "os_release": run_command("cat /etc/redhat-release"),
-        "kernel": run_command("uname -r"),
-        "architecture": run_command("uname -m"),
-        "uptime": run_command("uptime -p"),
-        "load_avg": run_command("cat /proc/loadavg | awk '{print $1, $2, $3}'")
-    }
-
-    # 2. CPU Information
-    cpu_info = parse_key_value("lscpu")
-    report["resources"]["cpu"] = {
-        "model": cpu_info.get("Model name", "").strip(),
-        "sockets": int(cpu_info.get("Socket(s)", "0")),
-        "cores": int(cpu_info.get("Core(s) per socket", "0")) * int(cpu_info.get("Socket(s)", "1")),
-        "threads": int(cpu_info.get("CPU(s)", "0")),
-        "frequency": f"{cpu_info.get('CPU MHz', '0')} MHz",
-        "utilization": run_command("mpstat 1 1 | awk '/Average/ {print 100-$12}'") + "%"
-    }
-
-    # 3. Memory Information
-    mem_info = run_command("free -b | awk '/Mem:/ {print $2,$3,$4,$7}'").split()
-    report["resources"]["memory"] = {
-        "total": f"{int(mem_info[0])/1024**3:.2f} GB",
-        "used": f"{int(mem_info[1])/1024**3:.2f} GB",
-        "free": f"{int(mem_info[2])/1024**3:.2f} GB",
-        "available": f"{int(mem_info[3])/1024**3:.2f} GB"
-    }
-
-    # 4. Disk Information
-    disks = []
-    for line in run_command("df -hT --output=source,fstype,size,used,avail,pcent,target").split('\n')[1:]:
-        if line.strip():
-            parts = line.split()
-            disks.append({
-                "device": parts[0],
-                "type": parts[1],
-                "size": parts[2],
-                "used": parts[3],
-                "available": parts[4],
-                "use_percent": parts[5],
-                "mounted_on": parts[6]
-            })
-    report["storage"]["disks"] = disks
-
-    # 5. LVM Information
-    report["storage"]["lvm"] = {
-        "physical_volumes": run_command("pvs --units g --noheadings | awk '{print $1,$2,$3,$4,$5}'"),
-        "volume_groups": run_command("vgs --units g --noheadings | awk '{print $1,$2,$3,$4,$5,$6}'"),
-        "logical_volumes": run_command("lvs --units g --noheadings | awk '{print $1,$2,$3,$4,$5}'")
-    }
-
-    # 6. Top Processes
-    processes = []
-    for line in run_command("ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu | head -n 5").split('\n')[1:]:
-        if line.strip():
-            parts = line.split(maxsplit=4)
-            processes.append({
-                "pid": parts[0],
-                "user": parts[1],
-                "cpu_percent": parts[2],
-                "mem_percent": parts[3],
-                "command": parts[4]
-            })
-    report["processes"]["top_by_cpu"] = processes
-
-    # 7. Services Status
-    services = []
-    for line in run_command("systemctl list-units --type=service --state=running --no-pager | head -n 5").split('\n'):
-        if line.strip():
-            parts = line.split(maxsplit=3)
-            services.append({
-                "unit": parts[0],
-                "load": parts[1],
-                "active": parts[2],
-                "description": parts[3] if len(parts) > 3 else ""
-            })
-    report["services"]["running"] = services
-
-    # 8. Network Information
-    connections = []
-    for line in run_command("ss -tulnp | head -n 5").split('\n')[1:]:
-        if line.strip():
-            parts = line.split(maxsplit=5)
-            connections.append({
-                "type": parts[0],
-                "local_address": parts[4],
-                "process": parts[5] if len(parts) > 5 else ""
-            })
-    report["network"]["connections"] = connections
-
-    # 9. Security Information
-    report["security"] = {
-        "selinux": parse_key_value("sestatus"),
-        "firewall": run_command("sudo firewall-cmd --state")
-    }
-
+    
     return report
 
-def save_to_file(content, filename=None):
+def save_report(report, filename=None):
+    """Save report to JSON file"""
     if not filename:
-        filename = f"system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"system_report_{timestamp}.json"
     
-    with open(filename, 'w') as f:
-        json.dump(content, f, indent=2)
+    try:
+        with open(filename, 'w') as f:
+            json.dump(report, f, indent=2, sort_keys=True)
+        return True, filename
+    except Exception as e:
+        return False, str(e)
+
+def print_summary(report):
+    """Print a human-readable summary"""
+    print("\n" + "="*60)
+    print("SYSTEM REPORT SUMMARY")
+    print("="*60)
     
-    return filename
+    sys_info = report["system_overview"]
+    print(f"Hostname: {sys_info['hostname']}")
+    print(f"OS: {sys_info['os_release']}")
+    print(f"Kernel: {sys_info['kernel']}")
+    print(f"Architecture: {sys_info['architecture']}")
+    print(f"Uptime: {sys_info['uptime']}")
+    
+    cpu = report["hardware"]["cpu"]
+    memory = report["hardware"]["memory"]
+    print(f"\nCPU: {cpu['model']} ({cpu['total_cores']} cores)")
+    print(f"CPU Usage: {cpu['utilization_percent']}%")
+    print(f"Memory: {memory['used_gb']:.1f}GB / {memory['total_gb']:.1f}GB ({memory['usage_percent']}%)")
+    
+    storage = report["storage"]
+    print(f"Storage: {len(storage['disks'])} mounted filesystems")
+    
+    processes = report["processes"]
+    print(f"Processes: {processes['total_processes']} total")
+    
+    services = report["services"]
+    print(f"Services: {len(services['running'])} running, {len(services['failed'])} failed")
 
 def main():
-    print("Generating JSON system report...")
+    """Main function"""
     start_time = time.time()
     
-    report = get_system_info()
-    output_file = save_to_file(report)
+    try:
+        # Generate report
+        report = generate_system_report()
+        
+        # Save to file
+        success, result = save_report(report)
+        
+        if success:
+            print(f"\nReport generated successfully in {time.time()-start_time:.2f} seconds")
+            print(f"Saved to: {os.path.abspath(result)}")
+            
+            # Print summary
+            print_summary(report)
+            
+        else:
+            print(f"Error saving report: {result}")
+            return 1
+            
+    except KeyboardInterrupt:
+        print("\nReport generation cancelled by user")
+        return 1
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return 1
     
-    print(f"\nReport generated in {time.time()-start_time:.2f} seconds")
-    print(f"Saved to: {os.path.abspath(output_file)}")
-    print("\n=== REPORT PREVIEW ===")
-    print(json.dumps({k: report[k] for k in list(report.keys())[:2]}, indent=2) + "\n...")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    exit(main())
