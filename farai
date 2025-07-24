@@ -19,7 +19,8 @@ FAR_DB_CONFIG = {
         "host": "localhost",
         "user": "root",
         "password": "root123",
-        "database": "EIS_n"
+        "database": "EIS_n",
+        "port": 3306  # Explicitly adding port
     },
     "include_tables": ["FarDetailsAll"],
 }
@@ -104,7 +105,6 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     
     # Handle case where LLM returns descriptive text instead of SQL
     if "sql query" in raw_sql.lower() and "far_id" in raw_sql.lower():
-        # Try to extract the actual ID from the text
         id_match = re.search(r"far[\s_]*id[\s_]*(\d+)", raw_sql.lower())
         if id_match:
             far_id = id_match.group(1)
@@ -118,24 +118,17 @@ def clean_and_fix_sql(raw_sql: str) -> str:
         sql = match.group(1).strip()
         print(f"DEBUG - Extracted from code block: {sql}")
     else:
-        # Remove any markdown formatting
         sql = re.sub(r"```", "", raw_sql)
-        
-        # Look for SELECT statement more aggressively
         select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
         if select_match:
             sql = select_match.group(1).strip()
             print(f"DEBUG - Extracted SELECT: {sql}")
         else:
-            # Try to find SQL pattern starting with SELECT
             sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
             sql = sql.strip()
     
-    # If we still don't have a proper SQL query, try to construct one
     if not sql.upper().strip().startswith('SELECT'):
         print(f"DEBUG - No valid SELECT found, trying to construct from: {raw_sql}")
-        
-        # Check if it's asking for a specific FAR ID
         far_id_match = re.search(r"(\d+)", raw_sql)
         if far_id_match and "far" in raw_sql.lower():
             far_id = far_id_match.group(1)
@@ -143,33 +136,25 @@ def clean_and_fix_sql(raw_sql: str) -> str:
             print(f"DEBUG - Constructed FAR ID query: {sql}")
         else:
             print(f"DEBUG - Could not construct valid SQL from: {raw_sql}")
-            return raw_sql  # Return as-is and let validation catch it
+            return raw_sql
 
     print(f"DEBUG - SQL before field processing: {sql}")
 
-    # Don't convert everything to LIKE - be smart about it
-    # Only convert text fields to LIKE, keep IDs and dates as exact matches
     text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination', 
                    'Requested_Service', 'Dependent_application', 'ZONE', 'Permanent_Rule']
     
-    # Apply LIKE only to text fields, not to Far_Id or date fields
     for field in text_fields:
-        # Convert = to LIKE for text fields only
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
         sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
 
-    # Handle date fields properly - use STR_TO_DATE for date comparisons
     date_fields = ['Created', 'Expires']
     for field in date_fields:
-        # Convert simple date comparisons to use STR_TO_DATE
         sql = re.sub(f"({field})\\s*([><=!]+)\\s*'([^']*)'", 
                     f"STR_TO_DATE(\\1, '%Y-%m-%d %H:%i:%s') \\2 STR_TO_DATE('\\3', '%Y-%m-%d %H:%i:%s')", 
                     sql, flags=re.IGNORECASE)
 
-    # Remove trailing semicolons
     sql = sql.strip().rstrip(";")
     
-    # Add reasonable limit if none exists and it's not a COUNT query
     if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
         sql += " LIMIT 50"
     
@@ -181,7 +166,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
     if not result:
         return "I couldn't find any FAR records matching your criteria."
 
-    # Handle single value results (like COUNT)
     if len(result) == 1 and len(result[0]) == 1:
         value = list(result[0].values())[0]
         if "count" in question.lower():
@@ -189,12 +173,10 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         else:
             return f"The result is: {value}"
 
-    # Handle single record
     if len(result) == 1:
         record = result[0]
         response = f"I found 1 FAR record:\n\n"
         
-        # Format key information naturally
         if 'Far_Id' in record:
             response += f"📋 FAR ID: {record['Far_Id']}\n"
         if 'Subject' in record:
@@ -220,10 +202,8 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         
         return response.strip()
 
-    # Handle multiple records - provide summary + tabular format
     response = f"I found {len(result)} FAR records matching your criteria:\n\n"
     
-    # Add summary information
     if 'Status' in result[0]:
         status_counts = {}
         for record in result:
@@ -235,7 +215,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             response += f"   • {status}: {count} records\n"
         response += "\n"
     
-    # For multiple records, show tabular format
     response += "📋 Detailed Results:\n"
     response += format_query_results_tabular(result)
     
@@ -246,28 +225,22 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     if not result:
         return "No records found."
 
-    # Get columns from first record
     columns = list(result[0].keys())
-    
-    # Convert dict results to tuples for formatting
     result_tuples = [tuple(row.values()) for row in result]
     
     output = []
     
-    # Calculate column widths with reasonable limits
     col_widths = []
     for i, col in enumerate(columns):
         max_content_width = max(len(str(row[i])) for row in result_tuples) if result_tuples else 0
-        col_width = min(max(len(str(col)), max_content_width), 60)  # Max 60 chars per column
+        col_width = min(max(len(str(col)), max_content_width), 60)
         col_widths.append(col_width)
 
-    # Build header
     header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
     separator = "-+-".join("-" * width for width in col_widths)
     output.append(header)
     output.append(separator)
 
-    # Add rows
     for row in result_tuples:
         formatted_row = " | ".join(
             (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width) 
@@ -284,13 +257,8 @@ def is_select_query(sql: str) -> bool:
     sql_clean = sql.strip().lower()
     print(f"DEBUG - Validating SQL: {repr(sql_clean)}")
     
-    # Check if it starts with SELECT
     starts_with_select = sql_clean.startswith('select')
-    
-    # Check for dangerous operations
     has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
-    
-    # Check if it's just descriptive text
     is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
     
     is_valid = starts_with_select and not has_dangerous_ops and not is_descriptive
@@ -307,22 +275,51 @@ class FarDetailsAssistant:
         self.chat_history = []
 
     def initialize(self):
-        """Initialize the FAR Details Assistant with enhanced prompting"""
+        """Initialize the FAR Details Assistant with enhanced error handling"""
         try:
-            # Initialize LLM with enhanced configuration
+            print("\n=== Initializing FAR Details Assistant ===")
+            
+            # 1. Initialize LLM
+            print("Initializing LLM...")
             self.llm = OllamaLLM(
-                model="myllm:latest", 
-                temperature=0.1,  # Low temperature for consistent SQL generation
-                top_p=0.9,        # Focus on most likely tokens
-                repeat_penalty=1.1,  # Reduce repetition
-                num_predict=200   # Limit response length for SQL queries
+                model="myllm:latest",
+                temperature=0.1,
+                top_p=0.9,
+                repeat_penalty=1.1,
+                num_predict=200
             )
+            print("✅ LLM initialized successfully")
 
-            # Set up database connection
+            # 2. Database configuration
             db_cfg = FAR_DB_CONFIG['db_config']
-            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+            print(f"\nDatabase configuration:")
+            print(f"Host: {db_cfg['host']}")
+            print(f"Database: {db_cfg['database']}")
+            print(f"User: {db_cfg['user']}")
 
-            # Connect to database with enhanced configuration
+            # 3. Test basic connection
+            print("\nTesting basic database connection...")
+            try:
+                test_conn = pymysql.connect(
+                    host=db_cfg['host'],
+                    user=db_cfg['user'],
+                    password=db_cfg['password'],
+                    database=db_cfg['database'],
+                    port=db_cfg.get('port', 3306),
+                    connect_timeout=5
+                )
+                test_conn.ping()
+                test_conn.close()
+                print("✅ Basic connection successful")
+            except pymysql.Error as e:
+                print(f"❌ Basic connection failed: {e}")
+                raise
+
+            # 4. Set up SQLDatabase for LangChain
+            print("\nSetting up SQLDatabase for LangChain...")
+            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}:{db_cfg.get('port', 3306)}/{db_cfg['database']}"
+            print(f"Connection URI: {uri}")
+
             db_for_llm = SQLDatabase.from_uri(
                 uri,
                 include_tables=FAR_DB_CONFIG.get("include_tables"),
@@ -334,36 +331,50 @@ class FarDetailsAssistant:
                         "charset": "utf8mb4"
                     }
                 },
-                sample_rows_in_table_info=3,  # Show sample rows for better context
-                custom_table_info={
-                    "FarDetailsAll": "FAR (Firewall Access Request) details table containing all firewall access requests with their statuses, dates, and network information."
-                }
+                sample_rows_in_table_info=3
             )
+            print("✅ SQLDatabase configured")
 
-            # Create enhanced prompt template
-            prompt_template = PromptTemplate(
-                input_variables=["question"],
-                template=SQL_GENERATION_PROMPT
-            )
-
-            # Create query chain with custom prompt
-            chain = create_sql_query_chain(
-                self.llm, 
-                db_for_llm,
-                prompt=prompt_template
-            )
-
-            # Create direct connection for executing queries
+            # 5. Create direct connection for executing queries
+            print("\nCreating direct database connection...")
             db_conn = pymysql.connect(
                 host=db_cfg['host'],
                 user=db_cfg['user'],
                 password=db_cfg['password'],
                 database=db_cfg['database'],
+                port=db_cfg.get('port', 3306),
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True
             )
+            print("✅ Direct connection established")
 
+            # 6. Test query execution
+            print("\nTesting query execution...")
+            try:
+                with db_conn.cursor() as cursor:
+                    cursor.execute("SELECT 1 AS test_value")
+                    result = cursor.fetchone()
+                    print(f"✅ Test query result: {result}")
+            except pymysql.Error as e:
+                print(f"❌ Query test failed: {e}")
+                raise
+
+            # 7. Create SQL query chain
+            print("\nCreating SQL query chain...")
+            prompt_template = PromptTemplate(
+                input_variables=["question"],
+                template=SQL_GENERATION_PROMPT
+            )
+            
+            chain = create_sql_query_chain(
+                self.llm,
+                db_for_llm,
+                prompt=prompt_template
+            )
+            print("✅ Query chain created")
+
+            # 8. Final setup
             self.db_handler = {
                 'chain': chain,
                 'connection': db_conn,
@@ -371,18 +382,27 @@ class FarDetailsAssistant:
             }
 
             self.initialized = True
+            print("\n=== FAR Details Assistant initialized successfully ===")
             return True
 
         except Exception as e:
+            print(f"\n❌ Initialization failed: {str(e)}")
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
+            self.initialized = False
+            
+            # Clean up any partial initialization
+            if hasattr(self, 'db_handler') and self.db_handler and self.db_handler.get('connection'):
+                try:
+                    self.db_handler['connection'].close()
+                except:
+                    pass
+            
             return False
 
     def preprocess_question(self, question: str) -> str:
         """Preprocess and enhance the question for better SQL generation"""
-        # Convert common terms to database-friendly format
         question_lower = question.lower()
         
-        # Map common terms to database equivalents
         term_mapping = {
             'firewall request': 'FAR',
             'access request': 'FAR',
@@ -407,7 +427,6 @@ class FarDetailsAssistant:
                 flags=re.IGNORECASE
             )
         
-        # Add context hints for better SQL generation
         if 'count' in question_lower:
             processed_question += " (provide count)"
         elif any(word in question_lower for word in ['show', 'list', 'find', 'get']):
@@ -416,103 +435,79 @@ class FarDetailsAssistant:
         return processed_question
 
     def query_far_details(self, question: str) -> str:
-        """Query FAR details database with enhanced prompting and always show results"""
+        """Query FAR details database with enhanced error handling"""
         if not self.db_handler:
             return "❌ FAR Details database not available."
 
         try:
-            # Preprocess the question
             processed_question = self.preprocess_question(question)
-            print(f"DEBUG - Original question: {question}")
-            print(f"DEBUG - Processed question: {processed_question}")
+            print(f"\nProcessing question: {question}")
+            print(f"Processed question: {processed_question}")
 
-            # Generate the SQL query using the enhanced chain
             raw_sql = self.db_handler['chain'].invoke({"question": processed_question})
-            print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
-            logger.info(f"Generated SQL: {raw_sql}")
+            print(f"\nGenerated SQL (raw):\n{raw_sql}")
 
-            # Clean and fix the SQL
             sql = clean_and_fix_sql(raw_sql)
-            print(f"DEBUG - Final SQL after cleaning: {sql}")
-            logger.info(f"Cleaned SQL: {sql}")
+            print(f"\nCleaned SQL:\n{sql}")
 
-            # Validate query safety
             if not is_select_query(sql):
-                return f"❌ Error: Invalid query generated. Raw output was: {repr(raw_sql)}\nCleaned to: {sql}\nOnly SELECT queries are allowed."
+                return f"❌ Error: Invalid query generated.\nRaw output: {repr(raw_sql)}\nCleaned: {sql}\nOnly SELECT queries are allowed."
 
-            # Execute the query
             with self.db_handler['connection'].cursor() as cursor:
-                try:
-                    print(f"DEBUG - Executing SQL: {sql}")
-                    cursor.execute(sql)
-                    result = cursor.fetchall()
-                    print(f"DEBUG - Query result count: {len(result)}")
+                print("\nExecuting query...")
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                print(f"Query returned {len(result)} rows")
 
-                    logger.info(f"Query returned {len(result)} rows")
+                if not result:
+                    response = "I couldn't find any FAR records matching your criteria.\n\n"
+                    response += "💡 Suggestions:\n"
+                    response += "• Try broader search terms\n"
+                    response += "• Verify the data exists\n"
+                    response += "• Adjust date ranges or status values\n"
+                    response += f"\n🔍 Query: {sql}"
+                    return response
+                else:
+                    natural_response = format_query_results_natural(result, question)
+                    
+                    if len(result) > 5:
+                        natural_response += f"\n\n🔍 Query: {sql}"
+                    
+                    return natural_response
 
-                    # Format output in natural language
-                    if not result:
-                        response = "I couldn't find any FAR records matching your criteria.\n\n"
-                        response += "💡 Suggestions:\n"
-                        response += "• Try using broader search terms\n"
-                        response += "• Check if the data exists in the database\n"
-                        response += "• Modify date ranges or status values\n"
-                        response += f"\n🔍 Query executed: {sql}"
-                        return response
-                    else:
-                        # Format results in natural language
-                        natural_response = format_query_results_natural(result, question)
-                        
-                        # Add query info at the end for debugging (optional)
-                        if len(result) > 5:  # Only show SQL for complex queries
-                            natural_response += f"\n\n🔍 Query executed: {sql}"
-                        
-                        return natural_response
-
-                except pymysql.Error as db_error:
-                    error_msg = f"❌ Database Error: {str(db_error)}\n"
-                    error_msg += f"SQL Query: {sql}\n"
-                    error_msg += f"Original LLM output: {repr(raw_sql)}\n"
-                    error_msg += "Please check the query syntax and try again."
-                    logger.error(f"Database error: {db_error}\nSQL: {sql}")
-                    return error_msg
-
+        except pymysql.Error as db_error:
+            error_msg = f"❌ Database Error: {str(db_error)}\n"
+            error_msg += f"SQL Query: {sql}\n"
+            error_msg += f"Original LLM output: {repr(raw_sql)}\n"
+            logger.error(f"Database error: {db_error}\nSQL: {sql}")
+            return error_msg
         except Exception as e:
             error_msg = f"❌ Error processing request: {str(e)}\n"
             error_msg += f"Raw LLM output: {repr(raw_sql) if 'raw_sql' in locals() else 'N/A'}\n"
-            error_msg += "Please try rephrasing your question."
             logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
             return error_msg
 
     def process_question(self, question: str) -> str:
         """Process questions and return results"""
-        # Double-check initialization
         if not self.initialized:
             print("⚠️ Assistant not initialized, attempting to initialize...")
             if not self.initialize():
-                return "❌ FAR Details Assistant initialization failed. Please check database connection."
+                return "❌ Initialization failed. Check database connection."
 
         if is_dangerous(question):
-            return "❌ Question blocked for security reasons."
+            return "❌ Question blocked for security."
 
-        # Add to chat history
         self.chat_history.append(f"User: {question}")
-
-        # Get response
         response = self.query_far_details(question)
-
-        # Add response to history
         self.chat_history.append(f"Assistant: {response}")
-
         return response
 
     def start_interactive_session(self, query):
         """Process single query and return result"""
-        # Ensure initialization happens first
         if not self.initialized:
             print("🔧 Initializing FAR Details Assistant...")
             if not self.initialize():
-                return "❌ Failed to initialize FAR Details Assistant. Check database connection and configuration."
+                return "❌ Failed to initialize. Check database connection."
 
         try:
             if query.lower() in ['exit', 'quit', 'q']:
@@ -529,40 +524,38 @@ class FarDetailsAssistant:
             logger.error(f"Session error: {e}\n{traceback.format_exc()}")
             return error_msg
         finally:
-            # Clean up database connection
-            try:
-                if self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
-                    self.db_handler['connection'].close()
-            except:
-                pass
+            if self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
+                self.db_handler['connection'].close()
 
 def Farmain(query):
     """Main function to process FAR queries"""
-    print("🚀 Starting FAR Details Assistant...")
+    print("\n🚀 Starting FAR Details Assistant...")
     
-    # Create assistant instance
     assistant = FarDetailsAssistant()
     
-    # Explicitly initialize the assistant
-    print("🔧 Initializing database connection...")
+    print("\n🔧 Initializing...")
     if not assistant.initialize():
-        return "❌ Failed to initialize FAR Details Assistant. Please check:\n• Database connection settings\n• Database server is running\n• Credentials are correct\n• Required tables exist"
+        return """❌ Initialization failed. Please check:
+• Database server is running
+• Connection parameters are correct
+• User has proper permissions
+• Tables exist in the database
+• Check ~/.far_details_ai.log for details"""
     
-    print("✅ Initialization successful!")
+    print("\n✅ Initialization successful!")
+    print(f"\nProcessing query: '{query}'")
     
-    # Process the query
     result = assistant.start_interactive_session(query)
-    print("✅ Query processing complete.")
+    print("\n✅ Processing complete")
     return result
 
-# Test the function
+# Example usage
 if __name__ == "__main__":
-    # Test with sample queries
     test_queries = [
         "Show me FAR with ID 175",
-        "List all FARs with status resolved",
-        "Show me all FARs that expire in 2020",
-        "Count FARs by status"
+        "List all active FARs",
+        "Count FARs created this month",
+        "Show FARs expiring soon"
     ]
     
     for query in test_queries:
