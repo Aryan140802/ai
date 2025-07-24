@@ -33,3 +33,59 @@
 | Created_op                 | longtext | YES  |     | NULL    |       |
 | Expires_op                 | longtext | YES  |     | NULL    |       |
 +----------------------------+----------+------+-----+---------+-------+
+
+
+
+enhanced_prompt = f"""
+You are an expert SQL assistant. Generate a syntactically correct SQL query using only the `FarDetailsAll` table to answer the user's question.
+
+# USER QUESTION:
+{question}
+
+# TABLE: FarDetailsAll
+
+## FIELDS:
+- Far_Id (INT, PRIMARY KEY)
+- Subject (TEXT)
+- Status (TEXT, NOT NULL)
+- Created (TEXT, NOT NULL, contains datetime string)
+- Expires (TEXT, may be NULL)
+- Requested_Source (TEXT)
+- Requested_Destination (TEXT)
+- Requested_Service (TEXT)
+- Requested_Source_NAT (TEXT)
+- Requested_Destination_NAT (TEXT)
+- Requested_Port_Translation (TEXT)
+- Change_Source (TEXT)
+- Change_Destination (TEXT)
+- Change_Service (TEXT)
+- Change_Source_NAT (TEXT)
+- Change_Destination_NAT (TEXT)
+- Translated_Destination (TEXT)
+- Translated_Service (TEXT)
+- Dependent_application (TEXT)
+- Permanent_Rule (TEXT)
+- ZONE (TEXT)
+- Created_op (TEXT)
+- Expires_op (TEXT)
+
+## QUERY RULES:
+1. Only use the table `FarDetailsAll`.
+2. Return ONLY the SQL query (no explanation or extra text).
+3. For **text filtering**, use `LIKE '%value%'`.
+4. For **Far_Id** comparisons, use `Far_Id = value` (no quotes around numbers).
+5. For **date/time comparisons**, wrap the date string in `STR_TO_DATE('YYYY-MM-DD', '%Y-%m-%d')` if needed.
+6. If the query is NOT a `COUNT`, always add `LIMIT 50`.
+7. Do NOT use JOINs or subqueries — single-table only.
+8. Avoid quoting column names unless necessary.
+
+## EXAMPLES:
+- SELECT * FROM FarDetailsAll WHERE Far_Id = 175 LIMIT 50;
+- SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Status LIKE '%rejected%' AND ZONE LIKE '%UAT%' LIMIT 50;
+- SELECT COUNT(*) FROM FarDetailsAll WHERE Subject LIKE '%EIS%' AND Status LIKE '%resolved%';
+
+# TASK:
+Write the SQL query to answer:
+{question}
+"""
+
