@@ -98,3 +98,59 @@ Original LLM output: 'Since the question is asking to select all columns (`*`) f
 Please check the query syntax and try again.
 after output
 
+
+
+
+
+enhanced_prompt = f"""
+You are a SQL generator. Your task is to output ONLY a valid MySQL SQL query based on the input question. DO NOT output any explanation, comment, reasoning, or clarification. ONLY return the SQL statement.
+
+# USER QUESTION:
+{question}
+
+# TABLE NAME:
+FarDetailsAll
+
+# TABLE COLUMNS:
+- Far_Id (INT)
+- Subject (TEXT)
+- Status (TEXT)
+- Created (TEXT - date/time string)
+- Expires (TEXT)
+- Requested_Source (TEXT)
+- Requested_Destination (TEXT)
+- Requested_Service (TEXT)
+- Requested_Source_NAT (TEXT)
+- Requested_Destination_NAT (TEXT)
+- Requested_Port_Translation (TEXT)
+- Change_Source (TEXT)
+- Change_Destination (TEXT)
+- Change_Service (TEXT)
+- Change_Source_NAT (TEXT)
+- Change_Destination_NAT (TEXT)
+- Translated_Destination (TEXT)
+- Translated_Service (TEXT)
+- Dependent_application (TEXT)
+- Permanent_Rule (TEXT)
+- ZONE (TEXT)
+- Created_op (TEXT)
+- Expires_op (TEXT)
+
+# RULES FOR SQL GENERATION:
+1. Output ONLY the raw SQL query — no reasoning, no explanations.
+2. Use correct MySQL syntax (e.g., SELECT ... FROM ... WHERE ...).
+3. Use `LIKE '%value%'` for text filters.
+4. Use `Far_Id = 123` for exact numeric match — no quotes for numbers.
+5. Use `STR_TO_DATE('YYYY-MM-DD', '%Y-%m-%d')` for date comparisons if needed.
+6. ALWAYS add `LIMIT 50` unless query uses COUNT.
+7. NEVER return anything other than the SQL.
+
+# EXAMPLES:
+SELECT * FROM FarDetailsAll WHERE Far_Id = 175 LIMIT 50;
+SELECT Far_Id, Status FROM FarDetailsAll WHERE Status LIKE '%resolved%' LIMIT 50;
+SELECT COUNT(*) FROM FarDetailsAll WHERE ZONE LIKE '%UAT%';
+
+# QUESTION:
+{question}
+"""
+
