@@ -4,7 +4,7 @@ import logging
 import pymysql
 import traceback
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 from langchain_community.utilities import SQLDatabase
@@ -32,6 +32,21 @@ BLOCKED_PATTERNS = [
     r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
 
+# Column metadata for better query generation
+COLUMN_METADATA = {
+    "Far_Id": {"type": "int", "description": "Unique FAR identifier", "search_type": "exact"},
+    "Subject": {"type": "text", "description": "FAR subject/title", "search_type": "like"},
+    "Status": {"type": "text", "description": "Current status (active, resolved, rejected, etc.)", "search_type": "like"},
+    "Created": {"type": "date", "description": "Creation date (YYYY-MM-DD HH:MM:SS)", "search_type": "date"},
+    "Expires": {"type": "date", "description": "Expiry date (YYYY-MM-DD HH:MM:SS)", "search_type": "date"},
+    "Requested_Source": {"type": "text", "description": "Source IP addresses", "search_type": "like"},
+    "Requested_Destination": {"type": "text", "description": "Destination IP addresses", "search_type": "like"},
+    "Requested_Service": {"type": "text", "description": "Service/port information", "search_type": "like"},
+    "Dependent_application": {"type": "text", "description": "Related applications", "search_type": "like"},
+    "ZONE": {"type": "text", "description": "Environment zone (PROD, UAT, etc.)", "search_type": "like"},
+    "Permanent_Rule": {"type": "text", "description": "Whether rule is permanent", "search_type": "like"}
+}
+
 # Setup logging
 logging.basicConfig(
     filename=os.path.expanduser("~/.far_details_ai.log"),
@@ -44,8 +59,8 @@ def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
-def clean_sql(raw_sql: str) -> str:
-    """Clean and enhance SQL for LIKE operations"""
+def enhance_sql_for_dates_and_context(raw_sql: str) -> str:
+    """Enhanced SQL cleaning with proper date handling and context awareness"""
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
@@ -54,15 +69,38 @@ def clean_sql(raw_sql: str) -> str:
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
     
-    # Replace exact matches with LIKE for better searching
-    sql = re.sub(r"(\w+)\s*=\s*'([^']*)'", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
-    sql = re.sub(r"(\w+)\s*=\s*\"([^\"]*)\"", r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
+    # Handle date columns properly - convert to STR_TO_DATE for date comparisons
+    # Pattern for date comparisons in WHERE clauses
+    date_patterns = [
+        (r"(Created|Expires)\s*([><=!]+)\s*'([^']*)'", r"STR_TO_DATE(\1, '%Y-%m-%d %H:%i:%s') \2 STR_TO_DATE('\3', '%Y-%m-%d %H:%i:%s')"),
+        (r"(Created|Expires)\s*([><=!]+)\s*\"([^\"]*)\"", r"STR_TO_DATE(\1, '%Y-%m-%d %H:%i:%s') \2 STR_TO_DATE('\3', '%Y-%m-%d %H:%i:%s')"),
+    ]
     
-    # Remove any trailing semicolons and whitespace
+    for pattern, replacement in date_patterns:
+        sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
+    
+    # Handle BETWEEN for dates
+    sql = re.sub(
+        r"(Created|Expires)\s+BETWEEN\s+'([^']*)'\s+AND\s+'([^']*)'",
+        r"STR_TO_DATE(\1, '%Y-%m-%d %H:%i:%s') BETWEEN STR_TO_DATE('\2', '%Y-%m-%d %H:%i:%s') AND STR_TO_DATE('\3', '%Y-%m-%d %H:%i:%s')",
+        sql, flags=re.IGNORECASE
+    )
+    
+    # Only apply LIKE to text fields, not IDs or dates
+    text_like_pattern = r"(Subject|Status|Requested_Source|Requested_Destination|Requested_Service|Dependent_application|ZONE|Permanent_Rule)\s*=\s*'([^']*)'"
+    sql = re.sub(text_like_pattern, r"\1 LIKE '%\2%'", sql, flags=re.IGNORECASE)
+    
+    # Remove default LIMIT 5 and any small limits, but keep reasonable limits
+    sql = re.sub(r"\bLIMIT\s+[1-5]\b", "", sql, flags=re.IGNORECASE)
+    
+    # Add reasonable limit if none exists and it's not a COUNT query
+    if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
+        sql += " LIMIT 50"
+    
     return sql.strip().rstrip(";")
 
 def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> str:
-    """Format database results for display"""
+    """Enhanced formatting for better readability"""
     if not result:
         return "No FAR details found for your request."
     
@@ -70,14 +108,16 @@ def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> s
     if len(result) == 1 and len(result[0]) == 1:
         return f"Result: {result[0][0]}"
     
-    # Format as table if we have column names and reasonable number of rows
+    # Format as table if we have column names
     if columns:
         output = []
-        # Calculate column widths
-        col_widths = [
-            max(len(str(col)), max(len(str(row[i])) for row in result)) 
-            for i, col in enumerate(columns)
-        ]
+        
+        # Calculate column widths with max width limits
+        col_widths = []
+        for i, col in enumerate(columns):
+            max_content_width = max(len(str(row[i])) for row in result) if result else 0
+            col_width = min(max(len(str(col)), max_content_width), 50)  # Max 50 chars per column
+            col_widths.append(col_width)
         
         # Build header
         header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
@@ -85,22 +125,28 @@ def format_answer(result: List[tuple], columns: Optional[List[str]] = None) -> s
         output.append(header)
         output.append(separator)
         
-        # Add rows (limit to 20 for display)
-        for row in result[:20]:
-            formatted_row = " | ".join(str(val).ljust(width) if val is not None else "NULL".ljust(width) 
-                                     for val, width in zip(row, col_widths))
+        # Add rows (limit to 50 for display)
+        for row in result[:50]:
+            formatted_row = " | ".join(
+                (str(val)[:47] + "..." if len(str(val)) > 50 else str(val)).ljust(width) 
+                if val is not None else "NULL".ljust(width) 
+                for val, width in zip(row, col_widths)
+            )
             output.append(formatted_row)
         
-        if len(result) > 20:
-            output.append(f"... and {len(result) - 20} more rows")
+        if len(result) > 50:
+            output.append(f"\n... and {len(result) - 50} more rows (total: {len(result)} rows)")
+        else:
+            output.append(f"\nTotal rows: {len(result)}")
+            
         return "\n".join(output)
     
-    # Fallback format for when we don't have column names
+    # Fallback format
     rows = []
-    for row in result[:20]:
+    for row in result[:50]:
         rows.append(" | ".join(str(val) if val is not None else "NULL" for val in row))
-    if len(result) > 20:
-        rows.append(f"... and {len(result) - 20} more rows")
+    if len(result) > 50:
+        rows.append(f"... and {len(result) - 50} more rows")
     return "\n".join(rows)
 
 def is_select_query(sql: str) -> bool:
@@ -110,6 +156,24 @@ def is_select_query(sql: str) -> bool:
         kw in sql 
         for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']
     )
+
+def generate_column_info() -> str:
+    """Generate detailed column information for the LLM"""
+    info = []
+    info.append("TABLE: FarDetailsAll")
+    info.append("COLUMNS:")
+    for col, meta in COLUMN_METADATA.items():
+        info.append(f"- {col}: {meta['description']} (Type: {meta['type']}, Search: {meta['search_type']})")
+    
+    info.append("\nIMPORTANT QUERY GUIDELINES:")
+    info.append("1. For DATE columns (Created, Expires): Use STR_TO_DATE() function for comparisons")
+    info.append("2. For TEXT search: Use LIKE with % wildcards")
+    info.append("3. For exact matches (Far_Id): Use = operator")
+    info.append("4. For date ranges: Use BETWEEN with STR_TO_DATE()")
+    info.append("5. Common date formats: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'")
+    info.append("6. Do not add LIMIT 5 - use LIMIT 50 or higher for better results")
+    
+    return "\n".join(info)
 
 class FarDetailsAssistant:
     def __init__(self):
@@ -128,7 +192,7 @@ class FarDetailsAssistant:
             db_cfg = FAR_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
             
-            # Connect to database with longer timeout and explicit charset
+            # Connect to database with optimized settings
             db_for_llm = SQLDatabase.from_uri(
                 uri, 
                 include_tables=FAR_DB_CONFIG.get("include_tables"),
@@ -136,8 +200,9 @@ class FarDetailsAssistant:
                     "pool_pre_ping": True,
                     "pool_recycle": 3600,
                     "connect_args": {
-                        "connect_timeout": 10,
-                        "charset": "utf8mb4"
+                        "connect_timeout": 15,
+                        "charset": "utf8mb4",
+                        "autocommit": True
                     }
                 }
             )
@@ -152,7 +217,8 @@ class FarDetailsAssistant:
                 password=db_cfg['password'],
                 database=db_cfg['database'],
                 charset='utf8mb4',
-                cursorclass=pymysql.cursors.DictCursor  # Use DictCursor for easier result handling
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True
             )
             
             self.db_handler = {
@@ -168,41 +234,70 @@ class FarDetailsAssistant:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
+    def preprocess_question(self, question: str) -> str:
+        """Preprocess question to add context and handle common patterns"""
+        question_lower = question.lower()
+        
+        # Add current date context for relative date queries
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
+        processed_question = question
+        
+        # Handle expiry-related questions
+        if any(word in question_lower for word in ['expir', 'expire', 'expiry']):
+            processed_question += f"\n\nNote: Use the 'Expires' column for expiry dates. Current date is {current_date}."
+        
+        # Handle status-related questions  
+        if any(word in question_lower for word in ['status', 'active', 'resolved', 'rejected']):
+            processed_question += f"\n\nNote: Use the 'Status' column for FAR status information."
+        
+        # Handle date range queries
+        if any(word in question_lower for word in ['today', 'yesterday', 'last week', 'this month']):
+            processed_question += f"\n\nNote: Current date is {current_date}. Use STR_TO_DATE() for date comparisons."
+        
+        return processed_question
+
     def query_far_details(self, question: str) -> str:
-        """Query FAR details database"""
+        """Query FAR details database with enhanced processing"""
         if not self.db_handler:
             return "FAR Details database not available."
         
         try:
-            # Enhance the question to guide the LLM toward better queries
+            # Preprocess the question
+            processed_question = self.preprocess_question(question)
+            
+            # Enhanced question with detailed context
             enhanced_question = f"""
-            {question}
+            {processed_question}
             
-            Important Notes:
-            1. Always query from the FarDetailsAll table.
-            2. Use LIKE with wildcards (%) for text searches instead of exact matches (=).
-            3. Include relevant columns like Far_Id, Subject, Status, Created, Expires.
-            4. For date comparisons, use proper date functions if needed.
-            5. Limit results to 20 rows unless specifically asked for more.
+            {generate_column_info()}
             
-            Example good queries:
-            - "SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Subject LIKE '%firewall%' AND Status LIKE '%active%' LIMIT 20"
-            - "SELECT COUNT(*) FROM FarDetailsAll WHERE Created > '2023-01-01'"
-            - "SELECT DISTINCT Status FROM FarDetailsAll"
+            EXAMPLE QUERIES:
+            - For expiry dates: "SELECT Far_Id, Subject, Expires FROM FarDetailsAll WHERE STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s') > NOW()"
+            - For status search: "SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Status LIKE '%active%'"
+            - For date ranges: "SELECT * FROM FarDetailsAll WHERE STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s') BETWEEN STR_TO_DATE('2020-01-01', '%Y-%m-%d') AND STR_TO_DATE('2020-12-31', '%Y-%m-%d')"
+            - For IP search: "SELECT * FROM FarDetailsAll WHERE Requested_Source LIKE '%10.176.1%'"
+            
+            CRITICAL REMINDERS:
+            - Always use STR_TO_DATE() for date column comparisons
+            - Use LIKE '%text%' for text searches in Subject, Status, etc.
+            - Use = for exact Far_Id matches
+            - Don't add LIMIT 5 - use LIMIT 50 or more
+            - Include relevant columns in SELECT based on the question
             """
             
             # Generate the SQL query
             raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
             logger.info(f"Generated SQL: {raw_sql}")
             
-            # Clean and validate the SQL
-            sql = clean_sql(raw_sql)
-            logger.info(f"Cleaned SQL: {sql}")
+            # Enhanced cleaning and validation
+            sql = enhance_sql_for_dates_and_context(raw_sql)
+            logger.info(f"Enhanced SQL: {sql}")
             
             if not is_select_query(sql):
                 return "Error: Only SELECT queries are allowed for security reasons."
             
-            # Execute the query
+            # Execute the query with timeout
             with self.db_handler['connection'].cursor() as cursor:
                 try:
                     cursor.execute(sql)
@@ -218,42 +313,61 @@ class FarDetailsAssistant:
                     logger.info(f"Query returned {len(result)} rows")
                     
                     if not result:
-                        return "No FAR details found matching your query."
+                        return f"=== QUERY RESULTS ===\nSQL Query: {sql}\nRecords Found: 0\n\nNo FAR details found matching your query.\n\nTry rephrasing your question or check if the data exists."
                     
                     # Format the raw results
                     formatted_result = format_answer(result, columns)
                     
-                    # Create context for the LLM to interpret results
+                    # Always show the query results first
+                    output_parts = []
+                    output_parts.append("=== QUERY RESULTS ===")
+                    output_parts.append(f"SQL Query: {sql}")
+                    output_parts.append(f"Records Found: {len(result)}")
+                    output_parts.append("")
+                    output_parts.append(formatted_result)
+                    output_parts.append("")
+                    
+                    # Create context for the LLM to interpret results (but always show raw results)
                     context = f"""
 Original question: {question}
 
 Database query executed:
 {sql}
 
-Query results:
+Query results ({len(result)} rows found):
 {formatted_result}
 
-Please provide a clear, concise answer to the original question based on these results. 
-If the results are in table format, summarize the key findings. 
-If no results were found, suggest possible reasons or alternative queries.
+Please provide a brief summary and interpretation of these results in relation to the original question. 
+Focus on:
+1. Key findings and patterns
+2. Direct answer to what was asked
+3. Important insights from the data
+4. Any notable trends or exceptions
+
+Keep your response concise - the raw data is already displayed above.
 """
                     
                     # Get interpretation from LLM
                     ai_interpretation = self.llm.invoke(context)
-                    return ai_interpretation.strip()
+                    
+                    # Combine results with interpretation
+                    output_parts.append("=== ANALYSIS ===")
+                    output_parts.append(ai_interpretation.strip())
+                    
+                    return "\n".join(output_parts)
                     
                 except pymysql.Error as db_error:
-                    logger.error(f"Database error: {db_error}\n{traceback.format_exc()}")
-                    return f"Database error: {db_error}"
+                    logger.error(f"Database error: {db_error}\nSQL: {sql}")
+                    return f"=== QUERY ERROR ===\nSQL Query: {sql}\nError: {str(db_error)}\n\nPlease check your query parameters and try again."
             
         except Exception as e:
             logger.error(f"FAR details query error: {e}\n{traceback.format_exc()}")
-            return f"Error processing your request: {e}"
+            return f"Error processing your request: {str(e)}\nPlease try rephrasing your question."
 
     def process_question(self, question: str) -> str:
         """Process all questions as FAR-related queries"""
         if not self.initialized and not self.initialize():
-            return "FAR Details Assistant initialization failed. Please check logs."
+            return "FAR Details Assistant initialization failed. Please check logs and database connectivity."
         
         if is_dangerous(question):
             return "Question blocked for security reasons."
@@ -275,11 +389,15 @@ If no results were found, suggest possible reasons or alternative queries.
             return
         
         print("FAR Details Assistant ready. Enter your query or 'exit' to quit.")
-        print("Example queries:")
-        print("- Show me all active FARs about firewalls")
-        print("- How many FARs were created last month?")
-        print("- What's the status of FAR with ID 12345?")
-        print("- List all FARs that expire in the next 30 days")
+        print("\nExample queries:")
+        print("- Show me all FARs that expire in the next 30 days")
+        print("- List all rejected FARs from 2020") 
+        print("- Find FARs with status 'resolved' and zone 'UAT'")
+        print("- Show FARs created between 2020-03-01 and 2020-03-31")
+        print("- Which FARs have 'CRM' in dependent applications?")
+        print("- Count FARs by status")
+        print("- Show me FAR details for ID 175")
+        print("\nNote: All SELECT query results will be displayed with the executed SQL query.")
         
         while True:
             try:
@@ -290,8 +408,10 @@ If no results were found, suggest possible reasons or alternative queries.
                 if question.lower() in ['exit', 'quit', 'q']:
                     break
                 
+                print("\nProcessing your query...")
                 response = self.process_question(question)
                 print(f"\n{response}\n")
+                print("-" * 80)
                     
             except KeyboardInterrupt:
                 print("\nExiting...")
