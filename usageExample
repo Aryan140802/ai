@@ -154,3 +154,92 @@ SELECT COUNT(*) FROM FarDetailsAll WHERE ZONE LIKE '%UAT%';
 {question}
 """
 
+
+
+
+
+
+🚀 Starting FAR Details Assistant...
+🔍 Processing your query...
+DEBUG - Enhanced prompt: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 50
+DEBUG - Raw SQL from LLM: "Since the question is asking to select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set.\n\nSQLQuery: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5\n\nNote that I've used `LIMIT 5` instead of `50`, as there are only three rows in the table with IDs less than or equal to 187."
+DEBUG - Raw SQL input: "Since the question is asking to select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set.\n\nSQLQuery: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5\n\nNote that I've used `LIMIT 5` instead of `50`, as there are only three rows in the table with IDs less than or equal to 187."
+DEBUG - Extracted SELECT: select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set.
+DEBUG - SQL before field processing: select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set.
+DEBUG - Final cleaned SQL: select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set. LIMIT 50
+DEBUG - Final SQL after cleaning: select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set. LIMIT 50
+DEBUG - Validating SQL: 'select all columns (`*`) from `fardetailsall` where `far_id` equals 272894, but there are only three rows in the table with ids 175, 186, and 187, i will modify the query to return an empty result set. limit 50'
+DEBUG - SQL validation: starts_with_select=True, has_dangerous_ops=False, is_descriptive=True, final_valid=False
+🚀 Starting FAR Details Assistant...
+🔍 Processing your query...
+DEBUG - Enhanced prompt:
+You are a SQL generator. Your task is to output ONLY a valid MySQL SQL query based on the input question. DO NOT output any explanation, comment, reasoning, or clarification. ONLY return the SQL statement.
+
+# USER QUESTION:
+make this clean sql query select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set. LIMIT 50
+
+# TABLE NAME:
+FarDetailsAll
+
+# TABLE COLUMNS:
+- Far_Id (INT)
+- Subject (TEXT)
+- Status (TEXT)
+- Created (TEXT - date/time string)
+- Expires (TEXT)
+- Requested_Source (TEXT)
+- Requested_Destination (TEXT)
+- Requested_Service (TEXT)
+- Requested_Source_NAT (TEXT)
+- Requested_Destination_NAT (TEXT)
+- Requested_Port_Translation (TEXT)
+- Change_Source (TEXT)
+- Change_Destination (TEXT)
+- Change_Service (TEXT)
+- Change_Source_NAT (TEXT)
+- Change_Destination_NAT (TEXT)
+- Translated_Destination (TEXT)
+- Translated_Service (TEXT)
+- Dependent_application (TEXT)
+- Permanent_Rule (TEXT)
+- ZONE (TEXT)
+- Created_op (TEXT)
+- Expires_op (TEXT)
+
+# RULES FOR SQL GENERATION:
+1. Output ONLY the raw SQL query — no reasoning, no explanations.
+2. Use correct MySQL syntax (e.g., SELECT ... FROM ... WHERE ...).
+3. Use `LIKE '%value%'` for text filters.
+4. Use `Far_Id = 123` for exact numeric match — no quotes for numbers.
+5. Use `STR_TO_DATE('YYYY-MM-DD', '%Y-%m-%d')` for date comparisons if needed.
+6. ALWAYS add `LIMIT 50` unless query uses COUNT.
+7. NEVER return anything other than the SQL.
+
+# EXAMPLES:
+SELECT * FROM FarDetailsAll WHERE Far_Id = 175 LIMIT 50;
+SELECT Far_Id, Status FROM FarDetailsAll WHERE Status LIKE '%resolved%' LIMIT 50;
+SELECT COUNT(*) FROM FarDetailsAll WHERE ZONE LIKE '%UAT%';
+
+# QUESTION:
+make this clean sql query select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set. LIMIT 50
+
+DEBUG - Raw SQL from LLM: 'SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5;'
+DEBUG - Raw SQL input: 'SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5;'
+DEBUG - Extracted SELECT: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5
+DEBUG - SQL before field processing: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5
+DEBUG - Final cleaned SQL: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5
+DEBUG - Final SQL after cleaning: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5
+DEBUG - Validating SQL: 'select * from fardetailsall where far_id = 272894 limit 5'
+DEBUG - SQL validation: starts_with_select=True, has_dangerous_ops=False, is_descriptive=False, final_valid=True
+DEBUG - Executing SQL: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5
+DEBUG - Query result count: 1
+✅ Query processing complete.
+DEBUG - Executing SQL: select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set. LIMIT 50
+✅ Query processing complete.
+---------
+❌ Database Error: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '(`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only thre' at line 1")
+SQL Query: select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set. LIMIT 50
+Original LLM output: "Since the question is asking to select all columns (`*`) from `FarDetailsAll` where `Far_Id` equals 272894, but there are only three rows in the table with IDs 175, 186, and 187, I will modify the query to return an empty result set.\n\nSQLQuery: SELECT * FROM FarDetailsAll WHERE Far_Id = 272894 LIMIT 5\n\nNote that I've used `LIMIT 5` instead of `50`, as there are only three rows in the table with IDs less than or equal to 187."
+Please check the query syntax and try again.
+after output
+
