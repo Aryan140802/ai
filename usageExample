@@ -1,74 +1,9 @@
-#!/usr/bin/env python3
-"""
-Complete Usage Example
-Demonstrates how to use the modular AI Assistant with different handlers
-"""
-
-from main_coordinator import AIAssistantCoordinator
-
-def demonstrate_handler_usage():
-    """Demonstrate how different handlers work with various queries"""
-    
-    print("🚀 AI Assistant Handler Demonstration")
-    print("=" * 50)
-    
-    # Initialize coordinator
-    coordinator = AIAssistantCoordinator()
-    
-    if not coordinator.initialize():
-        print("❌ Failed to initialize coordinator")
-        return
-    
-    # Test queries for each handler type
-    test_scenarios = [
-        {
-            "category": "Team Database Queries",
-            "icon": "👥",
-            "queries": [
-                "Show all employees in Portal team",
-                "Find user named John Smith", 
-                "Count total staff members",
-                "List employees in EIS project"
-            ],
-            "expected_handler": "team",
-            "dataset": "UserMaster table in EIS database"
-        },
-        {
-            "category": "Process Database Queries", 
-            "icon": "⚙️",
-            "queries": [
-                "Which process uses maximum memory?",
-                "Show FAR details sorted by CPU usage",
-                "List all processes with PID greater than 1000",
-                "Find processes consuming most resources"
-            ],
-            "expected_handler": "process",
-            "dataset": "FarDetailsAll table in EIS_n database"
-        },
-        {
-            "category": "System Monitoring Queries",
-            "icon": "🖥️", 
-            "queries": [
-                "Show current CPU usage",
-                "Check system memory status",
-                "Display disk space information",
-                "What's the system uptime?"
-            ],
-            "expected_handler": "system",
-            "dataset": "System log files and real-time commands"
-        },
-        {
-            "category": "General AI Queries",
-            "icon": "🤖",
-            "queries": [
-                "What is a database?",
-                "Explain how SQL works",
-                "Hello, how are you?",
-                "Calculate 25 * 4 + 10"
-            ],
-            "expected_handler": "general", 
-            "dataset": "Knowledge base and LLM responses"
-        }
-    ]
-    
-    # Demonstrate each
++--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
+| Far_Id | Subject                                                 | Status   | Created             | Expires    | Requested_Source                                          | Requested_Destination                                       | Requested_Service                     | Requested_Source_NAT | Requested_Destination_NAT | Requested_Port_Translation | Change_Source                                             | Change_Destination            | Change_Service     | Change_Source_NAT | Change_Destination_NAT | Translated_Destination       | Translated_Service | Dependent_application                                                              | Permanent_Rule | ZONE | Created_op | Expires_op |
++--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
+|    175 | Connection  between EIS PROD/DR and CRM PROD/DR Servers | rejected | 2020-03-02 18:57:19 | 2020-03-11 | 10.176.1.96 - 10.176.1.103,10.191.171.96 - 10.191.171.103 | 10.189.192.52, 10.209.160.180,10.209.160.180, 10.189.192.52 | https                                 |                      |                           |                            | 10.176.1.96 - 10.176.1.103,10.191.171.96 - 10.191.171.103 | 10.189.192.52, 10.209.160.180 | tcp/443            |                   |                        | 10.189.192.52,10.209.160.180 | tcp/443            | CRM                                                                                | No             | PROD | NULL       | NULL       |
+|    186 | For Communication between EIS and DCMS servers for IVR  | rejected | 2020-03-03 13:25:25 |            | 10.191.172.44, 10.191.172.45,10.191.172.41                | 10.189.40.5-10.189.40.6                                     | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.44, 10.191.172.45,10.191.172.41                | 10.189.40.5-10.189.40.6       | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | CRM                                                                                | No             | UAT  | NULL       | NULL       |
+|    187 | For Communication between EIS and DCMS servers for IVR  | rejected | 2020-03-03 14:30:55 |            | 10.191.172.44, 10.191.172.45,10.191.172.41                | 10.189.40.5-10.189.40.6                                     | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.44, 10.191.172.45,10.191.172.41                | 10.189.40.5-10.189.40.6       | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | CRM                                                                                | No             | UAT  | NULL       | NULL       |
+|    254 | UAT FAR EIS DCMS                                        | resolved | 2020-03-05 11:43:05 | 2020-05-31 | 10.191.172.44-10.191.172.45,10.191.172.41                 | 10.189.40.6, 10.189.40.5,10.189.40.5, 10.189.40.6           | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.44-10.191.172.45,10.191.172.41                 | 10.189.40.5, 10.189.40.6      | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | UAT & UX, YONO 2.0 Department, CMP & SCFU, Mobile Banking, YONO Business, INB, ATM | No             | UAT  | NULL       | NULL       |
+|    487 | EIS-UAT                                                 | resolved | 2020-03-11 16:53:58 | 2020-05-10 | 10.0.13.160, 10.0.13.98                                   | 10.191.172.38, 10.191.172.35                                | TCP/8443, TCP/22                      |                      |                           |                            | 10.0.13.98, 10.0.13.160                                   | 10.191.172.35, 10.191.172.38  | tcp/22, tcp/8443   |                   |                        | 10.191.172.35,10.191.172.38  | tcp/22,tcp/8443    | EIS                                                                                | No             | UAT  | NULL       | NULL       |
++--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
