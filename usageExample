@@ -7,3 +7,29 @@
 |    254 | UAT FAR EIS DCMS                                        | resolved | 2020-03-05 11:43:05 | 2020-05-31 | 10.191.172.44-10.191.172.45,10.191.172.41                 | 10.189.40.6, 10.189.40.5,10.189.40.5, 10.189.40.6           | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.44-10.191.172.45,10.191.172.41                 | 10.189.40.5, 10.189.40.6      | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | UAT & UX, YONO 2.0 Department, CMP & SCFU, Mobile Banking, YONO Business, INB, ATM | No             | UAT  | NULL       | NULL       |
 |    487 | EIS-UAT                                                 | resolved | 2020-03-11 16:53:58 | 2020-05-10 | 10.0.13.160, 10.0.13.98                                   | 10.191.172.38, 10.191.172.35                                | TCP/8443, TCP/22                      |                      |                           |                            | 10.0.13.98, 10.0.13.160                                   | 10.191.172.35, 10.191.172.38  | tcp/22, tcp/8443   |                   |                        | 10.191.172.35,10.191.172.38  | tcp/22,tcp/8443    | EIS                                                                                | No             | UAT  | NULL       | NULL       |
 +--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
+| Field                      | Type     | Null | Key | Default | Extra |
++----------------------------+----------+------+-----+---------+-------+
+| Far_Id                     | int      | NO   | PRI | NULL    |       |
+| Subject                    | longtext | YES  |     | NULL    |       |
+| Status                     | longtext | NO   |     | NULL    |       |
+| Created                    | longtext | NO   |     | NULL    |       |
+| Expires                    | longtext | YES  |     | NULL    |       |
+| Requested_Source           | longtext | NO   |     | NULL    |       |
+| Requested_Destination      | longtext | NO   |     | NULL    |       |
+| Requested_Service          | longtext | NO   |     | NULL    |       |
+| Requested_Source_NAT       | longtext | YES  |     | NULL    |       |
+| Requested_Destination_NAT  | longtext | YES  |     | NULL    |       |
+| Requested_Port_Translation | longtext | YES  |     | NULL    |       |
+| Change_Source              | longtext | YES  |     | NULL    |       |
+| Change_Destination         | longtext | YES  |     | NULL    |       |
+| Change_Service             | longtext | YES  |     | NULL    |       |
+| Change_Source_NAT          | longtext | YES  |     | NULL    |       |
+| Change_Destination_NAT     | longtext | YES  |     | NULL    |       |
+| Translated_Destination     | longtext | YES  |     | NULL    |       |
+| Translated_Service         | longtext | YES  |     | NULL    |       |
+| Dependent_application      | longtext | YES  |     | NULL    |       |
+| Permanent_Rule             | longtext | YES  |     | NULL    |       |
+| ZONE                       | longtext | YES  |     | NULL    |       |
+| Created_op                 | longtext | YES  |     | NULL    |       |
+| Expires_op                 | longtext | YES  |     | NULL    |       |
++----------------------------+----------+------+-----+---------+-------+
