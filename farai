@@ -260,57 +260,17 @@ class FarDetailsAssistant:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
-    def build_enhanced_prompt(self, question: str) -> str:
-        """Build enhanced prompt with column information"""
-        column_details = "\n".join([f"- {col}: {desc}" for col, desc in COLUMN_INFO.items()])
-        
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        
-        # Special handling for FAR ID queries
-        if re.search(r"far[\s_]*id[\s_]*\d+", question.lower()) or re.search(r"id[\s_]*\d+", question.lower()):
-            # Extract the ID
-            id_match = re.search(r"(\d+)", question)
-            if id_match:
-                far_id = id_match.group(1)
-                return f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id} LIMIT 50"
-        
-        enhanced_prompt = f"""
-You are a SQL query generator. Generate ONLY the SQL query, no explanations or descriptions.
-
-Question: {question}
-
-DATABASE SCHEMA - FarDetailsAll table columns:
-{column_details}
-
-QUERY RULES:
-1. Generate ONLY the SQL query - no text before or after
-2. Always query from FarDetailsAll table
-3. For text searches: use LIKE '%value%' 
-4. For Far_Id: use exact match with = (no quotes for numbers)
-5. For dates: use STR_TO_DATE for comparisons
-6. Add LIMIT 50 unless it's a COUNT query
-
-EXAMPLES:
-SELECT * FROM FarDetailsAll WHERE Far_Id = 175 LIMIT 50
-SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Status LIKE '%active%' LIMIT 50
-SELECT COUNT(*) FROM FarDetailsAll WHERE Status LIKE '%resolved%'
-
-Generate the SQL query for: {question}
-"""
-        return enhanced_prompt
-
     def query_far_details(self, question: str) -> str:
         """Query FAR details database and always show results"""
         if not self.db_handler:
             return "❌ FAR Details database not available."
 
         try:
-            # Build enhanced prompt
-            enhanced_question = self.build_enhanced_prompt(question)
-            print(f"DEBUG - Enhanced prompt: {enhanced_question}")
+            # Use the question directly with the LLM chain
+            print(f"DEBUG - Original question: {question}")
 
-            # Generate the SQL query
-            raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
+            # Generate the SQL query using the standard chain
+            raw_sql = self.db_handler['chain'].invoke({"question": question})
             print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
             logger.info(f"Generated SQL: {raw_sql}")
 
