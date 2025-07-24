@@ -486,8 +486,11 @@ class FarDetailsAssistant:
 
     def process_question(self, question: str) -> str:
         """Process questions and return results"""
-        if not self.initialized and not self.initialize():
-            return "❌ FAR Details Assistant initialization failed. Please check database connection."
+        # Double-check initialization
+        if not self.initialized:
+            print("⚠️ Assistant not initialized, attempting to initialize...")
+            if not self.initialize():
+                return "❌ FAR Details Assistant initialization failed. Please check database connection."
 
         if is_dangerous(question):
             return "❌ Question blocked for security reasons."
@@ -505,8 +508,11 @@ class FarDetailsAssistant:
 
     def start_interactive_session(self, query):
         """Process single query and return result"""
-        if not self.initialize():
-            return "❌ Failed to initialize FAR Details Assistant. Check database connection."
+        # Ensure initialization happens first
+        if not self.initialized:
+            print("🔧 Initializing FAR Details Assistant...")
+            if not self.initialize():
+                return "❌ Failed to initialize FAR Details Assistant. Check database connection and configuration."
 
         try:
             if query.lower() in ['exit', 'quit', 'q']:
@@ -533,7 +539,18 @@ class FarDetailsAssistant:
 def Farmain(query):
     """Main function to process FAR queries"""
     print("🚀 Starting FAR Details Assistant...")
+    
+    # Create assistant instance
     assistant = FarDetailsAssistant()
+    
+    # Explicitly initialize the assistant
+    print("🔧 Initializing database connection...")
+    if not assistant.initialize():
+        return "❌ Failed to initialize FAR Details Assistant. Please check:\n• Database connection settings\n• Database server is running\n• Credentials are correct\n• Required tables exist"
+    
+    print("✅ Initialization successful!")
+    
+    # Process the query
     result = assistant.start_interactive_session(query)
     print("✅ Query processing complete.")
     return result
