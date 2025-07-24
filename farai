@@ -61,14 +61,52 @@ def is_dangerous(text: str) -> bool:
 
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Clean and fix SQL with proper handling for different column types"""
+    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
+    
+    # Handle case where LLM returns descriptive text instead of SQL
+    if "sql query" in raw_sql.lower() and "far_id" in raw_sql.lower():
+        # Try to extract the actual ID from the text
+        id_match = re.search(r"far[\s_]*id[\s_]*(\d+)", raw_sql.lower())
+        if id_match:
+            far_id = id_match.group(1)
+            sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
+            print(f"DEBUG - Extracted FAR ID {far_id}, generated SQL: {sql}")
+            return sql
+    
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1).strip()
+        print(f"DEBUG - Extracted from code block: {sql}")
     else:
+        # Remove any markdown formatting
         sql = re.sub(r"```", "", raw_sql)
-        sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
-        sql = sql.strip()
+        
+        # Look for SELECT statement more aggressively
+        select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
+        if select_match:
+            sql = select_match.group(1).strip()
+            print(f"DEBUG - Extracted SELECT: {sql}")
+        else:
+            # Try to find SQL pattern starting with SELECT
+            sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+            sql = sql.strip()
+    
+    # If we still don't have a proper SQL query, try to construct one
+    if not sql.upper().strip().startswith('SELECT'):
+        print(f"DEBUG - No valid SELECT found, trying to construct from: {raw_sql}")
+        
+        # Check if it's asking for a specific FAR ID
+        far_id_match = re.search(r"(\d+)", raw_sql)
+        if far_id_match and "far" in raw_sql.lower():
+            far_id = far_id_match.group(1)
+            sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
+            print(f"DEBUG - Constructed FAR ID query: {sql}")
+        else:
+            print(f"DEBUG - Could not construct valid SQL from: {raw_sql}")
+            return raw_sql  # Return as-is and let validation catch it
+
+    print(f"DEBUG - SQL before field processing: {sql}")
 
     # Don't convert everything to LIKE - be smart about it
     # Only convert text fields to LIKE, keep IDs and dates as exact matches
@@ -96,6 +134,7 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
         sql += " LIMIT 50"
     
+    print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
 def format_query_results(result: List[tuple], columns: Optional[List[str]] = None) -> str:
@@ -146,9 +185,22 @@ def format_query_results(result: List[tuple], columns: Optional[List[str]] = Non
 def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
     sql_clean = sql.strip().lower()
-    # Must start with SELECT and not contain dangerous operations
-    return (sql_clean.startswith('select') and 
-            not any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']))
+    print(f"DEBUG - Validating SQL: {repr(sql_clean)}")
+    
+    # Check if it starts with SELECT
+    starts_with_select = sql_clean.startswith('select')
+    
+    # Check for dangerous operations
+    has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
+    
+    # Check if it's just descriptive text
+    is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
+    
+    is_valid = starts_with_select and not has_dangerous_ops and not is_descriptive
+    
+    print(f"DEBUG - SQL validation: starts_with_select={starts_with_select}, has_dangerous_ops={has_dangerous_ops}, is_descriptive={is_descriptive}, final_valid={is_valid}")
+    
+    return is_valid
 
 class FarDetailsAssistant:
     def __init__(self):
@@ -214,29 +266,36 @@ class FarDetailsAssistant:
         
         current_date = datetime.now().strftime('%Y-%m-%d')
         
+        # Special handling for FAR ID queries
+        if re.search(r"far[\s_]*id[\s_]*\d+", question.lower()) or re.search(r"id[\s_]*\d+", question.lower()):
+            # Extract the ID
+            id_match = re.search(r"(\d+)", question)
+            if id_match:
+                far_id = id_match.group(1)
+                return f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id} LIMIT 50"
+        
         enhanced_prompt = f"""
+You are a SQL query generator. Generate ONLY the SQL query, no explanations or descriptions.
+
 Question: {question}
 
 DATABASE SCHEMA - FarDetailsAll table columns:
 {column_details}
 
-IMPORTANT QUERY RULES:
-1. Always query from the FarDetailsAll table
-2. For text searches (Subject, Status, etc.): use LIKE '%value%' 
-3. For exact ID matches: use Far_Id = value (no quotes for numbers)
-4. For date comparisons: use STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s') for proper date handling
-5. Current date is {current_date}
-6. Do NOT add LIMIT 5 or very small limits - use LIMIT 50 or higher for good results
-7. Include relevant columns in SELECT based on the question
+QUERY RULES:
+1. Generate ONLY the SQL query - no text before or after
+2. Always query from FarDetailsAll table
+3. For text searches: use LIKE '%value%' 
+4. For Far_Id: use exact match with = (no quotes for numbers)
+5. For dates: use STR_TO_DATE for comparisons
+6. Add LIMIT 50 unless it's a COUNT query
 
-EXAMPLE QUERIES:
-- "SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Status LIKE '%active%' LIMIT 50"
-- "SELECT * FROM FarDetailsAll WHERE Far_Id = 175"  
-- "SELECT Far_Id, Subject, Expires FROM FarDetailsAll WHERE STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s') > NOW() LIMIT 50"
-- "SELECT COUNT(*) FROM FarDetailsAll WHERE Status LIKE '%resolved%'"
-- "SELECT Far_Id, Subject, Status, ZONE FROM FarDetailsAll WHERE Subject LIKE '%firewall%' AND ZONE LIKE '%PROD%' LIMIT 50"
+EXAMPLES:
+SELECT * FROM FarDetailsAll WHERE Far_Id = 175 LIMIT 50
+SELECT Far_Id, Subject, Status FROM FarDetailsAll WHERE Status LIKE '%active%' LIMIT 50
+SELECT COUNT(*) FROM FarDetailsAll WHERE Status LIKE '%resolved%'
 
-Generate a proper SQL query for the question above:
+Generate the SQL query for: {question}
 """
         return enhanced_prompt
 
@@ -248,24 +307,29 @@ Generate a proper SQL query for the question above:
         try:
             # Build enhanced prompt
             enhanced_question = self.build_enhanced_prompt(question)
+            print(f"DEBUG - Enhanced prompt: {enhanced_question}")
 
             # Generate the SQL query
             raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
+            print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
             logger.info(f"Generated SQL: {raw_sql}")
 
             # Clean and fix the SQL
             sql = clean_and_fix_sql(raw_sql)
+            print(f"DEBUG - Final SQL after cleaning: {sql}")
             logger.info(f"Cleaned SQL: {sql}")
 
             # Validate query safety
             if not is_select_query(sql):
-                return "❌ Error: Only SELECT queries are allowed for security reasons."
+                return f"❌ Error: Invalid query generated. Raw output was: {repr(raw_sql)}\nCleaned to: {sql}\nOnly SELECT queries are allowed."
 
             # Execute the query
             with self.db_handler['connection'].cursor() as cursor:
                 try:
+                    print(f"DEBUG - Executing SQL: {sql}")
                     cursor.execute(sql)
                     result = cursor.fetchall()
+                    print(f"DEBUG - Query result count: {len(result)}")
 
                     # Get column names
                     columns = list(result[0].keys()) if result and isinstance(result[0], dict) else None
@@ -305,12 +369,14 @@ Generate a proper SQL query for the question above:
                 except pymysql.Error as db_error:
                     error_msg = f"❌ Database Error: {str(db_error)}\n"
                     error_msg += f"SQL Query: {sql}\n"
+                    error_msg += f"Original LLM output: {repr(raw_sql)}\n"
                     error_msg += "Please check the query syntax and try again."
                     logger.error(f"Database error: {db_error}\nSQL: {sql}")
                     return error_msg
 
         except Exception as e:
             error_msg = f"❌ Error processing request: {str(e)}\n"
+            error_msg += f"Raw LLM output: {repr(raw_sql) if 'raw_sql' in locals() else 'N/A'}\n"
             error_msg += "Please try rephrasing your question."
             logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
             return error_msg
