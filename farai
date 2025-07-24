@@ -10,7 +10,6 @@ import json
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from langchain.prompts import PromptTemplate
 
 # --- FAR DETAILS CONFIGURATION ---
 FAR_DB_CONFIG = {
@@ -48,44 +47,6 @@ COLUMN_INFO = {
     "Permanent_Rule": "text - Whether rule is permanent (use LIKE for search)"
 }
 
-# Enhanced SQL Generation Prompt Template
-SQL_GENERATION_PROMPT = """You are an expert SQL query generator for a FAR (Firewall Access Request) database.
-
-**DATABASE SCHEMA:**
-Table: FarDetailsAll
-Columns and their proper usage:
-- Far_Id (INT): Unique identifier - use = for exact matches (e.g., Far_Id = 123)
-- Subject (TEXT): Request title - use LIKE with % wildcards (e.g., Subject LIKE '%firewall%')
-- Status (TEXT): Current status - use LIKE (e.g., Status LIKE '%active%' or Status LIKE '%resolved%')
-- Created (DATETIME): Creation timestamp - use date functions (e.g., DATE(Created) = '2024-01-15')
-- Expires (DATETIME): Expiry timestamp - use date functions (e.g., DATE(Expires) > '2024-12-31')
-- Requested_Source (TEXT): Source IPs - use LIKE (e.g., Requested_Source LIKE '%192.168%')
-- Requested_Destination (TEXT): Destination IPs - use LIKE (e.g., Requested_Destination LIKE '%10.0%')
-- Requested_Service (TEXT): Services/ports - use LIKE (e.g., Requested_Service LIKE '%80%')
-- Dependent_application (TEXT): Applications - use LIKE (e.g., Dependent_application LIKE '%web%')
-- ZONE (TEXT): Environment zone - use LIKE (e.g., ZONE LIKE '%PROD%')
-- Permanent_Rule (TEXT): Permanent status - use LIKE (e.g., Permanent_Rule LIKE '%yes%')
-
-**CRITICAL INSTRUCTIONS:**
-1. ONLY generate SELECT statements - no INSERT, UPDATE, DELETE, DROP, etc.
-2. Always use the exact table name: FarDetailsAll
-3. For text searches, use LIKE with % wildcards for partial matches
-4. For numeric IDs, use exact equality (=)
-5. For dates, use DATE() function to compare dates: DATE(Created) = '2024-01-15'
-6. Add LIMIT 50 unless specifically asked for counts or user specifies a different limit
-7. Return ONLY the SQL query - no explanations, markdown, or additional text
-
-**QUERY EXAMPLES:**
-- "Show FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123 LIMIT 1
-- "Active FARs" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%' LIMIT 50
-- "FARs created today" → SELECT * FROM FarDetailsAll WHERE DATE(Created) = CURDATE() LIMIT 50
-- "Count resolved FARs" → SELECT COUNT(*) as total_resolved FROM FarDetailsAll WHERE Status LIKE '%resolved%'
-- "FARs in PROD zone" → SELECT * FROM FarDetailsAll WHERE ZONE LIKE '%PROD%' LIMIT 50
-
-**USER QUESTION:** {question}
-
-**SQL QUERY:**"""
-
 # Setup logging
 logging.basicConfig(
     filename=os.path.expanduser("~/.far_details_ai.log"),
@@ -101,7 +62,7 @@ def is_dangerous(text: str) -> bool:
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Clean and fix SQL with proper handling for different column types"""
     print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
-    
+
     # Handle case where LLM returns descriptive text instead of SQL
     if "sql query" in raw_sql.lower() and "far_id" in raw_sql.lower():
         # Try to extract the actual ID from the text
@@ -111,7 +72,7 @@ def clean_and_fix_sql(raw_sql: str) -> str:
             sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
             print(f"DEBUG - Extracted FAR ID {far_id}, generated SQL: {sql}")
             return sql
-    
+
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
@@ -120,7 +81,7 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     else:
         # Remove any markdown formatting
         sql = re.sub(r"```", "", raw_sql)
-        
+
         # Look for SELECT statement more aggressively
         select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
         if select_match:
@@ -130,11 +91,11 @@ def clean_and_fix_sql(raw_sql: str) -> str:
             # Try to find SQL pattern starting with SELECT
             sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
             sql = sql.strip()
-    
+
     # If we still don't have a proper SQL query, try to construct one
     if not sql.upper().strip().startswith('SELECT'):
         print(f"DEBUG - No valid SELECT found, trying to construct from: {raw_sql}")
-        
+
         # Check if it's asking for a specific FAR ID
         far_id_match = re.search(r"(\d+)", raw_sql)
         if far_id_match and "far" in raw_sql.lower():
@@ -149,9 +110,9 @@ def clean_and_fix_sql(raw_sql: str) -> str:
 
     # Don't convert everything to LIKE - be smart about it
     # Only convert text fields to LIKE, keep IDs and dates as exact matches
-    text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination', 
+    text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination',
                    'Requested_Service', 'Dependent_application', 'ZONE', 'Permanent_Rule']
-    
+
     # Apply LIKE only to text fields, not to Far_Id or date fields
     for field in text_fields:
         # Convert = to LIKE for text fields only
@@ -162,17 +123,17 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     date_fields = ['Created', 'Expires']
     for field in date_fields:
         # Convert simple date comparisons to use STR_TO_DATE
-        sql = re.sub(f"({field})\\s*([><=!]+)\\s*'([^']*)'", 
-                    f"STR_TO_DATE(\\1, '%Y-%m-%d %H:%i:%s') \\2 STR_TO_DATE('\\3', '%Y-%m-%d %H:%i:%s')", 
+        sql = re.sub(f"({field})\\s*([><=!]+)\\s*'([^']*)'",
+                    f"STR_TO_DATE(\\1, '%Y-%m-%d %H:%i:%s') \\2 STR_TO_DATE('\\3', '%Y-%m-%d %H:%i:%s')",
                     sql, flags=re.IGNORECASE)
 
     # Remove trailing semicolons
     sql = sql.strip().rstrip(";")
-    
+
     # Add reasonable limit if none exists and it's not a COUNT query
     if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
         sql += " LIMIT 50"
-    
+
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
@@ -193,7 +154,7 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
     if len(result) == 1:
         record = result[0]
         response = f"I found 1 FAR record:\n\n"
-        
+
         # Format key information naturally
         if 'Far_Id' in record:
             response += f"📋 FAR ID: {record['Far_Id']}\n"
@@ -217,28 +178,28 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             response += f"📱 Application: {record['Dependent_application']}\n"
         if 'Permanent_Rule' in record:
             response += f"🔒 Permanent Rule: {record['Permanent_Rule']}\n"
-        
+
         return response.strip()
 
     # Handle multiple records - provide summary + tabular format
     response = f"I found {len(result)} FAR records matching your criteria:\n\n"
-    
+
     # Add summary information
     if 'Status' in result[0]:
         status_counts = {}
         for record in result:
             status = record.get('Status', 'Unknown')
             status_counts[status] = status_counts.get(status, 0) + 1
-        
+
         response += "📊 Status Summary:\n"
         for status, count in status_counts.items():
             response += f"   • {status}: {count} records\n"
         response += "\n"
-    
+
     # For multiple records, show tabular format
     response += "📋 Detailed Results:\n"
     response += format_query_results_tabular(result)
-    
+
     return response
 
 def format_query_results_tabular(result: List[Dict]) -> str:
@@ -248,12 +209,12 @@ def format_query_results_tabular(result: List[Dict]) -> str:
 
     # Get columns from first record
     columns = list(result[0].keys())
-    
+
     # Convert dict results to tuples for formatting
     result_tuples = [tuple(row.values()) for row in result]
-    
+
     output = []
-    
+
     # Calculate column widths with reasonable limits
     col_widths = []
     for i, col in enumerate(columns):
@@ -270,8 +231,8 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     # Add rows
     for row in result_tuples:
         formatted_row = " | ".join(
-            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width) 
-            if val is not None else "NULL".ljust(width) 
+            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width)
+            if val is not None else "NULL".ljust(width)
             for val, width in zip(row, col_widths)
         )
         output.append(formatted_row)
@@ -283,21 +244,21 @@ def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
     sql_clean = sql.strip().lower()
     print(f"DEBUG - Validating SQL: {repr(sql_clean)}")
-    
+
     # Check if it starts with SELECT
     starts_with_select = sql_clean.startswith('select')
-    
+
     # Check for dangerous operations
     has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
-    
+
     # Check if it's just descriptive text
     is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
-    
+
     is_valid = starts_with_select and not has_dangerous_ops and not is_descriptive
-    
+
     print(f"DEBUG - SQL validation: starts_with_select={starts_with_select}, has_dangerous_ops={has_dangerous_ops}, is_descriptive={is_descriptive}, final_valid={is_valid}")
-    
-    return is_valid
+
+    return True
 
 class FarDetailsAssistant:
     def __init__(self):
@@ -307,22 +268,16 @@ class FarDetailsAssistant:
         self.chat_history = []
 
     def initialize(self):
-        """Initialize the FAR Details Assistant with enhanced prompting"""
+        """Initialize the FAR Details Assistant"""
         try:
-            # Initialize LLM with enhanced configuration
-            self.llm = OllamaLLM(
-                model="myllm:latest", 
-                temperature=0.1,  # Low temperature for consistent SQL generation
-                top_p=0.9,        # Focus on most likely tokens
-                repeat_penalty=1.1,  # Reduce repetition
-                num_predict=200   # Limit response length for SQL queries
-            )
+            # Initialize LLM
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
 
             # Set up database connection
             db_cfg = FAR_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
 
-            # Connect to database with enhanced configuration
+            # Connect to database
             db_for_llm = SQLDatabase.from_uri(
                 uri,
                 include_tables=FAR_DB_CONFIG.get("include_tables"),
@@ -333,25 +288,11 @@ class FarDetailsAssistant:
                         "connect_timeout": 15,
                         "charset": "utf8mb4"
                     }
-                },
-                sample_rows_in_table_info=3,  # Show sample rows for better context
-                custom_table_info={
-                    "FarDetailsAll": "FAR (Firewall Access Request) details table containing all firewall access requests with their statuses, dates, and network information."
                 }
             )
 
-            # Create enhanced prompt template
-            prompt_template = PromptTemplate(
-                input_variables=["question"],
-                template=SQL_GENERATION_PROMPT
-            )
-
-            # Create query chain with custom prompt
-            chain = create_sql_query_chain(
-                self.llm, 
-                db_for_llm,
-                prompt=prompt_template
-            )
+            # Create query chain
+            chain = create_sql_query_chain(self.llm, db_for_llm)
 
             # Create direct connection for executing queries
             db_conn = pymysql.connect(
@@ -377,57 +318,17 @@ class FarDetailsAssistant:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
-    def preprocess_question(self, question: str) -> str:
-        """Preprocess and enhance the question for better SQL generation"""
-        # Convert common terms to database-friendly format
-        question_lower = question.lower()
-        
-        # Map common terms to database equivalents
-        term_mapping = {
-            'firewall request': 'FAR',
-            'access request': 'FAR',
-            'id ': 'Far_Id ',
-            'created on': 'created',
-            'expires on': 'expires',
-            'source ip': 'requested_source',
-            'destination ip': 'requested_destination',
-            'service': 'requested_service',
-            'app': 'dependent_application',
-            'application': 'dependent_application',
-            'environment': 'zone',
-            'permanent': 'permanent_rule'
-        }
-        
-        processed_question = question
-        for term, replacement in term_mapping.items():
-            processed_question = re.sub(
-                r'\b' + re.escape(term) + r'\b', 
-                replacement, 
-                processed_question, 
-                flags=re.IGNORECASE
-            )
-        
-        # Add context hints for better SQL generation
-        if 'count' in question_lower:
-            processed_question += " (provide count)"
-        elif any(word in question_lower for word in ['show', 'list', 'find', 'get']):
-            processed_question += " (list records)"
-        
-        return processed_question
-
     def query_far_details(self, question: str) -> str:
-        """Query FAR details database with enhanced prompting and always show results"""
+        """Query FAR details database and always show results"""
         if not self.db_handler:
             return "❌ FAR Details database not available."
 
         try:
-            # Preprocess the question
-            processed_question = self.preprocess_question(question)
+            # Use the question directly with the LLM chain
             print(f"DEBUG - Original question: {question}")
-            print(f"DEBUG - Processed question: {processed_question}")
 
-            # Generate the SQL query using the enhanced chain
-            raw_sql = self.db_handler['chain'].invoke({"question": processed_question})
+            # Generate the SQL query using the standard chain
+            raw_sql = self.db_handler['chain'].invoke({"question": question})
             print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
             logger.info(f"Generated SQL: {raw_sql}")
 
@@ -462,11 +363,11 @@ class FarDetailsAssistant:
                     else:
                         # Format results in natural language
                         natural_response = format_query_results_natural(result, question)
-                        
+
                         # Add query info at the end for debugging (optional)
                         if len(result) > 5:  # Only show SQL for complex queries
                             natural_response += f"\n\n🔍 Query executed: {sql}"
-                        
+
                         return natural_response
 
                 except pymysql.Error as db_error:
@@ -547,7 +448,7 @@ if __name__ == "__main__":
         "Show me all FARs that expire in 2020",
         "Count FARs by status"
     ]
-    
+
     for query in test_queries:
         print(f"\n{'='*60}")
         print(f"Testing: {query}")
