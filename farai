@@ -137,50 +137,108 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
-def format_query_results(result: List[tuple], columns: Optional[List[str]] = None) -> str:
-    """Format database results for display with better formatting"""
+def format_query_results_natural(result: List[Dict], question: str) -> str:
+    """Format database results in natural language"""
+    if not result:
+        return "I couldn't find any FAR records matching your criteria."
+
+    # Handle single value results (like COUNT)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        if "count" in question.lower():
+            return f"There are {value} FAR records matching your criteria."
+        else:
+            return f"The result is: {value}"
+
+    # Handle single record
+    if len(result) == 1:
+        record = result[0]
+        response = f"I found 1 FAR record:\n\n"
+        
+        # Format key information naturally
+        if 'Far_Id' in record:
+            response += f"📋 FAR ID: {record['Far_Id']}\n"
+        if 'Subject' in record:
+            response += f"📝 Subject: {record['Subject']}\n"
+        if 'Status' in record:
+            response += f"🔄 Status: {record['Status']}\n"
+        if 'Created' in record:
+            response += f"📅 Created: {record['Created']}\n"
+        if 'Expires' in record:
+            response += f"⏰ Expires: {record['Expires']}\n"
+        if 'ZONE' in record:
+            response += f"🌐 Zone: {record['ZONE']}\n"
+        if 'Requested_Source' in record:
+            response += f"🔗 Source: {record['Requested_Source']}\n"
+        if 'Requested_Destination' in record:
+            response += f"🎯 Destination: {record['Requested_Destination']}\n"
+        if 'Requested_Service' in record:
+            response += f"⚙️ Service: {record['Requested_Service']}\n"
+        if 'Dependent_application' in record:
+            response += f"📱 Application: {record['Dependent_application']}\n"
+        if 'Permanent_Rule' in record:
+            response += f"🔒 Permanent Rule: {record['Permanent_Rule']}\n"
+        
+        return response.strip()
+
+    # Handle multiple records - provide summary + tabular format
+    response = f"I found {len(result)} FAR records matching your criteria:\n\n"
+    
+    # Add summary information
+    if 'Status' in result[0]:
+        status_counts = {}
+        for record in result:
+            status = record.get('Status', 'Unknown')
+            status_counts[status] = status_counts.get(status, 0) + 1
+        
+        response += "📊 Status Summary:\n"
+        for status, count in status_counts.items():
+            response += f"   • {status}: {count} records\n"
+        response += "\n"
+    
+    # For multiple records, show tabular format
+    response += "📋 Detailed Results:\n"
+    response += format_query_results_tabular(result)
+    
+    return response
+
+def format_query_results_tabular(result: List[Dict]) -> str:
+    """Format database results in tabular format"""
     if not result:
         return "No records found."
 
-    # If single value result (like COUNT), return it directly
-    if len(result) == 1 and len(result[0]) == 1:
-        return f"Result: {result[0][0]}"
+    # Get columns from first record
+    columns = list(result[0].keys())
+    
+    # Convert dict results to tuples for formatting
+    result_tuples = [tuple(row.values()) for row in result]
+    
+    output = []
+    
+    # Calculate column widths with reasonable limits
+    col_widths = []
+    for i, col in enumerate(columns):
+        max_content_width = max(len(str(row[i])) for row in result_tuples) if result_tuples else 0
+        col_width = min(max(len(str(col)), max_content_width), 60)  # Max 60 chars per column
+        col_widths.append(col_width)
 
-    # Format as table if we have column names
-    if columns:
-        output = []
-        
-        # Calculate column widths with reasonable limits
-        col_widths = []
-        for i, col in enumerate(columns):
-            max_content_width = max(len(str(row[i])) for row in result) if result else 0
-            col_width = min(max(len(str(col)), max_content_width), 60)  # Max 60 chars per column
-            col_widths.append(col_width)
+    # Build header
+    header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
+    separator = "-+-".join("-" * width for width in col_widths)
+    output.append(header)
+    output.append(separator)
 
-        # Build header
-        header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
-        separator = "-+-".join("-" * width for width in col_widths)
-        output.append(header)
-        output.append(separator)
+    # Add rows
+    for row in result_tuples:
+        formatted_row = " | ".join(
+            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width) 
+            if val is not None else "NULL".ljust(width) 
+            for val, width in zip(row, col_widths)
+        )
+        output.append(formatted_row)
 
-        # Add rows
-        for row in result:
-            formatted_row = " | ".join(
-                (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width) 
-                if val is not None else "NULL".ljust(width) 
-                for val, width in zip(row, col_widths)
-            )
-            output.append(formatted_row)
-
-        output.append(f"\nTotal records: {len(result)}")
-        return "\n".join(output)
-
-    # Fallback format without column names
-    rows = []
-    for row in result:
-        rows.append(" | ".join(str(val) if val is not None else "NULL" for val in row))
-    rows.append(f"\nTotal records: {len(result)}")
-    return "\n".join(rows)
+    output.append(f"\nTotal records: {len(result)}")
+    return "\n".join(output)
 
 def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
@@ -291,40 +349,26 @@ class FarDetailsAssistant:
                     result = cursor.fetchall()
                     print(f"DEBUG - Query result count: {len(result)}")
 
-                    # Get column names
-                    columns = list(result[0].keys()) if result and isinstance(result[0], dict) else None
-
-                    # Convert dict results to tuples for formatting
-                    if columns:
-                        result_tuples = [tuple(row.values()) for row in result]
-                    else:
-                        result_tuples = result
-
                     logger.info(f"Query returned {len(result)} rows")
 
-                    # Format output - ALWAYS show the query results
-                    output_parts = []
-                    output_parts.append("=" * 80)
-                    output_parts.append("📊 QUERY RESULTS")
-                    output_parts.append("=" * 80)
-                    output_parts.append(f"SQL Query: {sql}")
-                    output_parts.append(f"Records Found: {len(result)}")
-                    output_parts.append("")
-
+                    # Format output in natural language
                     if not result:
-                        output_parts.append("No FAR records found matching your criteria.")
-                        output_parts.append("\n💡 Try:")
-                        output_parts.append("- Using broader search terms")
-                        output_parts.append("- Checking if the data exists in the database")
-                        output_parts.append("- Modifying date ranges or status values")
+                        response = "I couldn't find any FAR records matching your criteria.\n\n"
+                        response += "💡 Suggestions:\n"
+                        response += "• Try using broader search terms\n"
+                        response += "• Check if the data exists in the database\n"
+                        response += "• Modify date ranges or status values\n"
+                        response += f"\n🔍 Query executed: {sql}"
+                        return response
                     else:
-                        # Format and display the actual results
-                        formatted_results = format_query_results(result_tuples, columns)
-                        output_parts.append(formatted_results)
-
-                    output_parts.append("=" * 80)
-                    
-                    return "\n".join(output_parts)
+                        # Format results in natural language
+                        natural_response = format_query_results_natural(result, question)
+                        
+                        # Add query info at the end for debugging (optional)
+                        if len(result) > 5:  # Only show SQL for complex queries
+                            natural_response += f"\n\n🔍 Query executed: {sql}"
+                        
+                        return natural_response
 
                 except pymysql.Error as db_error:
                     error_msg = f"❌ Database Error: {str(db_error)}\n"
