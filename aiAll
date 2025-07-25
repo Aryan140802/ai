@@ -1,4 +1,49 @@
-/tmp/ai_sys.py:45: LangChainDeprecationWarning: The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use :meth:`~RunnableSequence, e.g., `prompt | llm`` instead.
-  chain = LLMChain(llm=self.llm, prompt=prompt_template)
-/tmp/ai_sys.py:46: LangChainDeprecationWarning: The method `Chain.run` was deprecated in langchain 0.1.0 and will be removed in 1.0. Use :meth:`~invoke` instead.
-  response = chain.run(report=report_text, question=question)
+# Improved clean_and_fix_sql function:
+def clean_and_fix_sql(raw_sql: str) -> str:
+    """Clean and fix SQL with minimal processing to avoid hallucination"""
+    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
+    
+    # Remove any markdown or code blocks
+    sql = re.sub(r'```sql\s*|\s*```', '', raw_sql, flags=re.IGNORECASE)
+    sql = sql.strip()
+    
+    # If multiple lines, try to extract the SELECT statement
+    lines = sql.split('\n')
+    for line in lines:
+        line = line.strip()
+        if line.upper().startswith('SELECT'):
+            sql = line
+            break
+    
+    # Remove any trailing period or extra characters
+    sql = re.sub(r'[.]+$', '', sql)
+    
+    # Ensure it ends with semicolon
+    if not sql.endswith(';'):
+        sql += ';'
+    
+    print(f"DEBUG - Cleaned SQL: {sql}")
+    return sql
+
+# Improved validation function:
+def is_select_query(sql: str) -> bool:
+    """Strict validation for SELECT queries only"""
+    sql_clean = sql.strip().lower()
+    
+    # Must start with select
+    if not sql_clean.startswith('select'):
+        print(f"DEBUG - Not a SELECT query: {sql_clean[:50]}")
+        return False
+    
+    # Check for dangerous keywords
+    dangerous = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate', 'exec', 'sp_']
+    if any(keyword in sql_clean for keyword in dangerous):
+        print(f"DEBUG - Contains dangerous keywords")
+        return False
+    
+    # Check for table name
+    if 'fardetailsall' not in sql_clean:
+        print(f"DEBUG - Missing table name FarDetailsAll")
+        return False
+    
+    return True
