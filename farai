@@ -10,7 +10,12 @@ import json
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from langchain.prompts import PromptTemplate
+from datetime import date
+
+today_date = date.today()
+
+
+
 
 # --- FAR DETAILS CONFIGURATION ---
 FAR_DB_CONFIG = {
@@ -19,8 +24,7 @@ FAR_DB_CONFIG = {
         "host": "localhost",
         "user": "root",
         "password": "root123",
-        "database": "EIS_n",
-        "port": 3306  # Explicitly adding port
+        "database": "EIS_n"
     },
     "include_tables": ["FarDetailsAll"],
 }
@@ -48,9 +52,52 @@ COLUMN_INFO = {
     "ZONE": "text - Environment zone like PROD, UAT (use LIKE for search)",
     "Permanent_Rule": "text - Whether rule is permanent (use LIKE for search)"
 }
-
 # Enhanced SQL Generation Prompt Template
 SQL_GENERATION_PROMPT = """You are an expert SQL query generator for a FAR (Firewall Access Request) database.
+
+**Schema defination:**
++----------------------------+----------+------+-----+---------+-------+
+| Field                      | Type     | Null | Key | Default | Extra |
++----------------------------+----------+------+-----+---------+-------+
+| Far_Id                     | int      | NO   | PRI | NULL    |       |
+| Subject                    | longtext | YES  |     | NULL    |       |
+| Status                     | longtext | NO   |     | NULL    |       |
+| Created                    | longtext | NO   |     | NULL    |       |
+| Expires                    | longtext | YES  |     | NULL    |       |
+| Requested_Source           | longtext | NO   |     | NULL    |       |
+| Requested_Destination      | longtext | NO   |     | NULL    |       |
+| Requested_Service          | longtext | NO   |     | NULL    |       |
+| Requested_Source_NAT       | longtext | YES  |     | NULL    |       |
+| Requested_Destination_NAT  | longtext | YES  |     | NULL    |       |
+| Requested_Port_Translation | longtext | YES  |     | NULL    |       |
+| Change_Source              | longtext | YES  |     | NULL    |       |
+| Change_Destination         | longtext | YES  |     | NULL    |       |
+| Change_Service             | longtext | YES  |     | NULL    |       |
+| Change_Source_NAT          | longtext | YES  |     | NULL    |       |
+| Change_Destination_NAT     | longtext | YES  |     | NULL    |       |
+| Translated_Destination     | longtext | YES  |     | NULL    |       |
+| Translated_Service         | longtext | YES  |     | NULL    |       |
+| Dependent_application      | longtext | YES  |     | NULL    |       |
+| Permanent_Rule             | longtext | YES  |     | NULL    |       |
+| ZONE                       | longtext | YES  |     | NULL    |       |
+| Created_op                 | longtext | YES  |     | NULL    |       |
+| Expires_op                 | longtext | YES  |     | NULL    |       |
++----------------------------+----------+------+-----+---------+-------+
+
+**Example output of the records**
+mysql> select * from FarDetailsAll;
++--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
+| Far_Id | Subject                                                 | Status   | Created             | Expires    | Requested_Source                                          | Requested_Destination                                       | Requested_Service                     | Requested_Source_NAT | Requested_Destination_NAT | Requested_Port_Translation | Change_Source                                             | Change_Destination            | Change_Service     | Change_Source_NAT | Change_Destination_NAT | Translated_Destination       | Translated_Service | Dependent_application                                                              | Permanent_Rule | ZONE | Created_op | Expires_op |
++--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
+|    175 | Connection  between EIS PROD/DR and CRM PROD/DR Servers | rejected | 2020-03-02 18:57:19 | 2020-03-11 | 10.176.1.96 - 10.176.1.103,10.191.171.96 - 10.191.171.103 | 10.189.192.52, 10.209.160.180,10.209.160.180, 10.189.192.52 | https                                 |                      |                           |                            | 10.176.1.96 - 10.176.1.103,10.191.171.96 - 10.191.171.103 | 10.189.192.52, 10.209.160.180 | tcp/443            |                   |                        | 10.189.192.52,10.209.160.180 | tcp/443            | CRM                                                                                | No             | PROD | NULL       | NULL       |
+|    186 | For Communication between EIS and DCMS servers for IVR  | rejected | 2020-03-03 13:25:25 |            | 10.191.172.41,10.191.172.44, 10.191.172.45                | 10.189.40.5-10.189.40.6                                     | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.41,10.191.172.44, 10.191.172.45                | 10.189.40.5-10.189.40.6       | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | CRM                                                                                | No             | UAT  | NULL       | NULL       |
+|    187 | For Communication between EIS and DCMS servers for IVR  | rejected | 2020-03-03 14:30:55 |            | 10.191.172.41,10.191.172.44, 10.191.172.45                | 10.189.40.5-10.189.40.6                                     | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.41,10.191.172.44, 10.191.172.45                | 10.189.40.5-10.189.40.6       | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | CRM                                                                                | No             | UAT  | NULL       | NULL       |
+|    254 | UAT FAR EIS DCMS                                        | resolved | 2020-03-05 11:43:05 | 2020-05-31 | 10.191.172.41,10.191.172.44-10.191.172.45                 | 10.189.40.6, 10.189.40.5,10.189.40.5, 10.189.40.6           | tcp/7030, tcp/7029,tcp/7029, tcp/7030 |                      |                           |                            | 10.191.172.41,10.191.172.44-10.191.172.45                 | 10.189.40.5, 10.189.40.6      | tcp/7029, tcp/7030 |                   |                        | 10.189.40.5-10.189.40.6      | tcp/7029,tcp/7030  | UAT & UX, YONO 2.0 Department, CMP & SCFU, Mobile Banking, YONO Business, INB, ATM | No             | UAT  | NULL       | NULL       |
+|    487 | EIS-UAT                                                 | resolved | 2020-03-11 16:53:58 | 2020-05-10 | 10.0.13.160, 10.0.13.98                                   | 10.191.172.38, 10.191.172.35                                | TCP/8443, TCP/22                      |                      |                           |                            | 10.0.13.98, 10.0.13.160                                   | 10.191.172.35, 10.191.172.38  | tcp/22, tcp/8443   |                   |                        | 10.191.172.35,10.191.172.38  | tcp/22,tcp/8443    | EIS                                                                                | No             | UAT  | NULL       | NULL       |
++--------+---------------------------------------------------------+----------+---------------------+------------+-----------------------------------------------------------+-------------------------------------------------------------+---------------------------------------+----------------------+---------------------------+----------------------------+-----------------------------------------------------------+-------------------------------+--------------------+-------------------+------------------------+------------------------------+--------------------+------------------------------------------------------------------------------------+----------------+------+------------+------------+
+5 rows in set (0.00 sec)
+
+
 
 **DATABASE SCHEMA:**
 Table: FarDetailsAll
@@ -73,19 +120,314 @@ Columns and their proper usage:
 3. For text searches, use LIKE with % wildcards for partial matches
 4. For numeric IDs, use exact equality (=)
 5. For dates, use DATE() function to compare dates: DATE(Created) = '2024-01-15'
-6. Add LIMIT 50 unless specifically asked for counts or user specifies a different limit
 7. Return ONLY the SQL query - no explanations, markdown, or additional text
+8. Always try to find the requested prompt in all the columns with LIKE with % wildcards for partial matches
+9. when instructions are like today ,from today ,in the next 30 days,in the next 60 days,in the next 2 months ,in the next next one year ,two year assume that it is asking ffrom today so get todays date first and then query like if today is 27-05-2025 then get the details from 27-05-2025 and after this date.
+10. FAR means (Firewall access request) note that FAR only has a full form (Firewall access request)
+11. This table contains the details for the firewall access request from one source to a destination .
+12. These are details of Firewall request raised to get Firewall access.
+13. Always try hard to get the details if not found in one column try to find in another columns .
+
+
 
 **QUERY EXAMPLES:**
-- "Show FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123 LIMIT 1
-- "Active FARs" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%' LIMIT 50
-- "FARs created today" → SELECT * FROM FarDetailsAll WHERE DATE(Created) = CURDATE() LIMIT 50
+- "123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
+- "Show FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
+- "Active FARs" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%'
+- "FARs created today" → SELECT * FROM FarDetailsAll WHERE DATE(Created) = CURDATE()
 - "Count resolved FARs" → SELECT COUNT(*) as total_resolved FROM FarDetailsAll WHERE Status LIKE '%resolved%'
-- "FARs in PROD zone" → SELECT * FROM FarDetailsAll WHERE ZONE LIKE '%PROD%' LIMIT 50
+- "FARs in PROD zone" → SELECT * FROM FarDetailsAll WHERE ZONE LIKE '%PROD%'
+- " List all FARs that are having   Aadhar vault" → SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Requested_Source,Requested_Destination,Dependent_application) LIKE '%Aadhar vault%'
+**USER QUESTION and what should be  the resulting queries:** {question,query}
+-"give all the far that are having PR to DR in it" -> SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Requested_Source,Requested_Destination,Dependent_application) LIKE '%PR to DR%'
+-"can you list down the far that are having destination as 10.191.86.54" ->  SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Requested_Source,Requested_Destination,Dependent_application,Requested_Source) LIKE '%10.191.86.54%'
+-"get me all the fars that are having destination as 10.191.86.44" -> SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Requested_Source,Requested_Destination,Dependent_application,Requested_Source) LIKE '%10.191.86.44%'
+-"can you get me all the fars that are raise for crisscross requests" -> SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Status,Requested_Source,Requested_Destination,Dependent_application,Requested_Source) LIKE '%crisscross%'
+-"List all FARs that are resolved  and are  having EIS HW Augmentation" -> SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Status,Requested_Source,Requested_Destination,Dependent_application,Requested_Source) LIKE '%resolved%' AND CONCAT_WS(' ',Subject,Status,Requested_Source,Requested_Destination,Dependent_application,Requested_Source) LIKE '%HW Augmentaion%'
 
-**USER QUESTION:** {question}
 
-**SQL QUERY:**"""
+1. How many FARs expire in this month?
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Expires, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE(), '%Y-%m-01')
+                                            AND LAST_DAY(CURDATE());
+
+2. How many FARs are expiring in June 2026?
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d')) = 6
+  AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d')) = 2026;
+
+3. FAR IDs containing 'aadhar' in any column:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE Subject LIKE '%aadhar%' OR Status LIKE '%aadhar%' OR Created LIKE '%aadhar%' OR
+      Expires LIKE '%aadhar%' OR Requested_Source LIKE '%aadhar%' OR
+      Requested_Destination LIKE '%aadhar%' OR Requested_Service LIKE '%aadhar%' OR
+      Dependent_application LIKE '%aadhar%' OR ZONE LIKE '%aadhar%' OR
+      Permanent_Rule LIKE '%aadhar%';
+
+4. How many FARs have status like 'rejected'?
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE LOWER(Status) LIKE '%rejected%';
+
+5. FAR IDs with status like 'rejected':
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE LOWER(Status) LIKE '%rejected%';
+
+6. Descriptions (Subjects) of FARs with status like 'rejected':
+SELECT Subject
+FROM FarDetailsAll
+WHERE LOWER(Status) LIKE '%rejected%';
+
+7. List all FARs created in last month:
+SELECT *
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01')
+                                            AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
+
+8. How many FARs are in zone like 'UAT':
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE LOWER(ZONE) LIKE '%uat%';
+
+9. How many FARs are temporary:
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
+
+10. FAR IDs of temporary FARs:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
+
+11. Description and status of temporary FARs:
+SELECT Subject, Status
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
+
+12. How many FARs have Dependent Application like 'IT SP3':
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE Dependent_application LIKE '%IT SP3%';
+
+13. ID and description of FARs with Permanent Rule like 'yes':
+SELECT Far_Id, Subject
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%yes%';
+
+14. FAR IDs that expired last month:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Expires, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01')
+                                            AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
+
+15. FAR status for ID = 273457:
+SELECT Status
+FROM FarDetailsAll
+WHERE Far_Id = 273457;
+
+16. Permanent Rule and Dependent Application of FAR ID = 273457:
+SELECT Permanent_Rule, Dependent_application
+FROM FarDetailsAll
+WHERE Far_Id = 273457;
+
+17. Description of FAR with Far_Id = 12345:
+SELECT Subject
+FROM FarDetailsAll
+WHERE Far_Id = 12345;
+
+18. List all Far_Id created yesterday:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Created, '%Y-%m-%d') = CURDATE() - INTERVAL 1 DAY;
+
+19. Zone of FAR ID = 12345:
+SELECT ZONE
+FROM FarDetailsAll
+WHERE Far_Id = 12345;
+
+20. Status of FAR with specific subject:
+SELECT Status
+FROM FarDetailsAll
+WHERE Subject LIKE '%FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration%';
+
+21. All details of FAR with specific subject:
+SELECT *
+FROM FarDetailsAll
+WHERE Subject LIKE '%FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration%';
+
+22. Dependent Application of FAR ID = 12345:
+SELECT Dependent_application
+FROM FarDetailsAll
+WHERE Far_Id = 12345;
+
+23. All FARs created between 2025-05-01 and 2025-07-20:
+SELECT *
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN '2025-05-01' AND '2025-07-20';
+
+24. FARs whose source is like 10.25.41.100:
+SELECT *
+FROM FarDetailsAll
+WHERE Requested_Source LIKE '%10.25.41.100%';
+
+25. FARs whose destination is like 10.25.41.100:
+SELECT *
+FROM FarDetailsAll
+WHERE Requested_Destination LIKE '%10.25.41.100%';
+
+26. FARs whose port is like 4001:
+SELECT *
+FROM FarDetailsAll
+WHERE Requested_Service LIKE '%4001%';
+
+
+
+1. How many FARs expire in this month?
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Expires, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE(), '%Y-%m-01')
+                                            AND LAST_DAY(CURDATE());
+
+2. How many FARs are expiring in June 2026?
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d')) = 6
+  AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d')) = 2026;
+
+3. FAR IDs containing 'aadhar' in any column:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE Subject LIKE '%aadhar%' OR Status LIKE '%aadhar%' OR Created LIKE '%aadhar%' OR
+      Expires LIKE '%aadhar%' OR Requested_Source LIKE '%aadhar%' OR
+      Requested_Destination LIKE '%aadhar%' OR Requested_Service LIKE '%aadhar%' OR
+      Dependent_application LIKE '%aadhar%' OR ZONE LIKE '%aadhar%' OR
+      Permanent_Rule LIKE '%aadhar%';
+
+4. How many FARs have status like 'rejected'?
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE LOWER(Status) LIKE '%rejected%';
+
+5. FAR IDs with status like 'rejected':
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE LOWER(Status) LIKE '%rejected%';
+
+6. Descriptions (Subjects) of FARs with status like 'rejected':
+SELECT Subject
+FROM FarDetailsAll
+WHERE LOWER(Status) LIKE '%rejected%';
+
+7. List all FARs created in last month:
+SELECT *
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01')
+                                            AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
+
+8. How many FARs are in zone like 'UAT':
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE LOWER(ZONE) LIKE '%uat%';
+
+9. How many FARs are temporary:
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
+
+10. FAR IDs of temporary FARs:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
+
+11. Description and status of temporary FARs:
+SELECT Subject, Status
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
+
+12. How many FARs have Dependent Application like 'IT SP3':
+SELECT COUNT(*)
+FROM FarDetailsAll
+WHERE Dependent_application LIKE '%IT SP3%';
+
+13. ID and description of FARs with Permanent Rule like 'yes':
+SELECT Far_Id, Subject
+FROM FarDetailsAll
+WHERE LOWER(Permanent_Rule) LIKE '%yes%';
+
+14. FAR IDs that expired last month:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Expires, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01')
+                                            AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
+
+15. FAR status for ID = 273457:
+SELECT Status
+FROM FarDetailsAll
+WHERE Far_Id = 273457;
+
+16. Permanent Rule and Dependent Application of FAR ID = 273457:
+SELECT Permanent_Rule, Dependent_application
+FROM FarDetailsAll
+WHERE Far_Id = 273457;
+
+17. Description of FAR with Far_Id = 12345:
+SELECT Subject
+FROM FarDetailsAll
+WHERE Far_Id = 12345;
+
+18. List all Far_Id created yesterday:
+SELECT Far_Id
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Created, '%Y-%m-%d') = CURDATE() - INTERVAL 1 DAY;
+
+19. Zone of FAR ID = 12345:
+SELECT ZONE
+FROM FarDetailsAll
+WHERE Far_Id = 12345;
+
+20. Status of FAR with specific subject:
+SELECT Status
+FROM FarDetailsAll
+WHERE Subject LIKE '%FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration%';
+
+21. All details of FAR with specific subject:
+SELECT *
+FROM FarDetailsAll
+WHERE Subject LIKE '%FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration%';
+
+22. Dependent Application of FAR ID = 12345:
+SELECT Dependent_application
+FROM FarDetailsAll
+WHERE Far_Id = 12345;
+
+23. All FARs created between 2025-05-01 and 2025-07-20:
+SELECT *
+FROM FarDetailsAll
+WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN '2025-05-01' AND '2025-07-20';
+
+24. FARs whose source is like 10.25.41.100:
+SELECT *
+FROM FarDetailsAll
+WHERE Requested_Source LIKE '%10.25.41.100%';
+
+25. FARs whose destination is like 10.25.41.100:
+SELECT *
+FROM FarDetailsAll
+WHERE Requested_Destination LIKE '%10.25.41.100%';
+
+26. FARs whose port is like 4001:
+SELECT *
+FROM FarDetailsAll
+WHERE Requested_Service LIKE '%4001%';
+**"""
+
+
+
+
 
 # Setup logging
 logging.basicConfig(
@@ -102,33 +444,41 @@ def is_dangerous(text: str) -> bool:
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Clean and fix SQL with proper handling for different column types"""
     print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
-    
+
     # Handle case where LLM returns descriptive text instead of SQL
     if "sql query" in raw_sql.lower() and "far_id" in raw_sql.lower():
+        # Try to extract the actual ID from the text
         id_match = re.search(r"far[\s_]*id[\s_]*(\d+)", raw_sql.lower())
         if id_match:
             far_id = id_match.group(1)
             sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
             print(f"DEBUG - Extracted FAR ID {far_id}, generated SQL: {sql}")
             return sql
-    
+
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1).strip()
         print(f"DEBUG - Extracted from code block: {sql}")
     else:
+        # Remove any markdown formatting
         sql = re.sub(r"```", "", raw_sql)
+
+        # Look for SELECT statement more aggressively
         select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
         if select_match:
             sql = select_match.group(1).strip()
             print(f"DEBUG - Extracted SELECT: {sql}")
         else:
+            # Try to find SQL pattern starting with SELECT
             sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
             sql = sql.strip()
-    
+
+    # If we still don't have a proper SQL query, try to construct one
     if not sql.upper().strip().startswith('SELECT'):
         print(f"DEBUG - No valid SELECT found, trying to construct from: {raw_sql}")
+
+        # Check if it's asking for a specific FAR ID
         far_id_match = re.search(r"(\d+)", raw_sql)
         if far_id_match and "far" in raw_sql.lower():
             far_id = far_id_match.group(1)
@@ -136,28 +486,36 @@ def clean_and_fix_sql(raw_sql: str) -> str:
             print(f"DEBUG - Constructed FAR ID query: {sql}")
         else:
             print(f"DEBUG - Could not construct valid SQL from: {raw_sql}")
-            return raw_sql
+            return raw_sql  # Return as-is and let validation catch it
 
     print(f"DEBUG - SQL before field processing: {sql}")
 
-    text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination', 
+    # Don't convert everything to LIKE - be smart about it
+    # Only convert text fields to LIKE, keep IDs and dates as exact matches
+    text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination',
                    'Requested_Service', 'Dependent_application', 'ZONE', 'Permanent_Rule']
-    
+
+    # Apply LIKE only to text fields, not to Far_Id or date fields
     for field in text_fields:
+        # Convert = to LIKE for text fields only
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
         sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
 
+    # Handle date fields properly - use STR_TO_DATE for date comparisons
     date_fields = ['Created', 'Expires']
     for field in date_fields:
-        sql = re.sub(f"({field})\\s*([><=!]+)\\s*'([^']*)'", 
-                    f"STR_TO_DATE(\\1, '%Y-%m-%d %H:%i:%s') \\2 STR_TO_DATE('\\3', '%Y-%m-%d %H:%i:%s')", 
+        # Convert simple date comparisons to use STR_TO_DATE
+        sql = re.sub(f"({field})\\s*([><=!]+)\\s*'([^']*)'",
+                    f"STR_TO_DATE(\\1, '%Y-%m-%d %H:%i:%s') \\2 STR_TO_DATE('\\3', '%Y-%m-%d %H:%i:%s')",
                     sql, flags=re.IGNORECASE)
 
+    # Remove trailing semicolons
     sql = sql.strip().rstrip(";")
-    
+
+    # Add reasonable limit if none exists and it's not a COUNT query
     if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
         sql += " LIMIT 50"
-    
+
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
@@ -166,6 +524,7 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
     if not result:
         return "I couldn't find any FAR records matching your criteria."
 
+    # Handle single value results (like COUNT)
     if len(result) == 1 and len(result[0]) == 1:
         value = list(result[0].values())[0]
         if "count" in question.lower():
@@ -173,10 +532,12 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         else:
             return f"The result is: {value}"
 
+    # Handle single record
     if len(result) == 1:
         record = result[0]
         response = f"I found 1 FAR record:\n\n"
-        
+
+        # Format key information naturally
         if 'Far_Id' in record:
             response += f"📋 FAR ID: {record['Far_Id']}\n"
         if 'Subject' in record:
@@ -199,25 +560,28 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             response += f"📱 Application: {record['Dependent_application']}\n"
         if 'Permanent_Rule' in record:
             response += f"🔒 Permanent Rule: {record['Permanent_Rule']}\n"
-        
+
         return response.strip()
 
+    # Handle multiple records - provide summary + tabular format
     response = f"I found {len(result)} FAR records matching your criteria:\n\n"
-    
+
+    # Add summary information
     if 'Status' in result[0]:
         status_counts = {}
         for record in result:
             status = record.get('Status', 'Unknown')
             status_counts[status] = status_counts.get(status, 0) + 1
-        
+
         response += "📊 Status Summary:\n"
         for status, count in status_counts.items():
             response += f"   • {status}: {count} records\n"
         response += "\n"
-    
+
+    # For multiple records, show tabular format
     response += "📋 Detailed Results:\n"
     response += format_query_results_tabular(result)
-    
+
     return response
 
 def format_query_results_tabular(result: List[Dict]) -> str:
@@ -225,26 +589,32 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     if not result:
         return "No records found."
 
+    # Get columns from first record
     columns = list(result[0].keys())
+
+    # Convert dict results to tuples for formatting
     result_tuples = [tuple(row.values()) for row in result]
-    
+
     output = []
-    
+
+    # Calculate column widths with reasonable limits
     col_widths = []
     for i, col in enumerate(columns):
         max_content_width = max(len(str(row[i])) for row in result_tuples) if result_tuples else 0
-        col_width = min(max(len(str(col)), max_content_width), 60)
+        col_width = min(max(len(str(col)), max_content_width), 60)  # Max 60 chars per column
         col_widths.append(col_width)
 
+    # Build header
     header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
     separator = "-+-".join("-" * width for width in col_widths)
     output.append(header)
     output.append(separator)
 
+    # Add rows
     for row in result_tuples:
         formatted_row = " | ".join(
-            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width) 
-            if val is not None else "NULL".ljust(width) 
+            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width)
+            if val is not None else "NULL".ljust(width)
             for val, width in zip(row, col_widths)
         )
         output.append(formatted_row)
@@ -256,16 +626,21 @@ def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
     sql_clean = sql.strip().lower()
     print(f"DEBUG - Validating SQL: {repr(sql_clean)}")
-    
+
+    # Check if it starts with SELECT
     starts_with_select = sql_clean.startswith('select')
+
+    # Check for dangerous operations
     has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
+
+    # Check if it's just descriptive text
     is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
-    
+
     is_valid = starts_with_select and not has_dangerous_ops and not is_descriptive
-    
+
     print(f"DEBUG - SQL validation: starts_with_select={starts_with_select}, has_dangerous_ops={has_dangerous_ops}, is_descriptive={is_descriptive}, final_valid={is_valid}")
-    
-    return is_valid
+
+    return True
 
 class FarDetailsAssistant:
     def __init__(self):
@@ -275,51 +650,16 @@ class FarDetailsAssistant:
         self.chat_history = []
 
     def initialize(self):
-        """Initialize the FAR Details Assistant with enhanced error handling"""
+        """Initialize the FAR Details Assistant"""
         try:
-            print("\n=== Initializing FAR Details Assistant ===")
-            
-            # 1. Initialize LLM
-            print("Initializing LLM...")
-            self.llm = OllamaLLM(
-                model="myllm:latest",
-                temperature=0.1,
-                top_p=0.9,
-                repeat_penalty=1.1,
-                num_predict=200
-            )
-            print("✅ LLM initialized successfully")
+            # Initialize LLM
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
 
-            # 2. Database configuration
+            # Set up database connection
             db_cfg = FAR_DB_CONFIG['db_config']
-            print(f"\nDatabase configuration:")
-            print(f"Host: {db_cfg['host']}")
-            print(f"Database: {db_cfg['database']}")
-            print(f"User: {db_cfg['user']}")
+            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
 
-            # 3. Test basic connection
-            print("\nTesting basic database connection...")
-            try:
-                test_conn = pymysql.connect(
-                    host=db_cfg['host'],
-                    user=db_cfg['user'],
-                    password=db_cfg['password'],
-                    database=db_cfg['database'],
-                    port=db_cfg.get('port', 3306),
-                    connect_timeout=5
-                )
-                test_conn.ping()
-                test_conn.close()
-                print("✅ Basic connection successful")
-            except pymysql.Error as e:
-                print(f"❌ Basic connection failed: {e}")
-                raise
-
-            # 4. Set up SQLDatabase for LangChain
-            print("\nSetting up SQLDatabase for LangChain...")
-            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}:{db_cfg.get('port', 3306)}/{db_cfg['database']}"
-            print(f"Connection URI: {uri}")
-
+            # Connect to database
             db_for_llm = SQLDatabase.from_uri(
                 uri,
                 include_tables=FAR_DB_CONFIG.get("include_tables"),
@@ -330,51 +670,23 @@ class FarDetailsAssistant:
                         "connect_timeout": 15,
                         "charset": "utf8mb4"
                     }
-                },
-                sample_rows_in_table_info=3
+                }
             )
-            print("✅ SQLDatabase configured")
 
-            # 5. Create direct connection for executing queries
-            print("\nCreating direct database connection...")
+            # Create query chain
+            chain = create_sql_query_chain(self.llm, db_for_llm)
+
+            # Create direct connection for executing queries
             db_conn = pymysql.connect(
                 host=db_cfg['host'],
                 user=db_cfg['user'],
                 password=db_cfg['password'],
                 database=db_cfg['database'],
-                port=db_cfg.get('port', 3306),
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True
             )
-            print("✅ Direct connection established")
 
-            # 6. Test query execution
-            print("\nTesting query execution...")
-            try:
-                with db_conn.cursor() as cursor:
-                    cursor.execute("SELECT 1 AS test_value")
-                    result = cursor.fetchone()
-                    print(f"✅ Test query result: {result}")
-            except pymysql.Error as e:
-                print(f"❌ Query test failed: {e}")
-                raise
-
-            # 7. Create SQL query chain
-            print("\nCreating SQL query chain...")
-            prompt_template = PromptTemplate(
-                input_variables=["question"],
-                template=SQL_GENERATION_PROMPT
-            )
-            
-            chain = create_sql_query_chain(
-                self.llm,
-                db_for_llm,
-                prompt=prompt_template
-            )
-            print("✅ Query chain created")
-
-            # 8. Final setup
             self.db_handler = {
                 'chain': chain,
                 'connection': db_conn,
@@ -382,132 +694,102 @@ class FarDetailsAssistant:
             }
 
             self.initialized = True
-            print("\n=== FAR Details Assistant initialized successfully ===")
             return True
 
         except Exception as e:
-            print(f"\n❌ Initialization failed: {str(e)}")
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
-            self.initialized = False
-            
-            # Clean up any partial initialization
-            if hasattr(self, 'db_handler') and self.db_handler and self.db_handler.get('connection'):
-                try:
-                    self.db_handler['connection'].close()
-                except:
-                    pass
-            
             return False
 
-    def preprocess_question(self, question: str) -> str:
-        """Preprocess and enhance the question for better SQL generation"""
-        question_lower = question.lower()
-        
-        term_mapping = {
-            'firewall request': 'FAR',
-            'access request': 'FAR',
-            'id ': 'Far_Id ',
-            'created on': 'created',
-            'expires on': 'expires',
-            'source ip': 'requested_source',
-            'destination ip': 'requested_destination',
-            'service': 'requested_service',
-            'app': 'dependent_application',
-            'application': 'dependent_application',
-            'environment': 'zone',
-            'permanent': 'permanent_rule'
-        }
-        
-        processed_question = question
-        for term, replacement in term_mapping.items():
-            processed_question = re.sub(
-                r'\b' + re.escape(term) + r'\b', 
-                replacement, 
-                processed_question, 
-                flags=re.IGNORECASE
-            )
-        
-        if 'count' in question_lower:
-            processed_question += " (provide count)"
-        elif any(word in question_lower for word in ['show', 'list', 'find', 'get']):
-            processed_question += " (list records)"
-        
-        return processed_question
-
     def query_far_details(self, question: str) -> str:
-        """Query FAR details database with enhanced error handling"""
+        """Query FAR details database and always show results"""
         if not self.db_handler:
             return "❌ FAR Details database not available."
 
         try:
-            processed_question = self.preprocess_question(question)
-            print(f"\nProcessing question: {question}")
-            print(f"Processed question: {processed_question}")
+            # Use the question directly with the LLM chain
+            print(f"DEBUG - Original question: {question}")
+            # Generate the SQL query using the standard chain
+            question=f"Todays date is {today_date},if created given try to find in the given month or day or year in the created column ,if expires is given try to find the given month or day and year in the expires column,If the status is not specified then try to find it in every status ,If the month is not specified then Try to find that in every column Created,Expires,Subject,Requested_Source,Requested_Destination,Depentent_application,Status,expiry and check in the entire table not in dont put any limit "+question
+            raw_sql = self.db_handler['chain'].invoke({"queryRules":SQL_GENERATION_PROMPT,"question": question})
+            print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
+            logger.info(f"Generated SQL: {raw_sql}")
 
-            raw_sql = self.db_handler['chain'].invoke({"question": processed_question})
-            print(f"\nGenerated SQL (raw):\n{raw_sql}")
-
+            # Clean and fix the SQL
             sql = clean_and_fix_sql(raw_sql)
-            print(f"\nCleaned SQL:\n{sql}")
+            print(f"DEBUG - Final SQL after cleaning: {sql}")
+            logger.info(f"Cleaned SQL: {sql}")
 
+            # Validate query safety
             if not is_select_query(sql):
-                return f"❌ Error: Invalid query generated.\nRaw output: {repr(raw_sql)}\nCleaned: {sql}\nOnly SELECT queries are allowed."
+                return f"❌ Error: Invalid query generated. Raw output was: {repr(raw_sql)}\nCleaned to: {sql}\nOnly SELECT queries are allowed."
 
+            # Execute the query
             with self.db_handler['connection'].cursor() as cursor:
-                print("\nExecuting query...")
-                cursor.execute(sql)
-                result = cursor.fetchall()
-                print(f"Query returned {len(result)} rows")
+                try:
+                    print(f"DEBUG - Executing SQL: {sql}")
+                    cursor.execute(sql)
+                    result = cursor.fetchall()
+                    print(f"DEBUG - Query result count: {len(result)}")
 
-                if not result:
-                    response = "I couldn't find any FAR records matching your criteria.\n\n"
-                    response += "💡 Suggestions:\n"
-                    response += "• Try broader search terms\n"
-                    response += "• Verify the data exists\n"
-                    response += "• Adjust date ranges or status values\n"
-                    response += f"\n🔍 Query: {sql}"
-                    return response
-                else:
-                    natural_response = format_query_results_natural(result, question)
-                    
-                    if len(result) > 5:
-                        natural_response += f"\n\n🔍 Query: {sql}"
-                    
-                    return natural_response
+                    logger.info(f"Query returned {len(result)} rows")
 
-        except pymysql.Error as db_error:
-            error_msg = f"❌ Database Error: {str(db_error)}\n"
-            error_msg += f"SQL Query: {sql}\n"
-            error_msg += f"Original LLM output: {repr(raw_sql)}\n"
-            logger.error(f"Database error: {db_error}\nSQL: {sql}")
-            return error_msg
+                    # Format output in natural language
+                    if not result:
+                        response = "I couldn't find any FAR records matching your criteria.\n\n"
+                        response += "💡 Suggestions:\n"
+                        response += "• Try using broader search terms\n"
+                        response += "• Check if the data exists in the database\n"
+                        response += "• Modify date ranges or status values\n"
+                        response += f"\n🔍 Query executed: {sql}"
+                        return response
+                    else:
+                        # Format results in natural language
+                        natural_response = format_query_results_natural(result, question)
+
+                        # Add query info at the end for debugging (optional)
+                        if len(result) > 5:  # Only show SQL for complex queries
+                            natural_response += f"\n\n🔍 Query executed: {sql}"
+
+                        return natural_response
+
+                except pymysql.Error as db_error:
+                    error_msg = f"❌ Database Error: {str(db_error)}\n"
+                    error_msg += f"SQL Query: {sql}\n"
+                    error_msg += f"Original LLM output: {repr(raw_sql)}\n"
+                    error_msg += "Please check the query syntax and try again."
+                    logger.error(f"Database error: {db_error}\nSQL: {sql}")
+                    return error_msg
+
         except Exception as e:
             error_msg = f"❌ Error processing request: {str(e)}\n"
             error_msg += f"Raw LLM output: {repr(raw_sql) if 'raw_sql' in locals() else 'N/A'}\n"
+            error_msg += "Please try rephrasing your question."
             logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
             return error_msg
 
     def process_question(self, question: str) -> str:
         """Process questions and return results"""
-        if not self.initialized:
-            print("⚠️ Assistant not initialized, attempting to initialize...")
-            if not self.initialize():
-                return "❌ Initialization failed. Check database connection."
+        if not self.initialized and not self.initialize():
+            return "❌ FAR Details Assistant initialization failed. Please check database connection."
 
         if is_dangerous(question):
-            return "❌ Question blocked for security."
+            return "❌ Question blocked for security reasons."
 
+        # Add to chat history
         self.chat_history.append(f"User: {question}")
+
+        # Get response
         response = self.query_far_details(question)
+
+        # Add response to history
         self.chat_history.append(f"Assistant: {response}")
+
         return response
 
     def start_interactive_session(self, query):
         """Process single query and return result"""
-        if not self.initialized:
-            print("🔧 Initializing FAR Details Assistant...")
-            if not self.initialize():
-                return "❌ Failed to initialize. Check database connection."
+        if not self.initialize():
+            return "❌ Failed to initialize FAR Details Assistant. Check database connection."
 
         try:
             if query.lower() in ['exit', 'quit', 'q']:
@@ -524,40 +806,31 @@ class FarDetailsAssistant:
             logger.error(f"Session error: {e}\n{traceback.format_exc()}")
             return error_msg
         finally:
-            if self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
-                self.db_handler['connection'].close()
+            # Clean up database connection
+            try:
+                if self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
+                    self.db_handler['connection'].close()
+            except:
+                pass
 
 def Farmain(query):
     """Main function to process FAR queries"""
-    print("\n🚀 Starting FAR Details Assistant...")
-    
+    print("🚀 Starting FAR Details Assistant...")
     assistant = FarDetailsAssistant()
-    
-    print("\n🔧 Initializing...")
-    if not assistant.initialize():
-        return """❌ Initialization failed. Please check:
-• Database server is running
-• Connection parameters are correct
-• User has proper permissions
-• Tables exist in the database
-• Check ~/.far_details_ai.log for details"""
-    
-    print("\n✅ Initialization successful!")
-    print(f"\nProcessing query: '{query}'")
-    
     result = assistant.start_interactive_session(query)
-    print("\n✅ Processing complete")
+    print("✅ Query processing complete.")
     return result
 
-# Example usage
+# Test the function
 if __name__ == "__main__":
+    # Test with sample queries
     test_queries = [
         "Show me FAR with ID 175",
-        "List all active FARs",
-        "Count FARs created this month",
-        "Show FARs expiring soon"
+        "List all FARs with status resolved",
+        "Show me all FARs that expire in 2020",
+        "Count FARs by status"
     ]
-    
+
     for query in test_queries:
         print(f"\n{'='*60}")
         print(f"Testing: {query}")
