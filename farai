@@ -4,13 +4,12 @@ import logging
 import pymysql
 import traceback
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import json
 
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from datetime import date
 
 today_date = date.today()
 
@@ -35,8 +34,61 @@ BLOCKED_PATTERNS = [
     r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
 
-# Enhanced SQL Generation Prompt Template with better date handling
-SQL_GENERATION_PROMPT = """You are an expert SQL query generator for a FAR (Firewall Access Request) database.
+def get_date_context():
+    """Generate comprehensive date context for better LLM understanding"""
+    current_date = date.today()
+    current_year = current_date.year
+    current_month = current_date.month
+    next_year = current_year + 1
+    prev_year = current_year - 1
+    
+    # Calculate next month
+    if current_month == 12:
+        next_month = 1
+        next_month_year = next_year
+    else:
+        next_month = current_month + 1
+        next_month_year = current_year
+    
+    # Calculate previous month
+    if current_month == 1:
+        prev_month = 12
+        prev_month_year = prev_year
+    else:
+        prev_month = current_month - 1
+        prev_month_year = current_year
+    
+    return {
+        'current_date': current_date.strftime('%Y-%m-%d'),
+        'current_year': current_year,
+        'current_month': current_month,
+        'next_year': next_year,
+        'prev_year': prev_year,
+        'next_month': next_month,
+        'next_month_year': next_month_year,
+        'prev_month': prev_month,
+        'prev_month_year': prev_month_year,
+        'month_names': {
+            1: 'January', 2: 'February', 3: 'March', 4: 'April',
+            5: 'May', 6: 'June', 7: 'July', 8: 'August',
+            9: 'September', 10: 'October', 11: 'November', 12: 'December'
+        }
+    }
+
+# Enhanced SQL Generation Prompt Template with comprehensive date handling
+def get_sql_generation_prompt():
+    date_ctx = get_date_context()
+    
+    return f"""You are an expert SQL query generator for a FAR (Firewall Access Request) database.
+
+**CURRENT DATE CONTEXT:**
+- Today's date: {date_ctx['current_date']}
+- Current year: {date_ctx['current_year']}
+- Current month: {date_ctx['current_month']} ({date_ctx['month_names'][date_ctx['current_month']]})
+- Next year: {date_ctx['next_year']}
+- Previous year: {date_ctx['prev_year']}
+- Next month: {date_ctx['next_month']} ({date_ctx['month_names'][date_ctx['next_month']]}) in year {date_ctx['next_month_year']}
+- Previous month: {date_ctx['prev_month']} ({date_ctx['month_names'][date_ctx['prev_month']]}) in year {date_ctx['prev_month_year']}
 
 **Schema definition:**
 +----------------------------+----------+------+-----+---------+-------+
@@ -67,16 +119,35 @@ SQL_GENERATION_PROMPT = """You are an expert SQL query generator for a FAR (Fire
 | Expires_op                 | longtext | YES  |     | NULL    |       |
 +----------------------------+----------+------+-----+---------+-------+
 
-**IMPORTANT DATE HANDLING:**
+**CRITICAL DATE HANDLING INSTRUCTIONS:**
 - Created and Expires columns store dates as TEXT in format 'YYYY-MM-DD HH:MM:SS'
-- Always use STR_TO_DATE() function to convert text to date for comparisons
+- ALWAYS use STR_TO_DATE() function to convert text to date for ALL date comparisons
 - For date comparisons, use: STR_TO_DATE(column_name, '%Y-%m-%d %H:%i:%s')
 - Current date functions: CURDATE(), NOW()
-- Date range examples:
-  * Today: DATE(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = CURDATE()
-  * This month: MONTH(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = MONTH(CURDATE()) AND YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = YEAR(CURDATE())
-  * This year: YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = YEAR(CURDATE())
-  * Date range: STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s') BETWEEN 'start_date' AND 'end_date'
+- NEVER use LIMIT clause unless specifically requested with a number
+
+**COMPREHENSIVE DATE QUERY PATTERNS:**
+1. **Year-based queries:**
+   - "this year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+   - "next year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_year']}
+   - "previous year" / "last year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['prev_year']}
+   - "2024" or any specific year → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2024
+
+2. **Month-based queries:**
+   - "this month" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_month']} AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+   - "next month" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_month']} AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_month_year']}
+   - "previous month" / "last month" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['prev_month']} AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['prev_month_year']}
+   - "January 2025" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 1 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2025
+
+3. **Day-based queries:**
+   - "today" → DATE(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = CURDATE()
+   - "yesterday" → DATE(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+   - "tomorrow" → DATE(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = DATE_ADD(CURDATE(), INTERVAL 1 DAY)
+
+4. **Range queries:**
+   - "last 30 days" → STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s') >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+   - "next 30 days" → STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s') BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+   - "between dates" → STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s') BETWEEN 'start_date' AND 'end_date'
 
 **DATABASE SCHEMA:**
 Table: FarDetailsAll
@@ -101,28 +172,26 @@ Columns and their proper usage:
 5. For dates, ALWAYS use STR_TO_DATE() function: STR_TO_DATE(column_name, '%Y-%m-%d %H:%i:%s')
 6. Return ONLY the SQL query - no explanations, markdown, or additional text
 7. Always try to find the requested prompt in all the columns with LIKE with % wildcards for partial matches
-8. When instructions mention time periods (today, this month, this year, next 30 days, etc.), calculate from current date
+8. When instructions mention time periods, use the date context provided above
 9. FAR means (Firewall access request)
 10. This table contains firewall access request details from source to destination
 11. Always try to find details across multiple columns if not found in one
-12. DO NOT add LIMIT clause unless specifically requested
+12. DO NOT add LIMIT clause unless specifically requested with a number
+13. Handle relative date terms (next year, this year, last year) using the current date context provided
 
-**DATE QUERY EXAMPLES:**
-- "FARs created today" → SELECT * FROM FarDetailsAll WHERE DATE(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = CURDATE()
-- "FARs expiring this month" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = MONTH(CURDATE()) AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = YEAR(CURDATE())
-- "FARs created in 2020" → SELECT * FROM FarDetailsAll WHERE YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 2020
-- "FARs created between dates" → SELECT * FROM FarDetailsAll WHERE STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s') BETWEEN '2020-01-01' AND '2020-12-31'
-- "Count FARs expiring next month" → SELECT COUNT(*) FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = MONTH(DATE_ADD(CURDATE(), INTERVAL 1 MONTH)) AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = YEAR(DATE_ADD(CURDATE(), INTERVAL 1 MONTH))
-
-**QUERY EXAMPLES:**
+**QUERY EXAMPLES WITH CURRENT DATE CONTEXT:**
 - "123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
 - "Show FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
 - "Active FARs" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%'
 - "Count resolved FARs" → SELECT COUNT(*) as total_resolved FROM FarDetailsAll WHERE Status LIKE '%resolved%'
 - "FARs in PROD zone" → SELECT * FROM FarDetailsAll WHERE ZONE LIKE '%PROD%'
+- "FARs created this year" → SELECT * FROM FarDetailsAll WHERE YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+- "FARs created next year" → SELECT * FROM FarDetailsAll WHERE YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_year']}
+- "FARs expiring next month" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_month']} AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_month_year']}
+- "Count FARs created today" → SELECT COUNT(*) FROM FarDetailsAll WHERE DATE(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = CURDATE()
 - "List all FARs having Aadhar vault" → SELECT * FROM FarDetailsAll WHERE CONCAT_WS(' ',Subject,Requested_Source,Requested_Destination,Dependent_application) LIKE '%Aadhar vault%'
 
-**USER QUESTION:** {question}
+**USER QUESTION:** {{question}}
 """
 
 # Setup logging
@@ -200,8 +269,9 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     # Remove trailing semicolons
     sql = sql.strip().rstrip(";")
 
-    # REMOVED: Do not add automatic LIMIT clause
-    # Let the query return all results unless explicitly limited
+    # Remove any unwanted LIMIT clauses unless they were specifically requested
+    # Only keep LIMIT if it was in the original question
+    sql = re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE)
 
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
@@ -265,9 +335,14 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             response += f"   • {status}: {count} records\n"
         response += "\n"
 
-    # For multiple records, show tabular format
-    response += "📋 Detailed Results:\n"
-    response += format_query_results_tabular(result)
+    # For multiple records, show tabular format for reasonable number of records
+    if len(result) <= 20:
+        response += "📋 Detailed Results:\n"
+        response += format_query_results_tabular(result)
+    else:
+        response += f"📋 Summary: {len(result)} records found. Showing first 10:\n"
+        response += format_query_results_tabular(result[:10])
+        response += f"\n... and {len(result) - 10} more records."
 
     return response
 
@@ -318,10 +393,12 @@ def is_select_query(sql: str) -> bool:
     starts_with_select = sql_clean.startswith('select')
 
     # Check for dangerous operations
-    has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
+    dangerous_ops = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate', 'grant', 'revoke']
+    has_dangerous_ops = any(kw in sql_clean for kw in dangerous_ops)
 
     # Check if it's just descriptive text
-    is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
+    descriptive_phrases = ['this is', 'sql query', 'the query', 'here is', 'generate', 'create']
+    is_descriptive = any(phrase in sql_clean for phrase in descriptive_phrases)
 
     is_valid = starts_with_select and not has_dangerous_ops and not is_descriptive
 
@@ -396,18 +473,32 @@ class FarDetailsAssistant:
             # Use the question directly with the LLM chain
             print(f"DEBUG - Original question: {question}")
             
-            # Enhanced question with better date context
-            enhanced_question = f"""Today's date is {today_date}. 
+            # Get current date context and create enhanced question
+            date_ctx = get_date_context()
+            
+            enhanced_question = f"""Current date context:
+- Today: {date_ctx['current_date']}
+- Current year: {date_ctx['current_year']}
+- Next year: {date_ctx['next_year']}
+- Previous year: {date_ctx['prev_year']}
+- Current month: {date_ctx['current_month']} ({date_ctx['month_names'][date_ctx['current_month']]})
+- Next month: {date_ctx['next_month']} ({date_ctx['month_names'][date_ctx['next_month']]}) in year {date_ctx['next_month_year']}
+
 For date-related queries:
 - If 'created' is mentioned, search in the Created column using STR_TO_DATE function
 - If 'expires' or 'expiry' is mentioned, search in the Expires column using STR_TO_DATE function  
 - If status is not specified, search across all statuses
 - If month/year is not specified, search across all time periods
 - Use proper STR_TO_DATE conversion for all date comparisons
+- Handle relative terms like "next year", "this year", "last year" based on current date context
+- DO NOT add LIMIT clause unless specifically requested
 
 Original question: {question}"""
             
-            # Generate the SQL query using the standard chain
+            # Create a temporary prompt for this query
+            temp_prompt = get_sql_generation_prompt()
+            
+            # Generate the SQL query using the standard chain with enhanced context
             raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
             print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
             logger.info(f"Generated SQL: {raw_sql}")
@@ -436,16 +527,17 @@ Original question: {question}"""
                         response = "I couldn't find any FAR records matching your criteria.\n\n"
                         response += "💡 Suggestions:\n"
                         response += "• Try using broader search terms\n"
-                        response += "• Check if the data exists in the database\n"
+                        response += "• Check if the data exists for the specified time period\n"
                         response += "• Modify date ranges or status values\n"
+                        response += f"• Current date context: Today is {date_ctx['current_date']}, current year is {date_ctx['current_year']}, next year is {date_ctx['next_year']}\n"
                         response += f"\n🔍 Query executed: {sql}"
                         return response
                     else:
                         # Format results in natural language
                         natural_response = format_query_results_natural(result, question)
 
-                        # Add query info at the end for debugging (optional for large result sets)
-                        if len(result) > 10:  # Only show SQL for queries with many results
+                        # Add query info for debugging on large result sets or when helpful
+                        if len(result) > 10 or "debug" in question.lower():
                             natural_response += f"\n\n🔍 Query executed: {sql}"
 
                         return natural_response
@@ -519,16 +611,24 @@ def Farmain(query):
     print("✅ Query processing complete.")
     return result
 
-# Test the function
+# Test the function with enhanced date handling
 if __name__ == "__main__":
-    # Test with sample queries including date-related ones
+    # Test with comprehensive date queries including next year scenarios
     test_queries = [
         "Show me FAR with ID 175",
         "List all FARs created in 2020",
         "Show me all FARs that expire in March 2020", 
         "Count FARs created today",
         "FARs expiring this month",
-        "All FARs with status resolved"
+        "All FARs with status resolved",
+        "FARs created next year",  # This should now work properly
+        "Count FARs expiring next year",
+        "FARs created this year",
+        "Show FARs created last year",
+        "FARs expiring next month",
+        "Count all active FARs created in the previous year",
+        "List FARs that will expire in January 2026",  # Specific future date
+        "Show me FARs created between 2020 and 2023"
     ]
 
     for query in test_queries:
