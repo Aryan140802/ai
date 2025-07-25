@@ -1,134 +1,134 @@
 
 1. How many FARs expire in this month?
 SELECT COUNT(*) 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE STR_TO_DATE(Expires, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE(), '%Y-%m-01') 
                                             AND LAST_DAY(CURDATE());
 
 2. How many FARs are expiring in June 2026?
 SELECT COUNT(*) 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d')) = 6 
   AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d')) = 2026;
 
 3. FAR IDs containing aadhar in the subject:
 SELECT Far_Id 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Subject LIKE '%aadhar%';
 
 4. How many FARs have status rejected?
 SELECT COUNT(*) 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Status) = 'rejected';
 
 5. FAR IDs with status rejected:
 SELECT Far_Id 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Status) = 'rejected';
 
 6. Descriptions (Subjects) of FARs with status rejected:
 SELECT Subject 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Status) = 'rejected';
 
 7. List all FARs created in last month:
 SELECT * 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01') 
                                             AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
 
 8. How many FARs are in zone UAT?
 SELECT COUNT(*) 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(ZONE) = 'uat';
 
 9. How many FARs are temporary?
 SELECT COUNT(*) 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Permanent_Rule) = 'no';
 
 10. FAR IDs of temporary FARs:
 SELECT Far_Id 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Permanent_Rule) = 'no';
 
 11. Description and status of temporary FARs:
 SELECT Subject, Status 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Permanent_Rule) = 'no';
 
 12. How many FARs have Dependent Application = 'IT SP3'?
 SELECT COUNT(*) 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Dependent_application = 'IT SP3';
 
 13. ID and description of FARs with Permanent Rule = 'yes':
 SELECT Far_Id, Subject 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE LOWER(Permanent_Rule) = 'yes';
 
 14. FAR IDs that expired last month:
 SELECT Far_Id 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE STR_TO_DATE(Expires, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01') 
                                             AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
 
 15. FAR status for ID = 273457:
 SELECT Status 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Far_Id = 273457;
 
 16. Permanent Rule and Dependent Application of FAR ID = 273457:
 SELECT Permanent_Rule, Dependent_application 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Far_Id = 273457;
 
 17. Description of FAR with Far_Id = 12345:
 SELECT Subject 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Far_Id = 12345;
 
 18. List all Far_Id created yesterday:
 SELECT Far_Id 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE STR_TO_DATE(Created, '%Y-%m-%d') = CURDATE() - INTERVAL 1 DAY;
 
 19. Zone of FAR ID = 12345:
 SELECT ZONE 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Far_Id = 12345;
 
 20. Status of FAR with specific subject:
 SELECT Status 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Subject = 'FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration';
 
 21. All details of FAR with specific subject:
 SELECT * 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Subject = 'FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration';
 
 22. Dependent Application of FAR ID = 12345:
 SELECT Dependent_application 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Far_Id = 12345;
 
 23. All FARs created between 2025-05-01 and 2025-07-20:
 SELECT * 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN '2025-05-01' AND '2025-07-20';
 
 24. FARs whose source is 10.25.41.100:
 SELECT * 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Requested_Source = '10.25.41.100';
 
 25. FARs whose destination is 10.25.41.100:
 SELECT * 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Requested_Destination = '10.25.41.100';
 
 26. FARs whose port is 4001:
 SELECT * 
-FROM your_table 
+FROM FarDetailsAll 
 WHERE Requested_Service = '4001';
