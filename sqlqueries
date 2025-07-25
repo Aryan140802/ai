@@ -11,25 +11,29 @@ FROM FarDetailsAll
 WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d')) = 6 
   AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d')) = 2026;
 
-3. FAR IDs containing aadhar in the subject:
+3. FAR IDs containing 'aadhar' in any column:
 SELECT Far_Id 
 FROM FarDetailsAll 
-WHERE Subject LIKE '%aadhar%';
+WHERE Subject LIKE '%aadhar%' OR Status LIKE '%aadhar%' OR Created LIKE '%aadhar%' OR 
+      Expires LIKE '%aadhar%' OR Requested_Source LIKE '%aadhar%' OR 
+      Requested_Destination LIKE '%aadhar%' OR Requested_Service LIKE '%aadhar%' OR 
+      Dependent_application LIKE '%aadhar%' OR ZONE LIKE '%aadhar%' OR 
+      Permanent_Rule LIKE '%aadhar%';
 
-4. How many FARs have status rejected?
+4. How many FARs have status like 'rejected'?
 SELECT COUNT(*) 
 FROM FarDetailsAll 
-WHERE LOWER(Status) = 'rejected';
+WHERE LOWER(Status) LIKE '%rejected%';
 
-5. FAR IDs with status rejected:
+5. FAR IDs with status like 'rejected':
 SELECT Far_Id 
 FROM FarDetailsAll 
-WHERE LOWER(Status) = 'rejected';
+WHERE LOWER(Status) LIKE '%rejected%';
 
-6. Descriptions (Subjects) of FARs with status rejected:
+6. Descriptions (Subjects) of FARs with status like 'rejected':
 SELECT Subject 
 FROM FarDetailsAll 
-WHERE LOWER(Status) = 'rejected';
+WHERE LOWER(Status) LIKE '%rejected%';
 
 7. List all FARs created in last month:
 SELECT * 
@@ -37,35 +41,35 @@ FROM FarDetailsAll
 WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01') 
                                             AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH);
 
-8. How many FARs are in zone UAT?
+8. How many FARs are in zone like 'UAT':
 SELECT COUNT(*) 
 FROM FarDetailsAll 
-WHERE LOWER(ZONE) = 'uat';
+WHERE LOWER(ZONE) LIKE '%uat%';
 
-9. How many FARs are temporary?
+9. How many FARs are temporary:
 SELECT COUNT(*) 
 FROM FarDetailsAll 
-WHERE LOWER(Permanent_Rule) = 'no';
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
 
 10. FAR IDs of temporary FARs:
 SELECT Far_Id 
 FROM FarDetailsAll 
-WHERE LOWER(Permanent_Rule) = 'no';
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
 
 11. Description and status of temporary FARs:
 SELECT Subject, Status 
 FROM FarDetailsAll 
-WHERE LOWER(Permanent_Rule) = 'no';
+WHERE LOWER(Permanent_Rule) LIKE '%no%';
 
-12. How many FARs have Dependent Application = 'IT SP3'?
+12. How many FARs have Dependent Application like 'IT SP3':
 SELECT COUNT(*) 
 FROM FarDetailsAll 
-WHERE Dependent_application = 'IT SP3';
+WHERE Dependent_application LIKE '%IT SP3%';
 
-13. ID and description of FARs with Permanent Rule = 'yes':
+13. ID and description of FARs with Permanent Rule like 'yes':
 SELECT Far_Id, Subject 
 FROM FarDetailsAll 
-WHERE LOWER(Permanent_Rule) = 'yes';
+WHERE LOWER(Permanent_Rule) LIKE '%yes%';
 
 14. FAR IDs that expired last month:
 SELECT Far_Id 
@@ -101,12 +105,12 @@ WHERE Far_Id = 12345;
 20. Status of FAR with specific subject:
 SELECT Status 
 FROM FarDetailsAll 
-WHERE Subject = 'FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration';
+WHERE Subject LIKE '%FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration%';
 
 21. All details of FAR with specific subject:
 SELECT * 
 FROM FarDetailsAll 
-WHERE Subject = 'FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration';
+WHERE Subject LIKE '%FAR from EIS desktop to SP3 UAT Servers for CENMAC Application Migration%';
 
 22. Dependent Application of FAR ID = 12345:
 SELECT Dependent_application 
@@ -118,17 +122,17 @@ SELECT *
 FROM FarDetailsAll 
 WHERE STR_TO_DATE(Created, '%Y-%m-%d') BETWEEN '2025-05-01' AND '2025-07-20';
 
-24. FARs whose source is 10.25.41.100:
+24. FARs whose source is like 10.25.41.100:
 SELECT * 
 FROM FarDetailsAll 
-WHERE Requested_Source = '10.25.41.100';
+WHERE Requested_Source LIKE '%10.25.41.100%';
 
-25. FARs whose destination is 10.25.41.100:
+25. FARs whose destination is like 10.25.41.100:
 SELECT * 
 FROM FarDetailsAll 
-WHERE Requested_Destination = '10.25.41.100';
+WHERE Requested_Destination LIKE '%10.25.41.100%';
 
-26. FARs whose port is 4001:
+26. FARs whose port is like 4001:
 SELECT * 
 FROM FarDetailsAll 
-WHERE Requested_Service = '4001';
+WHERE Requested_Service LIKE '%4001%';
