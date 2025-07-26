@@ -1,0 +1,388 @@
+import os
+import re
+import logging
+import traceback
+from typing import List, Optional, Dict, Any
+from datetime import datetime, date, timedelta
+import json
+
+from langchain_ollama import OllamaLLM
+
+# --- TEXT SEARCH CONFIGURATION ---
+TEXT_SEARCH_CONFIG = {
+    "name": "Text Search Assistant",
+    "search_data": [],  # Add your text data here as list of dictionaries
+    "prompt_instructions": """You are a helpful text search assistant. 
+    
+Your task is to search through the provided text data and answer user questions based on the content.
+    
+INSTRUCTIONS:
+- Analyze the user's question carefully
+- Search through the available text data
+- Provide accurate and relevant responses
+- If no relevant information is found, say so clearly
+- Be concise but comprehensive in your responses
+- Always base your answers on the provided data only
+
+RESPONSE FORMAT:
+- Start with a brief summary if multiple items are found
+- Use bullet points for multiple results
+- Include relevant details from the text
+- Be friendly and helpful in tone""",
+    
+    "model_config": {
+        "model": "myllm:latest",
+        "temperature": 0.3
+    }
+}
+
+# Blocked patterns for security
+BLOCKED_PATTERNS = [
+    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+    r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
+    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
+    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
+]
+
+# Setup logging
+logging.basicConfig(
+    filename=os.path.expanduser("~/.text_search_assistant.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def is_dangerous(text: str) -> bool:
+    """Check if text contains dangerous patterns"""
+    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
+
+def preprocess_question(question: str) -> str:
+    """Preprocess the question to clean and standardize it"""
+    question = question.strip()
+    
+    # Remove extra whitespace
+    question = re.sub(r'\s+', ' ', question)
+    
+    # Add question mark if missing
+    if not question.endswith(('?', '.', '!')):
+        question += '?'
+    
+    return question
+
+def search_text_data(data: List[Dict], search_terms: List[str]) -> List[Dict]:
+    """Search through text data for relevant entries"""
+    if not data or not search_terms:
+        return []
+    
+    results = []
+    search_terms_lower = [term.lower() for term in search_terms]
+    
+    for item in data:
+        item_text = ""
+        
+        # Combine all text fields in the item
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if isinstance(value, str):
+                    item_text += f" {value.lower()}"
+        elif isinstance(item, str):
+            item_text = item.lower()
+        else:
+            item_text = str(item).lower()
+        
+        # Check if any search term is found
+        for term in search_terms_lower:
+            if term in item_text:
+                results.append(item)
+                break
+    
+    return results
+
+def extract_search_terms(question: str) -> List[str]:
+    """Extract meaningful search terms from the question"""
+    # Remove common question words
+    stop_words = {
+        'what', 'who', 'where', 'when', 'why', 'how', 'is', 'are', 'was', 'were',
+        'do', 'does', 'did', 'will', 'would', 'could', 'should', 'can', 'may',
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+        'of', 'with', 'by', 'about', 'find', 'show', 'tell', 'me', 'search'
+    }
+    
+    # Extract words (alphanumeric sequences)
+    words = re.findall(r'\b\w+\b', question.lower())
+    
+    # Filter out stop words and short words
+    meaningful_words = [
+        word for word in words 
+        if word not in stop_words and len(word) > 2
+    ]
+    
+    return meaningful_words
+
+def format_search_results(results: List[Dict], question: str) -> str:
+    """Format search results into a readable response"""
+    if not results:
+        return "I couldn't find any relevant information for your question."
+    
+    if len(results) == 1:
+        result = results[0]
+        response = "I found the following relevant information:\n\n"
+        
+        if isinstance(result, dict):
+            for key, value in result.items():
+                if value:  # Only show non-empty values
+                    response += f"**{key.replace('_', ' ').title()}:** {value}\n"
+        else:
+            response += str(result)
+        
+        return response.strip()
+    
+    # Multiple results
+    response = f"I found {len(results)} relevant items:\n\n"
+    
+    for i, result in enumerate(results[:10], 1):  # Limit to first 10 results
+        response += f"**{i}.** "
+        
+        if isinstance(result, dict):
+            # Show the first few fields or a summary
+            summary_fields = list(result.keys())[:3]
+            summary_parts = []
+            
+            for field in summary_fields:
+                if result.get(field):
+                    value = str(result[field])
+                    if len(value) > 100:
+                        value = value[:97] + "..."
+                    summary_parts.append(f"{field.replace('_', ' ')}: {value}")
+            
+            response += " | ".join(summary_parts)
+        else:
+            value = str(result)
+            if len(value) > 150:
+                value = value[:147] + "..."
+            response += value
+        
+        response += "\n"
+    
+    if len(results) > 10:
+        response += f"\n... and {len(results) - 10} more results."
+    
+    return response.strip()
+
+class TextSearchAssistant:
+    def __init__(self, custom_instructions: str = None, search_data: List[Dict] = None):
+        self.llm = None
+        self.initialized = False
+        self.chat_history = []
+        
+        # Use custom instructions if provided
+        if custom_instructions:
+            TEXT_SEARCH_CONFIG["prompt_instructions"] = custom_instructions
+        
+        # Use custom search data if provided
+        if search_data:
+            TEXT_SEARCH_CONFIG["search_data"] = search_data
+
+    def initialize(self):
+        """Initialize the Text Search Assistant"""
+        try:
+            # Initialize LLM
+            model_config = TEXT_SEARCH_CONFIG['model_config']
+            self.llm = OllamaLLM(
+                model=model_config["model"], 
+                temperature=model_config["temperature"]
+            )
+            
+            self.initialized = True
+            return True
+
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
+            return False
+
+    def search_and_respond(self, question: str) -> str:
+        """Search through text data and generate a response"""
+        try:
+            print(f"DEBUG - Processing question: {question}")
+            
+            # Get search data
+            search_data = TEXT_SEARCH_CONFIG.get("search_data", [])
+            
+            if not search_data:
+                return "❌ No search data available. Please configure the search_data in TEXT_SEARCH_CONFIG."
+            
+            # Extract search terms from the question
+            search_terms = extract_search_terms(question)
+            print(f"DEBUG - Extracted search terms: {search_terms}")
+            
+            # Search through the data
+            results = search_text_data(search_data, search_terms)
+            print(f"DEBUG - Found {len(results)} matching results")
+            
+            # If using LLM, generate contextual response
+            if self.llm and results:
+                try:
+                    # Prepare context for LLM
+                    context = {
+                        "instructions": TEXT_SEARCH_CONFIG["prompt_instructions"],
+                        "question": question,
+                        "search_results": results[:5],  # Limit context size
+                        "total_results": len(results)
+                    }
+                    
+                    prompt = f"""{context['instructions']}
+
+SEARCH RESULTS FOUND: {context['total_results']} items
+
+RELEVANT DATA:
+{json.dumps(context['search_results'], indent=2, default=str)}
+
+USER QUESTION: {context['question']}
+
+Please provide a helpful response based on the search results above."""
+
+                    print("DEBUG - Generating LLM response...")
+                    response = self.llm.invoke(prompt)
+                    
+                    # Clean up the response
+                    response = response.strip()
+                    if response:
+                        return response
+                    
+                except Exception as llm_error:
+                    print(f"DEBUG - LLM error: {llm_error}")
+                    # Fall back to basic formatting
+            
+            # Fallback: Basic result formatting
+            return format_search_results(results, question)
+            
+        except Exception as e:
+            error_msg = f"❌ Error processing search: {str(e)}"
+            logger.error(f"Search processing error: {e}\n{traceback.format_exc()}")
+            return error_msg
+
+    def add_search_data(self, data: List[Dict]):
+        """Add or update search data"""
+        TEXT_SEARCH_CONFIG["search_data"] = data
+        print(f"DEBUG - Added {len(data)} items to search data")
+
+    def update_instructions(self, new_instructions: str):
+        """Update the prompt instructions"""
+        TEXT_SEARCH_CONFIG["prompt_instructions"] = new_instructions
+        print("DEBUG - Updated prompt instructions")
+
+    def process_question(self, question: str) -> str:
+        """Process questions with enhanced error handling"""
+        if not self.initialized and not self.initialize():
+            return "❌ Text Search Assistant initialization failed."
+
+        if is_dangerous(question):
+            return "❌ Question blocked for security reasons."
+
+        # Clean the question
+        question = preprocess_question(question)
+
+        # Add to chat history
+        self.chat_history.append(f"User: {question}")
+
+        # Get response
+        response = self.search_and_respond(question)
+
+        # Add response to history
+        self.chat_history.append(f"Assistant: {response}")
+
+        return response
+
+    def start_interactive_session(self, query):
+        """Process single query"""
+        if not self.initialize():
+            return "❌ Failed to initialize Text Search Assistant."
+
+        try:
+            if query.lower() in ['exit', 'quit', 'q']:
+                return "👋 Session ended."
+
+            print("🔍 Processing your query...")
+            response = self.process_question(query)
+            return response
+
+        except KeyboardInterrupt:
+            return "👋 Session interrupted."
+        except Exception as e:
+            error_msg = f"❌ Session error: {str(e)}"
+            logger.error(f"Session error: {e}\n{traceback.format_exc()}")
+            return error_msg
+
+def TextSearchMain(query, custom_instructions=None, search_data=None):
+    """Main function to process text search queries"""
+    print("🚀 Starting Text Search Assistant...")
+    assistant = TextSearchAssistant(custom_instructions, search_data)
+    result = assistant.start_interactive_session(query)
+    print("✅ Query processing complete.")
+    return result
+
+# Example usage and testing
+if __name__ == "__main__":
+    # Example search data - replace with your own data
+    sample_data = [
+        {
+            "id": 1,
+            "title": "Python Programming Guide",
+            "content": "Python is a high-level programming language known for its simplicity and readability.",
+            "category": "Programming",
+            "tags": "python, programming, tutorial"
+        },
+        {
+            "id": 2,
+            "title": "Machine Learning Basics",
+            "content": "Machine learning is a subset of AI that enables computers to learn from data.",
+            "category": "AI/ML",
+            "tags": "machine learning, AI, data science"
+        },
+        {
+            "id": 3,
+            "title": "Web Development",
+            "content": "Web development involves creating websites and web applications using various technologies.",
+            "category": "Web",
+            "tags": "web development, HTML, CSS, JavaScript"
+        }
+    ]
+    
+    # Example custom instructions
+    custom_instructions = """You are a technical documentation assistant.
+    
+Your role is to help users find information from technical documents and guides.
+
+INSTRUCTIONS:
+- Focus on providing accurate technical information
+- Include relevant code examples when available
+- Explain concepts clearly for different skill levels
+- Highlight important warnings or best practices
+- Provide step-by-step guidance when appropriate
+
+RESPONSE STYLE:
+- Use clear, professional language
+- Structure responses with headers and bullet points
+- Include relevant tags and categories
+- End with suggestions for related topics when relevant"""
+    
+    # Test queries
+    test_queries = [
+        "What is Python?",
+        "Tell me about machine learning",
+        "How to do web development?",
+        "Programming languages",
+        "AI and data science"
+    ]
+    
+    for query in test_queries:
+        print(f"\n{'='*60}")
+        print(f"Testing: {query}")
+        print('='*60)
+        result = TextSearchMain(
+            query, 
+            custom_instructions=custom_instructions, 
+            search_data=sample_data
+        )
+        print(result)
