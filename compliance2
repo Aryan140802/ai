@@ -663,62 +663,37 @@ def ComplianceMain(query):
     print("✅ Query processing complete.")
     return result
 
-# Test the function with comprehensive system compliance queries
+# Interactive usage
 if __name__ == "__main__":
-    # Test with comprehensive system compliance queries
-    test_queries = [
-        # Basic server queries
-        "Show me server with IP 192.168.1.100",
-        "List all database servers",
-        "Show web servers with their specifications",
-        
-        # Performance queries
-        "Servers with high CPU usage above 80%",
-        "Show servers with more than 16GB RAM",
-        "List servers with 8 or more CPU cores",
-        "Servers with memory usage above 90%",
-        
-        # Security compliance queries
-        "Servers with firewall disabled",
-        "Show servers where Deep Security agent is not running",
-        "List servers with Splunk agent issues",
-        "Servers with expired user accounts",
-        "Non-compliant security servers",
-        
-        # System version queries
-        "Show all CentOS servers",
-        "Servers with old kernel versions",
-        "List servers by ACE version",
-        "Show MQ version distribution",
-        
-        # Aggregation and analytics
-        "Count servers by role",
-        "Average RAM per server role",
-        "Total number of servers",
-        "Server distribution by OS version",
-        
-        # Complex compliance queries
-        "Servers needing security updates",
-        "High-performance servers with security issues",
-        "Servers with both firewall and Deep Security active",
-        "Show compliance status summary",
-        
-        # Infrastructure queries
-        "Show all application servers",
-        "List servers with uptime issues",
-        "Servers with file system problems",
-        "Show kernel update status across servers"
-    ]
-
-    print("🧪 Running System Compliance Assistant Tests...")
-    print("=" * 80)
+    print("🚀 System Compliance Assistant")
+    print("=" * 50)
+    print("Ask questions about your system compliance database in natural language.")
+    print("Examples:")
+    print("  • 'Show servers with high CPU usage'")
+    print("  • 'List all database servers'")
+    print("  • 'Servers with firewall disabled'")
+    print("  • 'Count servers by role'")
+    print("\nType 'exit' to quit.\n")
     
-    for i, query in enumerate(test_queries, 1):
-        print(f"\n🔍 Test {i}: {query}")
-        print("-" * 60)
+    while True:
         try:
-            result = ComplianceMain(query)
-            print(f"✅ Result: {result[:200]}{'...' if len(result) > 200 else ''}")
+            user_query = input("🔍 Enter your query: ").strip()
+            
+            if not user_query:
+                continue
+                
+            if user_query.lower() in ['exit', 'quit', 'q']:
+                print("👋 Goodbye!")
+                break
+                
+            print("\n🔄 Processing your query...")
+            result = ComplianceMain(user_query)
+            print(f"\n📊 Results:\n{result}\n")
+            print("-" * 50)
+            
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
-        print("-" * 60)
+            print(f"\n❌ Error: {str(e)}")
+            print("Please try rephrasing your question.\n")
