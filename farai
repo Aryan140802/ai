@@ -78,24 +78,49 @@ def preprocess_question(question: str) -> str:
     date_ctx = get_comprehensive_date_context()
     extracted_info = {}
 
-    for pattern in month_year_patterns:
-        match = re.search(pattern, question_lower)
-        if match:
-            groups = match.groups()
-            if len(groups) == 2:
-                # Determine which is month and which is year
-                for group in groups:
-                    if group.isdigit():
-                        num = int(group)
-                        if 1900 <= num <= 2100:  # Year
-                            extracted_info['year'] = num
-                        elif 1 <= num <= 12:  # Month number
-                            extracted_info['month'] = num
-                    else:
-                        # Month name
-                        if group in date_ctx['month_names']:
-                            extracted_info['month'] = date_ctx['month_names'][group]
-            break
+    # Check for relative date terms first
+    if re.search(r'\bthis\s+(month|year)\b', question_lower):
+        if 'this month' in question_lower:
+            extracted_info['month'] = date_ctx['current_month']
+            extracted_info['year'] = date_ctx['current_year']
+            extracted_info['context'] = 'this_month'
+        elif 'this year' in question_lower:
+            extracted_info['year'] = date_ctx['current_year']
+            extracted_info['context'] = 'this_year'
+    elif re.search(r'\bnext\s+(month|year)\b', question_lower):
+        if 'next month' in question_lower:
+            next_month = date_ctx['current_month'] + 1
+            next_year = date_ctx['current_year']
+            if next_month > 12:
+                next_month = 1
+                next_year += 1
+            extracted_info['month'] = next_month
+            extracted_info['year'] = next_year
+            extracted_info['context'] = 'next_month'
+        elif 'next year' in question_lower:
+            extracted_info['year'] = date_ctx['next_year']
+            extracted_info['context'] = 'next_year'
+    else:
+        # Extract explicit month-year patterns
+        for pattern in month_year_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                groups = match.groups()
+                if len(groups) == 2:
+                    # Determine which is month and which is year
+                    for group in groups:
+                        if group.isdigit():
+                            num = int(group)
+                            if 1900 <= num <= 2100:  # Year
+                                extracted_info['year'] = num
+                            elif 1 <= num <= 12:  # Month number
+                                extracted_info['month'] = num
+                        else:
+                            # Month name
+                            if group in date_ctx['month_names']:
+                                extracted_info['month'] = date_ctx['month_names'][group]
+                    extracted_info['context'] = 'specific_month_year'
+                break
 
     # Add extracted information to question for LLM
     if extracted_info:
@@ -104,6 +129,8 @@ def preprocess_question(question: str) -> str:
             addition += f"month={extracted_info['month']} "
         if 'year' in extracted_info:
             addition += f"year={extracted_info['year']} "
+        if 'context' in extracted_info:
+            addition += f"context={extracted_info['context']} "
         addition += "]"
         question += addition
 
@@ -116,12 +143,13 @@ def get_sql_generation_prompt():
     """Generate comprehensive SQL prompt with extensive date handling examples"""
     date_ctx = get_comprehensive_date_context()
 
-    # Generate examples for each month of next year
+    # Generate examples for each month of current and next year
     month_examples = []
     for month_num, month_name in date_ctx['month_numbers'].items():
+        current_year = date_ctx['current_year']
         next_year = date_ctx['next_year']
         month_examples.extend([
-            f'"FARs created in {month_name} {next_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {next_year}',
+            f'"FARs created in {month_name} {current_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {current_year}',
             f'"FARs expiring in {month_name.lower()} {next_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Expires, \'%Y-%m-%d %H:%i:%s\')) = {next_year}'
         ])
 
@@ -160,32 +188,44 @@ Table: FarDetailsAll
 5. For Far_Id, use exact equality: Far_Id = number
 6. NEVER add LIMIT unless specifically requested
 7. Return ONLY the SQL query - no explanations or markdown
+8. **CRITICAL**: When a specific month and year are mentioned (like "July 2026"), do NOT include current date comparisons
+9. **CRITICAL**: For "this month" queries, ALWAYS include both month AND year filters
 
 **DATE QUERY PATTERNS:**
-**Year-based:**
+
+**Relative Date Queries (MUST include current year):**
+- "this month" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_month']} AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
 - "this year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
 - "next year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_year']}
-- "2025" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2025
 
-**Month-Year combinations (CRITICAL EXAMPLES):**
-{chr(10).join(month_examples[:8])}
+**Specific Month-Year Queries (NO current date filters):**
+- "July 2026" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 7 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2026
+- "March 2025" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 3 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2025
 
 **EXTRACTED DATE INFO HANDLING:**
-If question contains [EXTRACTED: month=X year=Y], use those exact values:
-- month=6 year=2026 → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 6 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2026
-
+If question contains [EXTRACTED: month=X year=Y context=Z], use these rules:
+- context=this_month → Use month AND current year, no current date filter
+- context=specific_month_year → Use ONLY the specified month and year, NO current date filter
+- context=this_year → Use only current year
+- month=6 year=2026 context=specific_month_year → MONTH(...) = 6 AND YEAR(...) = 2026
 
 **ROBUST QUERY EXAMPLES:**
 - "FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
 - "active status" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%'
-- "June 2026" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 6 AND YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 2026
+- "this month expiring" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_month']} AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+- "July 2026 expiring" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = 7 AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = 2026
 - "created in march 2025" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 3 AND YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 2025
-- "expire in december 2024" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = 12 AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = 2024
+
+**EXAMPLES WITH EXTRACTED INFO:**
+- [EXTRACTED: month=7 year=2025 context=this_month] → MONTH(...) = 7 AND YEAR(...) = 2025
+- [EXTRACTED: month=6 year=2026 context=specific_month_year] → MONTH(...) = 6 AND YEAR(...) = 2026
+- [EXTRACTED: year=2025 context=this_year] → YEAR(...) = 2025
 
 **ERROR PREVENTION:**
 - Always use proper STR_TO_DATE syntax
-- If a only specific month with year is given to you dont use the current date in the query
-- Use current date(STR_TO_DATE(`Expires`, '%Y-%m-%d') = CURDATE()) in the query only when the question is including "From today " or "In the next month" or "In this year " or "In the current year"
+- **NEVER use CURDATE() when specific month-year is mentioned**
+- Use CURDATE() ONLY for queries like "today", "from today", "current date"
+- For "this month" queries, include both MONTH() = current_month AND YEAR() = current_year
 - Check column names match exactly: Created, Expires (not Create, Expire)
 - Use proper quotes: single quotes for strings, no quotes for numbers
 - Ensure proper AND/OR logic for multiple conditions
@@ -481,6 +521,7 @@ class FarDetailsAssistant:
 CURRENT DATE CONTEXT:
 - Today: {date_ctx['current_date']}
 - Current Year: {date_ctx['current_year']}
+- Current Month: {date_ctx['current_month']} ({date_ctx['current_month_name']})
 - Next Year: {date_ctx['next_year']}
 
 IMPORTANT INSTRUCTIONS:
@@ -488,8 +529,11 @@ IMPORTANT INSTRUCTIONS:
 - June = 6, March = 3, January = 1, December = 12, etc.
 - Always use STR_TO_DATE function for date columns
 - For 'June 2026' queries, use: MONTH(...) = 6 AND YEAR(...) = 2026
+- For 'this month' queries, use: MONTH(...) = current_month AND YEAR(...) = current_year
 - For 'created' or 'creation' use the Created column
 - For 'expire' or 'expiry' use the Expires column
+- NEVER use CURDATE() when specific month-year is mentioned
+- For "this month" always include both month and year filters
 
 QUESTION: {enhanced_question}
 """
@@ -634,16 +678,17 @@ if __name__ == "__main__":
         "List all FARs created in 2020",
         "Show me all FARs that expire in March 2020",
         "Count FARs created today",
-        "FARs expiring this month",
+        "FARs expiring this month",  # Should now include current year
         "All FARs with status resolved",
-        "FARs created next year",  # This should now work properly
+        "FARs created next year",
         "Count FARs expiring next year",
         "FARs created this year",
         "Show FARs created last year",
         "FARs expiring next month",
         "Count all active FARs created in the previous year",
-        "List FARs that will expire in January 2026",  # Specific future date
-        "Show me FARs created between 2020 and 2023"
+        "List FARs that will expire in January 2026",  # Should work without CURDATE()
+        "Show me FARs created between 2020 and 2023",
+        "How many FARs are expiring in July 2026"  # Specific test case
     ]
 
     for query in test_queries:
