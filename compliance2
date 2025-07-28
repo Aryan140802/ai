@@ -14,17 +14,16 @@ from langchain.chains import create_sql_query_chain
 
 # --- CONFIGURATION ---
 DATABASE_CONFIG = {
-    "host": "your_host",           # Your MySQL host
-    "user": "your_username",       # Your MySQL username  
-    "password": "your_password",   # Your MySQL password
-    "database": "your_database",   # Your database name
-    # "port": 3306,                # Optional - MySQL default port (3306). Remove if not needed
+    "host": "localhost",
+    "user": "root", 
+    "password": "root123",
+    "database": "EIS_n",
     "charset": "utf8mb4"
 }
 
 REPORT_CONFIG = {
     "name": "System Reports Database Query",
-    "table_name": "system_reports",  # Your table name from schema
+    "table_name": "EISHome_compliance",  # Your actual table name
     "supported_queries": ["system info", "performance", "security", "versions", "analytics"]
 }
 
@@ -753,24 +752,20 @@ class AdvancedDatabaseQueryAssistant:
         if self.connection:
             self.connection.close()
 
-def main():
-    """Main function with enhanced startup"""
-    print("=== Advanced Database System Report Query Assistant ===")
-    print("🚀 Powered by LangChain + Ollama + PyMySQL")
-    print("🤖 Natural Language to SQL AI Assistant")
-    print()
-    
-    # Check database configuration
-    if DATABASE_CONFIG['user'] == 'your_username':
-        print("⚠️  Please update DATABASE_CONFIG with your actual database credentials")
-        print("📝 Edit the DATABASE_CONFIG section at the top of this file")
-        return
-    
-    # Create assistant instance
-    assistant = AdvancedDatabaseQueryAssistant()
-    
-    # Start interactive session
-    assistant.start_interactive_session()
+    def main():
+        """Main function with enhanced startup"""
+        print("=== Advanced Database System Report Query Assistant ===")
+        print("🚀 Powered by LangChain + Ollama + PyMySQL")
+        print("🤖 Natural Language to SQL AI Assistant")
+        print(f"📊 Database: {DATABASE_CONFIG['database']}")
+        print(f"🏢 Table: {REPORT_CONFIG['table_name']}")
+        print()
+        
+        # Create assistant instance
+        assistant = AdvancedDatabaseQueryAssistant()
+        
+        # Start interactive session
+        assistant.start_interactive_session()
 
 if __name__ == "__main__":
     main()
