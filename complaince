@@ -1,0 +1,680 @@
+
+import os
+import re
+import logging
+import json
+import glob
+import traceback
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
+from pathlib import Path
+
+from langchain_ollama import OllamaLLM
+
+# --- CONFIGURATION ---
+
+REPORT_CONFIG = {
+    "name": "System Reports",
+    "report_directory": ".",  # Directory containing system report JSON files
+    "supported_patterns": ["system_report_*.json"]
+}
+
+logging.basicConfig(
+    filename=os.path.expanduser("~/.system_report_query_ai.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def clean_query_response(raw_response: str) -> str:
+    """Clean and extract meaningful response from LLM"""
+    # Remove any code blocks or formatting
+    response = re.sub(r"```[\w]*\s*(.*?)\s*```", r"\1", raw_response, flags=re.DOTALL)
+    return response.strip()
+
+def format_answer(data: Any, max_items: int = 20) -> str:
+    """Format query results for display"""
+    if not data:
+        return "No data found for your request."
+
+    if isinstance(data, (str, int, float, bool)):
+        return f"Result: {data}"
+
+    if isinstance(data, dict):
+        if len(data) == 1:
+            key, value = next(iter(data.items()))
+            return f"{key}: {format_answer(value, max_items)}"
+
+        output = []
+        for key, value in list(data.items())[:max_items]:
+            if isinstance(value, (dict, list)) and len(str(value)) > 100:
+                output.append(f"{key}: [Complex data - {len(value) if isinstance(value, (list, dict)) else 'N/A'} items]")
+            else:
+                output.append(f"{key}: {value}")
+
+        if len(data) > max_items:
+            output.append(f"... and {len(data) - max_items} more items")
+        return "\n".join(output)
+
+    if isinstance(data, list):
+        if not data:
+            return "Empty list"
+
+        output = []
+        for i, item in enumerate(data[:max_items]):
+            if isinstance(item, dict):
+                # Show key fields for dictionary items
+                if 'name' in item:
+                    output.append(f"{i+1}. {item['name']}: {item}")
+                elif 'command' in item:
+                    output.append(f"{i+1}. {item['command']}: CPU:{item.get('cpu_percent', 'N/A')}% MEM:{item.get('memory_percent', 'N/A')}%")
+                elif 'device' in item:
+                    output.append(f"{i+1}. {item['device']}: {item.get('size', 'N/A')} ({item.get('usage_percent', 'N/A')} used)")
+                else:
+                    output.append(f"{i+1}. {item}")
+            else:
+                output.append(f"{i+1}. {item}")
+
+        if len(data) > max_items:
+            output.append(f"... and {len(data) - max_items} more items")
+        return "\n".join(output)
+
+    return str(data)
+
+def clear_screen():
+    """Clear terminal screen"""
+    os.system("cls" if os.name == "nt" else "clear")
+
+class SystemReportQueryAssistant:
+    def __init__(self):
+        self.llm = None
+        self.reports_data = {}
+        self.initialized = False
+        self.chat_history = []
+
+    def initialize(self):
+        """Initialize the system report query assistant"""
+        try:
+            print("🔧 Initializing System Report Query Assistant...")
+
+            # Initialize LLM
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.0)
+
+            # Load system report files
+            self.load_system_reports()
+
+            self.initialized = True
+            print("✅ System Report Query Assistant initialized successfully!")
+            return True
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}", exc_info=True)
+            return False
+
+    def load_system_reports(self):
+        """Load all system report JSON files from the directory"""
+        try:
+            report_dir = REPORT_CONFIG['report_directory']
+            patterns = REPORT_CONFIG['supported_patterns']
+
+            loaded_count = 0
+            for pattern in patterns:
+                file_pattern = os.path.join(report_dir, pattern)
+                for file_path in glob.glob(file_pattern):
+                    try:
+                        with open(file_path, 'r') as f:
+                            report_data = json.load(f)
+
+                        # Use filename as key
+                        file_key = os.path.basename(file_path)
+                        self.reports_data[file_key] = {
+                            'data': report_data,
+                            'file_path': file_path,
+                            'loaded_at': datetime.now().isoformat(),
+                            'file_size': os.path.getsize(file_path)
+                        }
+                        loaded_count += 1
+
+                    except Exception as e:
+                        logger.error(f"Failed to load {file_path}: {e}")
+                        print(f"⚠️  Failed to load {file_path}: {e}")
+
+            if loaded_count == 0:
+                print("⚠️  No system report files found. Please ensure system report JSON files exist in the current directory.")
+                print("📁 Looking for files matching:", patterns)
+                return False
+
+            print(f"✅ Loaded {loaded_count} system report files")
+            return True
+
+        except Exception as e:
+            print(f"❌ Failed to load system reports: {e}")
+            logger.error(f"Failed to load system reports: {e}")
+            return False
+
+    def search_data(self, data: Any, search_terms: List[str], path: str = "") -> List[Dict]:
+        """Recursively search through data structure for relevant information"""
+        results = []
+
+        if isinstance(data, dict):
+            for key, value in data.items():
+                current_path = f"{path}.{key}" if path else key
+
+                # Check if current key matches search terms
+                if any(term.lower() in key.lower() for term in search_terms):
+                    results.append({
+                        'path': current_path,
+                        'key': key,
+                        'value': value,
+                        'type': type(value).__name__
+                    })
+
+                # Recursively search in nested structures
+                results.extend(self.search_data(value, search_terms, current_path))
+
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                current_path = f"{path}[{i}]" if path else f"[{i}]"
+                results.extend(self.search_data(item, search_terms, current_path))
+
+        elif isinstance(data, str):
+            # Check if string value contains search terms
+            if any(term.lower() in data.lower() for term in search_terms):
+                results.append({
+                    'path': path,
+                    'value': data,
+                    'type': 'string_match'
+                })
+
+        return results
+
+    def filter_processes(self, processes_data: Dict, criteria: Dict) -> List[Dict]:
+        """Filter processes based on criteria"""
+        results = []
+
+        for process_type, process_list in processes_data.items():
+            if not isinstance(process_list, list):
+                continue
+
+            for process in process_list:
+                if not isinstance(process, dict):
+                    continue
+
+                match = True
+
+                # Check CPU threshold
+                if 'min_cpu' in criteria:
+                    cpu = process.get('cpu_percent', 0)
+                    if isinstance(cpu, (int, float)) and cpu < criteria['min_cpu']:
+                        match = False
+
+                # Check memory threshold
+                if 'min_memory' in criteria:
+                    memory = process.get('memory_percent', 0)
+                    if isinstance(memory, (int, float)) and memory < criteria['min_memory']:
+                        match = False
+
+                # Check command/name contains text
+                if 'contains' in criteria:
+                    command = process.get('command', '').lower()
+                    name = process.get('name', '').lower()
+                    search_text = criteria['contains'].lower()
+                    if search_text not in command and search_text not in name:
+                        match = False
+
+                # Check user
+                if 'user' in criteria:
+                    if process.get('user', '') != criteria['user']:
+                        match = False
+
+                if match:
+                    process_copy = process.copy()
+                    process_copy['source_type'] = process_type
+                    results.append(process_copy)
+
+        return results
+
+    def filter_storage(self, storage_data: Dict, criteria: Dict) -> List[Dict]:
+        """Filter storage devices based on criteria"""
+        results = []
+        disks = storage_data.get('disks', [])
+
+        for disk in disks:
+            if not isinstance(disk, dict):
+                continue
+
+            match = True
+
+            # Check usage threshold
+            if 'min_usage' in criteria:
+                usage_str = disk.get('usage_percent', '0%')
+                try:
+                    usage = float(usage_str.replace('%', ''))
+                    if usage < criteria['min_usage']:
+                        match = False
+                except (ValueError, AttributeError):
+                    match = False
+
+            # Check device name contains text
+            if 'contains' in criteria:
+                device = disk.get('device', '').lower()
+                mount_point = disk.get('mount_point', '').lower()
+                search_text = criteria['contains'].lower()
+                if search_text not in device and search_text not in mount_point:
+                    match = False
+
+            # Check filesystem type
+            if 'filesystem' in criteria:
+                if disk.get('filesystem_type', '') != criteria['filesystem']:
+                    match = False
+
+            if match:
+                results.append(disk)
+
+        return results
+
+    def filter_services(self, services_data: Dict, criteria: Dict) -> List[Dict]:
+        """Filter services based on criteria"""
+        results = []
+
+        for service_type, service_list in services_data.items():
+            if not isinstance(service_list, list):
+                continue
+
+            for service in service_list:
+                if not isinstance(service, dict):
+                    continue
+
+                match = True
+
+                # Check service state
+                if 'state' in criteria:
+                    active_state = service.get('active_state', '').lower()
+                    if criteria['state'].lower() not in active_state:
+                        match = False
+
+                # Check service name contains text
+                if 'contains' in criteria:
+                    name = service.get('name', '').lower()
+                    description = service.get('description', '').lower()
+                    search_text = criteria['contains'].lower()
+                    if search_text not in name and search_text not in description:
+                        match = False
+
+                if match:
+                    service_copy = service.copy()
+                    service_copy['source_type'] = service_type
+                    results.append(service_copy)
+
+        return results
+
+    def analyze_question_intent(self, question: str) -> Dict:
+        """Analyze question to determine intent and extract criteria"""
+        question_lower = question.lower()
+        intent = {
+            'type': 'general',
+            'criteria': {},
+            'search_terms': []
+        }
+
+        # Extract numbers for thresholds
+        numbers = re.findall(r'\d+(?:\.\d+)?', question)
+
+        # Determine query type
+        if any(word in question_lower for word in ['process', 'cpu', 'memory', 'running']):
+            intent['type'] = 'processes'
+
+            # Extract CPU/memory thresholds
+            if 'cpu' in question_lower and numbers:
+                intent['criteria']['min_cpu'] = float(numbers[0])
+            if 'memory' in question_lower and numbers:
+                intent['criteria']['min_memory'] = float(numbers[0])
+
+            # Extract process name searches
+            if 'contain' in question_lower or 'with' in question_lower:
+                # Try to extract quoted strings or common process names
+                quoted = re.findall(r'"([^"]*)"', question)
+                if quoted:
+                    intent['criteria']['contains'] = quoted[0]
+
+        elif any(word in question_lower for word in ['disk', 'storage', 'filesystem', 'mount']):
+            intent['type'] = 'storage'
+
+            # Extract usage thresholds
+            if any(word in question_lower for word in ['usage', 'used', 'full']) and numbers:
+                intent['criteria']['min_usage'] = float(numbers[0])
+
+        elif any(word in question_lower for word in ['service', 'systemd', 'daemon']):
+            intent['type'] = 'services'
+
+            # Extract service state
+            if 'running' in question_lower:
+                intent['criteria']['state'] = 'active'
+            elif 'failed' in question_lower:
+                intent['criteria']['state'] = 'failed'
+
+        # Extract general search terms
+        # Remove common words and extract meaningful terms
+        stop_words = {'the', 'is', 'are', 'what', 'show', 'list', 'get', 'all', 'with', 'and', 'or', 'of', 'in', 'on', 'at', 'by'}
+        words = re.findall(r'\b\w+\b', question_lower)
+        intent['search_terms'] = [word for word in words if word not in stop_words and len(word) > 2]
+
+        return intent
+
+    def query_reports_structured(self, question: str) -> str:
+        """Query reports using structured filtering based on question analysis"""
+        try:
+            intent = self.analyze_question_intent(question)
+            all_results = []
+
+            for file_key, report_info in self.reports_data.items():
+                report_data = report_info['data']
+                file_results = []
+
+                if intent['type'] == 'processes' and 'processes' in report_data:
+                    filtered = self.filter_processes(report_data['processes'], intent['criteria'])
+                    file_results.extend(filtered)
+
+                elif intent['type'] == 'storage' and 'storage' in report_data:
+                    filtered = self.filter_storage(report_data['storage'], intent['criteria'])
+                    file_results.extend(filtered)
+
+                elif intent['type'] == 'services' and 'services' in report_data:
+                    filtered = self.filter_services(report_data['services'], intent['criteria'])
+                    file_results.extend(filtered)
+
+                else:
+                    # General search across all data
+                    if intent['search_terms']:
+                        search_results = self.search_data(report_data, intent['search_terms'])
+                        file_results.extend(search_results)
+
+                # Add source file info to results
+                for result in file_results:
+                    result['source_file'] = file_key
+
+                all_results.extend(file_results[:10])  # Limit per file
+
+            if not all_results:
+                return "No matching data found for your query."
+
+            # Sort results by relevance (you can customize this)
+            if intent['type'] == 'processes':
+                # Sort by CPU usage if available
+                all_results.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
+            elif intent['type'] == 'storage':
+                # Sort by usage percentage
+                all_results.sort(key=lambda x: float(str(x.get('usage_percent', '0%')).replace('%', '')), reverse=True)
+
+            # Format results
+            return format_answer(all_results[:20])  # Top 20 results
+
+        except Exception as e:
+            logger.error(f"Structured query error: {e}")
+            return f"❌ Error processing structured query: {str(e)}"
+
+    def query_reports_llm(self, question: str) -> str:
+        """Query reports using LLM for complex analysis"""
+        try:
+            # Create context from all loaded reports
+            context_data = {}
+            for file_key, report_info in self.reports_data.items():
+                context_data[file_key] = report_info['data']
+
+            # Prepare prompt for the LLM
+            prompt = f"""
+You are a system administrator assistant analyzing system reports. Answer the user's question based on the provided system report data.
+
+User Question: {question}
+
+System Reports Data:
+{json.dumps(context_data, indent=2)}
+
+Instructions:
+1. Analyze the system report data to answer the user's question
+2. Provide specific details from the reports
+3. If comparing multiple reports, mention the differences
+4. Include relevant metrics, numbers, and technical details
+5. If the question cannot be answered from the data, say so clearly
+6. Format your response in a clear, structured way
+7. Focus on the most relevant information and avoid overwhelming details
+
+Answer:"""
+
+            response = self.llm.invoke(prompt)
+            return clean_query_response(response)
+
+        except Exception as e:
+            logger.error(f"LLM query error: {e}")
+            return f"❌ Error processing query: {str(e)}"
+
+    def process_question(self, question: str) -> Dict[str, Any]:
+        """Process system report question and return structured response"""
+        if not self.initialized:
+            return {
+                "success": False,
+                "error": "Assistant not initialized",
+                "response": "❌ Assistant not initialized. Please restart."
+            }
+
+        try:
+            # Determine query approach based on question complexity
+            question_lower = question.lower()
+
+            # Use structured filtering for simple, specific queries
+            if any(keyword in question_lower for keyword in ['top', 'highest', 'lowest', 'list', 'show', 'processes using', 'services with']):
+                response = self.query_reports_structured(question)
+            else:
+                # Use LLM for complex analysis and comparisons
+                response = self.query_reports_llm(question)
+
+            self.chat_history.append({"user": question, "assistant": response})
+
+            return {
+                "success": True,
+                "query": question,
+                "response": response,
+                "timestamp": datetime.now().isoformat(),
+                "reports_loaded": len(self.reports_data)
+            }
+
+        except Exception as e:
+            logger.error(f"Processing error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"❌ Error processing your request: {e}"
+            }
+
+    def save_feedback(self, question, answer, feedback):
+        """Save user feedback for query improvement"""
+        data = {
+            "question": question,
+            "answer": answer,
+            "feedback": feedback,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            with open("system_report_feedback_log.jsonl", "a") as f:
+                f.write(json.dumps(data) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+
+    def show_help(self):
+        """Display help information"""
+        help_text = f"""
+📖 SYSTEM REPORT QUERY ASSISTANT HELP
+
+📊 LOADED REPORTS: {len(self.reports_data)} files
+{chr(10).join(f"  - {filename}" for filename in list(self.reports_data.keys())[:5])}
+{f"  ... and {len(self.reports_data) - 5} more" if len(self.reports_data) > 5 else ""}
+
+💾 EXAMPLE QUERIES:
+  System Information:
+  - "What is the hostname and OS version?"
+  - "Show system uptime and load average"
+  - "Compare kernel versions across reports"
+
+  Performance Queries:
+  - "What are the top CPU consuming processes?"
+  - "Show memory usage statistics"
+  - "List processes using more than 5% CPU"
+  - "Show processes containing python"
+
+  Storage Queries:
+  - "Show disk usage information"
+  - "Which filesystems are nearly full?"
+  - "List storage with more than 80% usage"
+  - "Show all mounted storage devices"
+
+  Service Queries:
+  - "What services are running?"
+  - "Show any failed services"
+  - "List services containing network"
+  - "Show active services"
+
+🔍 QUERY FEATURES:
+  - Natural language processing with LLM
+  - Direct JSON data filtering and search
+  - Multiple report comparison
+  - Real-time report data access
+  - Intelligent query type detection
+
+💡 COMMANDS:
+  - 'help' - Show this help
+  - 'clear' - Clear screen
+  - 'status' - Show system status
+  - 'reload' - Reload report files
+  - 'exit' - Quit assistant
+        """
+        print(help_text)
+
+    def show_status(self):
+        """Display system status"""
+        print("🔍 SYSTEM STATUS")
+        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🤖 AI Model: {'✅ Initialized' if self.initialized else '❌ Not Initialized'}")
+        print(f"📊 Reports Loaded: {len(self.reports_data)}")
+        print(f"📝 Chat History: {len(self.chat_history)} queries")
+
+        if self.reports_data:
+            print("\n📁 LOADED REPORTS:")
+            for filename, info in list(self.reports_data.items())[:3]:
+                size_kb = info['file_size'] / 1024
+                print(f"  - {filename} ({size_kb:.1f} KB)")
+            if len(self.reports_data) > 3:
+                print(f"  ... and {len(self.reports_data) - 3} more reports")
+
+    def reload_reports(self):
+        """Reload system report files"""
+        print("🔄 Reloading system reports...")
+        self.reports_data = {}
+        if self.load_system_reports():
+            print("✅ Reports reloaded successfully!")
+        else:
+            print("❌ Failed to reload reports")
+
+    def start_interactive_session(self):
+        """Start interactive query session"""
+        if not self.initialize():
+            return
+
+        clear_screen()
+        print("📊 System Report Query Assistant Ready")
+        print(f"Loaded {len(self.reports_data)} system report files")
+        print("Ask me about your system reports using natural language...")
+        print("Type 'exit' to quit, 'help' for examples\n")
+
+        while True:
+            try:
+                question = input("🔍 Query: ").strip()
+                if not question:
+                    continue
+
+                question_lower = question.lower()
+                if question_lower in ['exit', 'quit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                elif question_lower == 'help':
+                    self.show_help()
+                    continue
+                elif question_lower == 'clear':
+                    clear_screen()
+                    continue
+                elif question_lower == 'status':
+                    self.show_status()
+                    continue
+                elif question_lower == 'reload':
+                    self.reload_reports()
+                    continue
+
+                result = self.process_question(question)
+                print(f"\n📝 Response:\n{result['response']}\n")
+
+                if result['success']:
+                    feedback = input("Was this answer helpful? (yes/no/correction): ").strip()
+                    if feedback.lower() not in ['yes', 'y', '']:
+                        self.save_feedback(question, result['response'], feedback)
+                        print("Thank you for the feedback!")
+
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                logger.error(f"Session error: {e}", exc_info=True)
+
+def main():
+    """Main function"""
+    assistant = SystemReportQueryAssistant()
+
+    # Check for report files
+    report_files = glob.glob("system_report_*.json")
+    if not report_files:
+        print("❌ No system report files found!")
+        print("Please run the system report generator first to create report files.")
+        print("Looking for files matching: system_report_*.json")
+        return
+
+    print("=== System Report Query Assistant ===")
+    print(f"Found {len(report_files)} report files")
+
+    # Start interactive session
+    assistant.start_interactive_session()
+
+if __name__ == "__main__":
+    main()
+
+
+
+
++---------------+--------------+------+-----+---------+----------------+
+| Field         | Type         | Null | Key | Default | Extra          |
++---------------+--------------+------+-----+---------+----------------+
+| id            | bigint       | NO   | PRI | NULL    | auto_increment |
+| ip_address    | varchar(20)  | NO   |     | NULL    |                |
+| last_update   | varchar(50)  | NO   |     | NULL    |                |
+| upTime        | varchar(50)  | NO   |     | NULL    |                |
+| server_role   | varchar(50)  | NO   |     | NULL    |                |
+| ram           | int          | NO   |     | NULL    |                |
+| cpuCore       | int          | NO   |     | NULL    |                |
+| osVersion     | varchar(100) | NO   |     | NULL    |                |
+| kernelUdate   | varchar(100) | NO   |     | NULL    |                |
+| aceVersion    | varchar(20)  | NO   |     | NULL    |                |
+| mqVersion     | varchar(30)  | NO   |     | NULL    |                |
+| firewall      | varchar(50)  | NO   |     | NULL    |                |
+| rpmCount      | int          | NO   |     | NULL    |                |
+| dsAgent       | varchar(50)  | NO   |     | NULL    |                |
+| splunk        | varchar(50)  | NO   |     | NULL    |                |
+| ragent        | varchar(50)  | NO   |     | NULL    |                |
+| eisuserExpi   | varchar(30)  | NO   |     | NULL    |                |
+| rootExpi      | varchar(30)  | NO   |     | NULL    |                |
+| socvaExpi     | varchar(30)  | NO   |     | NULL    |                |
+| addmitamExpi  | varchar(50)  | NO   |     | NULL    |                |
+| systemTime    | varchar(50)  | NO   |     | NULL    |                |
+| fileSystem    | varchar(20)  | NO   |     | NULL    |                |
+| kernelVersion | varchar(100) | NO   |     | NULL    |                |
+| cpu           | int          | YES  |     | NULL    |                |
+| mem_cp_update | varchar(50)  | YES  |     | NULL    |                |
+| memory        | int          | YES  |     | NULL    |                |
++---------------+--------------+------+-----+---------+----------------+
