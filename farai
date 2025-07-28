@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timedelta
 import json
 import calendar
-
+import sqlparse
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
@@ -40,7 +40,7 @@ def get_comprehensive_date_context():
     current_date = date.today()
     current_year = current_date.year
     current_month = current_date.month
-    
+
     # Create month name mappings (case insensitive)
     month_names = {
         'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
@@ -48,9 +48,9 @@ def get_comprehensive_date_context():
         'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9,
         'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12
     }
-    
+
     month_numbers = {v: k.title() for k, v in month_names.items() if len(k) > 3}  # Full names only
-    
+
     return {
         'current_date': current_date.strftime('%Y-%m-%d'),
         'current_year': current_year,
@@ -66,7 +66,7 @@ def get_comprehensive_date_context():
 def preprocess_question(question: str) -> str:
     """Preprocess the question to handle common patterns and extract explicit date info"""
     question_lower = question.lower().strip()
-    
+
     # Extract explicit month-year patterns
     month_year_patterns = [
         r'\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{4})\b',
@@ -74,10 +74,10 @@ def preprocess_question(question: str) -> str:
         r'\b(\d{1,2})/(\d{4})\b',  # MM/YYYY
         r'\b(\d{4})/(\d{1,2})\b'   # YYYY/MM
     ]
-    
+
     date_ctx = get_comprehensive_date_context()
     extracted_info = {}
-    
+
     for pattern in month_year_patterns:
         match = re.search(pattern, question_lower)
         if match:
@@ -96,7 +96,7 @@ def preprocess_question(question: str) -> str:
                         if group in date_ctx['month_names']:
                             extracted_info['month'] = date_ctx['month_names'][group]
             break
-    
+
     # Add extracted information to question for LLM
     if extracted_info:
         addition = f" [EXTRACTED: "
@@ -106,16 +106,16 @@ def preprocess_question(question: str) -> str:
             addition += f"year={extracted_info['year']} "
         addition += "]"
         question += addition
-        
+
         print(f"DEBUG - Extracted date info: {extracted_info}")
         print(f"DEBUG - Enhanced question: {question}")
-    
+
     return question
 
 def get_sql_generation_prompt():
     """Generate comprehensive SQL prompt with extensive date handling examples"""
     date_ctx = get_comprehensive_date_context()
-    
+
     # Generate examples for each month of next year
     month_examples = []
     for month_num, month_name in date_ctx['month_numbers'].items():
@@ -124,14 +124,14 @@ def get_sql_generation_prompt():
             f'"FARs created in {month_name} {next_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {next_year}',
             f'"FARs expiring in {month_name.lower()} {next_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Expires, \'%Y-%m-%d %H:%i:%s\')) = {next_year}'
         ])
-    
+
     return f"""You are an expert SQL query generator for a FAR (Firewall Access Request) database.
 
 **CURRENT DATE CONTEXT:**
 - Today's date: {date_ctx['current_date']}
 - Current year: {date_ctx['current_year']}
 - Current month: {date_ctx['current_month']} ({date_ctx['current_month_name']})
-- Next year: {date_ctx['next_year']} 
+- Next year: {date_ctx['next_year']}
 - Previous year: {date_ctx['prev_year']}
 
 **MONTH NAME TO NUMBER MAPPING:**
@@ -140,12 +140,12 @@ def get_sql_generation_prompt():
 **DATABASE SCHEMA:**
 Table: FarDetailsAll
 - Far_Id (INT): Unique identifier
-- Subject (TEXT): Request title  
+- Subject (TEXT): Request title
 - Status (TEXT): Current status
 - Created (TEXT): Creation timestamp in 'YYYY-MM-DD HH:MM:SS' format
 - Expires (TEXT): Expiry timestamp in 'YYYY-MM-DD HH:MM:SS' format
 - Requested_Source (TEXT): Source IPs
-- Requested_Destination (TEXT): Destination IPs  
+- Requested_Destination (TEXT): Destination IPs
 - Requested_Service (TEXT): Services/ports
 - Dependent_application (TEXT): Applications
 - ZONE (TEXT): Environment zone
@@ -174,9 +174,6 @@ Table: FarDetailsAll
 If question contains [EXTRACTED: month=X year=Y], use those exact values:
 - month=6 year=2026 → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 6 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2026
 
-**Day-based:**
-- "today" → DATE(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = CURDATE()
-- "yesterday" → DATE(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
 
 **ROBUST QUERY EXAMPLES:**
 - "FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
@@ -209,12 +206,13 @@ def is_dangerous(text: str) -> bool:
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Enhanced SQL cleaning with better error handling"""
     print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
-    
+    raw_sql=sqlparse.format(raw_sql,strip_comments=True).strip()
+    print(f"DEBUG - Validating SQL: {raw_sql}")
     # Handle common LLM response patterns
     if "i cannot" in raw_sql.lower() or "i can't" in raw_sql.lower():
         print("DEBUG - LLM refused to generate SQL")
         return "ERROR: LLM refused to generate SQL"
-    
+
     # Extract from code blocks
     code_block_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if code_block_match:
@@ -222,17 +220,17 @@ def clean_and_fix_sql(raw_sql: str) -> str:
         print(f"DEBUG - Extracted from code block: {sql}")
     else:
         sql = raw_sql.strip()
-    
+
     # Remove common prefixes/suffixes
     sql = re.sub(r'^(here is|here\'s|sql query|query|the query is)?\s*:?\s*', '', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\s*;?\s*$', '', sql)
-    
+
     # Find SELECT statement
     select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$)', sql, re.IGNORECASE | re.DOTALL)
     if select_match:
         sql = select_match.group(1).strip()
         print(f"DEBUG - Extracted SELECT statement: {sql}")
-    
+
     # Handle specific FAR ID queries
     if not sql.upper().startswith('SELECT') and re.search(r'\bfar\b.*\b\d+\b', raw_sql.lower()):
         far_id_match = re.search(r'\b(\d+)\b', raw_sql)
@@ -240,56 +238,59 @@ def clean_and_fix_sql(raw_sql: str) -> str:
             far_id = far_id_match.group(1)
             sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
             print(f"DEBUG - Generated FAR ID query: {sql}")
-    
+
     # Fix common column name issues
     sql = re.sub(r'\bCreate\b', 'Created', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bExpire\b', 'Expires', sql, flags=re.IGNORECASE)
-    
+
     # Fix text field searches (convert = to LIKE for text fields)
     text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination',
                    'Requested_Service', 'Dependent_application', 'ZONE', 'Permanent_Rule']
-    
+
     for field in text_fields:
         # Convert = to LIKE for text fields
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
         sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-    
+
     # Remove unwanted LIMIT clauses
     sql = re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE)
-    
+
     # Final cleanup
     sql = sql.strip()
-    
+
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
 def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
     """Validate SQL and attempt to fix common issues"""
-    print(f"DEBUG - Validating SQL: {sql}")
-    
+    fixed_sql=sqlparse.format(sql,strip_comments=True).strip()
+    print(f"DEBUG - Validating SQL: {fixed_sql}")
+    return fixed_sql,True
     # Check if it's a valid SELECT query
     if not sql.upper().strip().startswith('SELECT'):
         print("DEBUG - Not a SELECT query")
         return sql, False
-    
+
     # Check for dangerous operations
     dangerous_ops = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']
     if any(op in sql.lower() for op in dangerous_ops):
         print("DEBUG - Contains dangerous operations")
         return sql, False
-    
+
     # Try to fix common syntax issues
     fixed_sql = sql
-    
+
     # Fix missing table name
     if 'from fardetailsall' in fixed_sql.lower():
         fixed_sql = re.sub(r'from\s+fardetailsall', 'FROM FarDetailsAll', fixed_sql, flags=re.IGNORECASE)
-    
+
     # Fix date function syntax issues
-    fixed_sql = re.sub(r'STR_TO_DATE\s*\(\s*([^,]+),\s*["\']%Y-%m-%d %H:%i:%s["\']\s*\)', 
+    fixed_sql = re.sub(r'STR_TO_DATE\s*\(\s*([^,]+),\s*["\']%Y-%m-%d %H:%i:%s["\']\s*\)',
                       r"STR_TO_DATE(\1, '%Y-%m-%d %H:%i:%s')", fixed_sql)
-    
+
     print(f"DEBUG - Fixed SQL: {fixed_sql}")
+    if (fixed_sql[-1]!=";"):
+        fixed_sql+=";"
     return fixed_sql, True
 
 def format_query_results_natural(result: List[Dict], question: str) -> str:
@@ -311,15 +312,15 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         response = f"I found 1 FAR record:\n\n"
 
         # Format key information
-        key_fields = ['Far_Id', 'Subject', 'Status', 'Created', 'Expires', 'ZONE', 
-                     'Requested_Source', 'Requested_Destination', 'Requested_Service', 
+        key_fields = ['Far_Id', 'Subject', 'Status', 'Created', 'Expires', 'ZONE',
+                     'Requested_Source', 'Requested_Destination', 'Requested_Service',
                      'Dependent_application', 'Permanent_Rule']
-        
-        icons = {'Far_Id': '📋', 'Subject': '📝', 'Status': '🔄', 'Created': '📅', 
-                'Expires': '⏰', 'ZONE': '🌐', 'Requested_Source': '🔗', 
-                'Requested_Destination': '🎯', 'Requested_Service': '⚙️', 
+
+        icons = {'Far_Id': '📋', 'Subject': '📝', 'Status': '🔄', 'Created': '📅',
+                'Expires': '⏰', 'ZONE': '🌐', 'Requested_Source': '🔗',
+                'Requested_Destination': '🎯', 'Requested_Service': '⚙️',
                 'Dependent_application': '📱', 'Permanent_Rule': '🔒'}
-        
+
         for field in key_fields:
             if field in record and record[field] is not None:
                 icon = icons.get(field, '•')
@@ -365,12 +366,12 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     # Select most important columns for display
     important_cols = ['Far_Id', 'Subject', 'Status', 'Created', 'Expires', 'ZONE']
     available_cols = [col for col in important_cols if col in result[0]]
-    
+
     if not available_cols:
         available_cols = list(result[0].keys())[:6]  # First 6 columns
 
     output = []
-    
+
     # Calculate column widths
     col_widths = {}
     for col in available_cols:
@@ -389,8 +390,8 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     # Rows
     for row in result:
         formatted_row = " | ".join(
-            str(row.get(col, 'NULL'))[:col_widths[col]-3] + "..." 
-            if len(str(row.get(col, 'NULL'))) > col_widths[col] 
+            str(row.get(col, 'NULL'))[:col_widths[col]-3] + "..."
+            if len(str(row.get(col, 'NULL'))) > col_widths[col]
             else str(row.get(col, 'NULL')).ljust(col_widths[col])
             for col in available_cols
         )
@@ -466,13 +467,13 @@ class FarDetailsAssistant:
 
         try:
             print(f"DEBUG - Original question: {question}")
-            
+
             # Preprocess question to extract date information
             enhanced_question = preprocess_question(question)
-            
+
             # Get date context
             date_ctx = get_comprehensive_date_context()
-            
+
             # Create comprehensive context for the LLM
             context_info = f"""
 CURRENT DATE CONTEXT:
@@ -490,7 +491,7 @@ IMPORTANT INSTRUCTIONS:
 
 QUESTION: {enhanced_question}
 """
-            
+
             # Generate SQL using the chain
             max_retries = 3
             for attempt in range(max_retries):
@@ -508,7 +509,7 @@ QUESTION: {enhanced_question}
             # Clean and validate SQL
             sql = clean_and_fix_sql(raw_sql)
             sql, is_valid = validate_and_fix_sql(sql)
-            
+
             if not is_valid:
                 return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"
 
@@ -521,19 +522,19 @@ QUESTION: {enhanced_question}
                     cursor.execute(sql)
                     result = cursor.fetchall()
                     print(f"DEBUG - Query returned {len(result)} rows")
-                    
+
                     if not result:
                         suggestions = self._generate_suggestions(question, sql)
                         return f"I couldn't find any FAR records matching your criteria.\n\n{suggestions}"
-                    
+
                     # Format and return results
                     return format_query_results_natural(result, question)
-                    
+
             except pymysql.Error as db_error:
                 error_code = getattr(db_error, 'args', [None])[0] if hasattr(db_error, 'args') else None
                 error_msg = f"❌ Database Error (Code: {error_code}): {str(db_error)}\n"
                 error_msg += f"SQL: {sql}\n"
-                
+
                 # Try to provide helpful suggestions based on error type
                 if "syntax error" in str(db_error).lower():
                     error_msg += "This appears to be a SQL syntax error. "
@@ -541,7 +542,7 @@ QUESTION: {enhanced_question}
                     error_msg += "This appears to be a column name error. "
                 elif "table" in str(db_error).lower():
                     error_msg += "This appears to be a table name error. "
-                
+
                 error_msg += "Please try rephrasing your question."
                 logger.error(f"Database error: {db_error}\nSQL: {sql}")
                 return error_msg
@@ -558,10 +559,10 @@ QUESTION: {enhanced_question}
         suggestions += "• Try using broader search terms\n"
         suggestions += "• Check if the date range contains data\n"
         suggestions += "• Verify status values (active, resolved, etc.)\n"
-        
+
         if "june" in question.lower() or "2026" in question:
             suggestions += "• For future dates like 'June 2026', ensure data exists for that period\n"
-        
+
         suggestions += f"\n🔍 Query executed: {sql}"
         return suggestions
 
@@ -606,8 +607,8 @@ QUESTION: {enhanced_question}
         finally:
             # Clean up database connection
             try:
-                if (self.db_handler and 
-                    self.db_handler.get('connection') and 
+                if (self.db_handler and
+                    self.db_handler.get('connection') and
                     hasattr(self.db_handler['connection'], 'open') and
                     self.db_handler['connection'].open):
                     self.db_handler['connection'].close()
@@ -629,7 +630,7 @@ if __name__ == "__main__":
     test_queries = [
         "Show me FAR with ID 175",
         "List all FARs created in 2020",
-        "Show me all FARs that expire in March 2020", 
+        "Show me all FARs that expire in March 2020",
         "Count FARs created today",
         "FARs expiring this month",
         "All FARs with status resolved",
