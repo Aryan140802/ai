@@ -184,6 +184,8 @@ If question contains [EXTRACTED: month=X year=Y], use those exact values:
 
 **ERROR PREVENTION:**
 - Always use proper STR_TO_DATE syntax
+- If a only specific month with year is given to you dont use the current date in the query
+- Use current date(STR_TO_DATE(`Expires`, '%Y-%m-%d') = CURDATE()) in the query only when the question is including "From today " or "In the next month" or "In this year " or "In the current year"
 - Check column names match exactly: Created, Expires (not Create, Expire)
 - Use proper quotes: single quotes for strings, no quotes for numbers
 - Ensure proper AND/OR logic for multiple conditions
