@@ -1,23 +1,78 @@
- Far_Id                     | int      | NO   | PRI | NULL    |       |
-| Subject                    | longtext | YES  |     | NULL    |       | far subject line
-| Status                     | longtext | NO   |     | NULL    |       | stauts of far
-| Created                    | longtext | NO   |     | NULL    |       | creation day
-| Expires                    | longtext | YES  |     | NULL    |       | expiry date 
-| Requested_Source           | longtext | NO   |     | NULL    |       |   
-| Requested_Destination      | longtext | NO   |     | NULL    |       | 
-| Requested_Service          | longtext | NO   |     | NULL    |       |
-| Requested_Source_NAT       | longtext | YES  |     | NULL    |       |
-| Requested_Destination_NAT  | longtext | YES  |     | NULL    |       |
-| Requested_Port_Translation | longtext | YES  |     | NULL    |       |
-| Change_Source              | longtext | YES  |     | NULL    |       |
-| Change_Destination         | longtext | YES  |     | NULL    |       |
-| Change_Service             | longtext | YES  |     | NULL    |       |
-| Change_Source_NAT          | longtext | YES  |     | NULL    |       |
-| Change_Destination_NAT     | longtext | YES  |     | NULL    |       |
-| Translated_Destination     | longtext | YES  |     | NULL    |       |
-| Translated_Service         | longtext | YES  |     | NULL    |       |
-| Dependent_application      | longtext | YES  |     | NULL    |       |
-| Permanent_Rule             | longtext | YES  |     | NULL    |       |
-| ZONE                       | longtext | YES  |     | NULL    |       |
-| Created_op                 | longtext | YES  |     | NULL    |       |
-| Expires_op                 | longtext | YES  |     | NULL    |       |
+ dbOpTest_brokerdetails
+
++--------------+--------------+------+-----+---------+----------------+
+| Field        | Type         | Null | Key | Default | Extra          |
++--------------+--------------+------+-----+---------+----------------+
+| id           | bigint       | NO   | PRI | NULL    | auto_increment |
+| udpPort      | int          | NO   |     | NULL    |                |
+| brokerName   | varchar(100) | NO   |     | NULL    |                |
+| brokerStatus | tinyint(1)   | NO   |     | NULL    |                |
+| server_id    | bigint       | NO   | MUL | NULL    |                |
++--------------+--------------+------+-----+---------+----------------+
+
+ dbOpTest_egdetails
++-----------+--------------+------+-----+---------+----------------+
+| Field     | Type         | Null | Key | Default | Extra          |
++-----------+--------------+------+-----+---------+----------------+
+| id        | bigint       | NO   | PRI | NULL    | auto_increment |
+| egName    | varchar(100) | NO   |     | NULL    |                |
+| egStatus  | tinyint(1)   | NO   |     | NULL    |                |
+| broker_id | bigint       | NO   | MUL | NULL    |                |
++-----------+--------------+------+-----+---------+----------------+
+
+
+dbOpTest_layerdetails;
++------------+--------------+------+-----+---------+----------------+
+| Field      | Type         | Null | Key | Default | Extra          |
++------------+--------------+------+-----+---------+----------------+
+| id         | bigint       | NO   | PRI | NULL    | auto_increment |
+| layer_name | varchar(100) | NO   |     | NULL    |                |
++------------+--------------+------+-----+---------+----------------+
+
+
+dbOpTest_schemas;
++-------------------+--------------+------+-----+---------+----------------+
+| Field             | Type         | Null | Key | Default | Extra          |
++-------------------+--------------+------+-----+---------+----------------+
+| id                | bigint       | NO   | PRI | NULL    | auto_increment |
+| layer_name        | varchar(100) | NO   |     | NULL    |                |
+| brokerDetails_id  | bigint       | NO   | MUL | NULL    |                |
+| egDetails_id      | bigint       | NO   | MUL | NULL    |                |
+| serviceDetails_id | bigint       | NO   | MUL | NULL    |                |
++-------------------+--------------+------+-----+---------+----------------+
+
+dbOpTest_serverdetails
+    -> ;
++----------+-------------+------+-----+---------+----------------+
+| Field    | Type        | Null | Key | Default | Extra          |
++----------+-------------+------+-----+---------+----------------+
+| id       | bigint      | NO   | PRI | NULL    | auto_increment |
+| serverIP | varchar(20) | NO   |     | NULL    |                |
+| layer_id | bigint      | NO   | MUL | NULL    |                |
++----------+-------------+------+-----+---------+----------------+
+
+dbOpTest_serviceadditionaldetails;
++-----------------+--------------+------+-----+---------+----------------+
+| Field           | Type         | Null | Key | Default | Extra          |
++-----------------+--------------+------+-----+---------+----------------+
+| id              | bigint       | NO   | PRI | NULL    | auto_increment |
+| serviceDepDate  | varchar(100) | NO   |     | NULL    |                |
+| serviceLastEdit | varchar(100) | NO   |     | NULL    |                |
+| service_id      | bigint       | NO   | MUL | NULL    |                |
++-----------------+--------------+------+-----+---------+----------------+
+
+dbOpTest_servicedetails;
++---------------------+--------------+------+-----+---------+----------------+
+| Field               | Type         | Null | Key | Default | Extra          |
++---------------------+--------------+------+-----+---------+----------------+
+| id                  | bigint       | NO   | PRI | NULL    | auto_increment |
+| serviceName         | varchar(100) | NO   |     | NULL    |                |
+| serviceStatus       | tinyint(1)   | NO   |     | NULL    |                |
+| additionalInstances | varchar(100) | NO   |     | NULL    |                |
+| threadCapicity      | varchar(100) | NO   |     | NULL    |                |
+| threadInUse         | varchar(100) | NO   |     | NULL    |                |
+| timeout             | varchar(500) | NO   |     | NULL    |                |
+| eg_id               | bigint       | NO   | MUL | NULL    |                |
+| genericName         | varchar(100) | NO   |     | NULL    |                |
++---------------------+--------------+------+-----+---------+----------------+
+
