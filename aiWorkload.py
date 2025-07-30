@@ -13,7 +13,6 @@ from sqlglot.errors import ParseError
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from collections import defaultdict
 
 today_date = date.today()
 
@@ -24,7 +23,7 @@ OP_TEST_DB_CONFIG = {
         "host": "localhost",
         "user": "root",
         "password": "root123",
-        "database": "EIS_n"
+        "database": "EIS_n"  # Replace with your actual database name
     },
     "include_tables": [
         "dbOpTest_layerdetails",
@@ -32,62 +31,116 @@ OP_TEST_DB_CONFIG = {
         "dbOpTest_brokerdetails",
         "dbOpTest_egdetails",
         "dbOpTest_servicedetails",
-        "dbOpTest_serviceadditionaldetails"
+        "dbOpTest_serviceadditionaldetails",
+        "dbOpTest_schemas"
     ],
-    "schema_hierarchy": {
-        "dbOpTest_layerdetails": {
-            "primary_key": "id",
-            "children": {
-                "dbOpTest_serverdetails": {
-                    "foreign_key": "layer_id",
-                    "relationship": "one-to-many"
-                }
-            }
+}
+
+# Enhanced table schema with relationships and data analysis
+TABLE_SCHEMAS = {
+    "dbOpTest_layerdetails": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "layer_name": {"type": "varchar(100)", "not_null": True, "searchable": True}
         },
-        "dbOpTest_serverdetails": {
-            "primary_key": "id",
-            "parent": "dbOpTest_layerdetails",
-            "children": {
-                "dbOpTest_brokerdetails": {
-                    "foreign_key": "server_id",
-                    "relationship": "one-to-many"
-                }
-            }
+        "relationships": {
+            "servers": {"table": "dbOpTest_serverdetails", "foreign_key": "layer_id", "type": "one_to_many"},
+            "schemas": {"table": "dbOpTest_schemas", "via": "layer_name", "type": "one_to_many"}
         },
-        "dbOpTest_brokerdetails": {
-            "primary_key": "id",
-            "parent": "dbOpTest_serverdetails",
-            "children": {
-                "dbOpTest_egdetails": {
-                    "foreign_key": "broker_id",
-                    "relationship": "one-to-many"
-                }
-            }
+        "description": "Contains layer definitions for the system architecture"
+    },
+    
+    "dbOpTest_serverdetails": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "serverIP": {"type": "varchar(20)", "not_null": True, "searchable": True},
+            "layer_id": {"type": "bigint", "foreign_key": "dbOpTest_layerdetails.id"}
         },
-        "dbOpTest_egdetails": {
-            "primary_key": "id",
-            "parent": "dbOpTest_brokerdetails",
-            "children": {
-                "dbOpTest_servicedetails": {
-                    "foreign_key": "eg_id",
-                    "relationship": "one-to-many"
-                }
-            }
+        "relationships": {
+            "layer": {"table": "dbOpTest_layerdetails", "foreign_key": "layer_id", "type": "many_to_one"},
+            "brokers": {"table": "dbOpTest_brokerdetails", "foreign_key": "server_id", "type": "one_to_many"}
         },
-        "dbOpTest_servicedetails": {
-            "primary_key": "id",
-            "parent": "dbOpTest_egdetails",
-            "children": {
-                "dbOpTest_serviceadditionaldetails": {
-                    "foreign_key": "service_id",
-                    "relationship": "one-to-one"
-                }
-            }
+        "description": "Server details including IP addresses and layer assignments"
+    },
+    
+    "dbOpTest_brokerdetails": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "udpPort": {"type": "int", "not_null": True},
+            "brokerName": {"type": "varchar(100)", "not_null": True, "searchable": True},
+            "brokerStatus": {"type": "tinyint(1)", "not_null": True, "status_field": True},
+            "server_id": {"type": "bigint", "foreign_key": "dbOpTest_serverdetails.id"}
         },
-        "dbOpTest_serviceadditionaldetails": {
-            "primary_key": "id",
-            "parent": "dbOpTest_servicedetails"
-        }
+        "relationships": {
+            "server": {"table": "dbOpTest_serverdetails", "foreign_key": "server_id", "type": "many_to_one"},
+            "egs": {"table": "dbOpTest_egdetails", "foreign_key": "broker_id", "type": "one_to_many"},
+            "schemas": {"table": "dbOpTest_schemas", "foreign_key": "brokerDetails_id", "type": "one_to_many"}
+        },
+        "description": "Broker configuration including ports, names, and status"
+    },
+    
+    "dbOpTest_egdetails": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "egName": {"type": "varchar(100)", "not_null": True, "searchable": True},
+            "egStatus": {"type": "tinyint(1)", "not_null": True, "status_field": True},
+            "broker_id": {"type": "bigint", "foreign_key": "dbOpTest_brokerdetails.id"}
+        },
+        "relationships": {
+            "broker": {"table": "dbOpTest_brokerdetails", "foreign_key": "broker_id", "type": "many_to_one"},
+            "services": {"table": "dbOpTest_servicedetails", "foreign_key": "eg_id", "type": "one_to_many"},
+            "schemas": {"table": "dbOpTest_schemas", "foreign_key": "egDetails_id", "type": "one_to_many"}
+        },
+        "description": "Execution Group details with names and status"
+    },
+    
+    "dbOpTest_servicedetails": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "serviceName": {"type": "varchar(100)", "not_null": True, "searchable": True},
+            "serviceStatus": {"type": "tinyint(1)", "not_null": True, "status_field": True},
+            "additionalInstances": {"type": "varchar(100)", "not_null": True},
+            "threadCapicity": {"type": "varchar(100)", "not_null": True},
+            "threadInUse": {"type": "varchar(100)", "not_null": True},
+            "timeout": {"type": "varchar(500)", "not_null": True},
+            "eg_id": {"type": "bigint", "foreign_key": "dbOpTest_egdetails.id"},
+            "genericName": {"type": "varchar(100)", "not_null": True, "searchable": True}
+        },
+        "relationships": {
+            "eg": {"table": "dbOpTest_egdetails", "foreign_key": "eg_id", "type": "many_to_one"},
+            "additional_details": {"table": "dbOpTest_serviceadditionaldetails", "foreign_key": "service_id", "type": "one_to_many"},
+            "schemas": {"table": "dbOpTest_schemas", "foreign_key": "serviceDetails_id", "type": "one_to_many"}
+        },
+        "description": "Service configuration including performance metrics and status"
+    },
+    
+    "dbOpTest_serviceadditionaldetails": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "serviceDepDate": {"type": "varchar(100)", "not_null": True, "date_field": True},
+            "serviceLastEdit": {"type": "varchar(100)", "not_null": True, "date_field": True},
+            "service_id": {"type": "bigint", "foreign_key": "dbOpTest_servicedetails.id"}
+        },
+        "relationships": {
+            "service": {"table": "dbOpTest_servicedetails", "foreign_key": "service_id", "type": "many_to_one"}
+        },
+        "description": "Additional service details including deployment and edit dates"
+    },
+    
+    "dbOpTest_schemas": {
+        "columns": {
+            "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
+            "layer_name": {"type": "varchar(100)", "not_null": True, "searchable": True},
+            "brokerDetails_id": {"type": "bigint", "foreign_key": "dbOpTest_brokerdetails.id"},
+            "egDetails_id": {"type": "bigint", "foreign_key": "dbOpTest_egdetails.id"},
+            "serviceDetails_id": {"type": "bigint", "foreign_key": "dbOpTest_servicedetails.id"}
+        },
+        "relationships": {
+            "broker": {"table": "dbOpTest_brokerdetails", "foreign_key": "brokerDetails_id", "type": "many_to_one"},
+            "eg": {"table": "dbOpTest_egdetails", "foreign_key": "egDetails_id", "type": "many_to_one"},
+            "service": {"table": "dbOpTest_servicedetails", "foreign_key": "serviceDetails_id", "type": "many_to_one"}
+        },
+        "description": "Schema mapping between layers and components"
     }
 }
 
@@ -99,6 +152,27 @@ BLOCKED_PATTERNS = [
     r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
     r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
+
+def analyze_table_relationships() -> Dict[str, Any]:
+    """Analyze table relationships and create a comprehensive mapping"""
+    relationships = {}
+    
+    for table_name, schema in TABLE_SCHEMAS.items():
+        relationships[table_name] = {
+            "direct_relationships": schema.get("relationships", {}),
+            "searchable_fields": [col for col, info in schema["columns"].items() 
+                                if info.get("searchable", False)],
+            "status_fields": [col for col, info in schema["columns"].items() 
+                            if info.get("status_field", False)],
+            "date_fields": [col for col, info in schema["columns"].items() 
+                          if info.get("date_field", False)],
+            "primary_key": [col for col, info in schema["columns"].items() 
+                          if info.get("primary_key", False)],
+            "foreign_keys": [col for col, info in schema["columns"].items() 
+                           if info.get("foreign_key")]
+        }
+    
+    return relationships
 
 def get_comprehensive_date_context():
     """Generate extremely comprehensive date context for robust LLM understanding"""
@@ -128,10 +202,125 @@ def get_comprehensive_date_context():
         'years_range': list(range(current_year - 5, current_year + 10))  # Support wide range
     }
 
-def preprocess_question(question: str) -> str:
-    """Preprocess the question to handle common patterns and extract explicit date info"""
+def analyze_question_intent(question: str) -> Dict[str, Any]:
+    """Analyze user question to understand intent and suggest appropriate tables/joins"""
     question_lower = question.lower().strip()
+    
+    intent_analysis = {
+        "question_type": "unknown",
+        "target_tables": [],
+        "search_terms": [],
+        "status_query": False,
+        "count_query": False,
+        "date_query": False,
+        "hierarchical_query": False,
+        "suggested_joins": [],
+        "filters": {}
+    }
+    
+    # Detect question type
+    if any(word in question_lower for word in ["how many", "count", "total"]):
+        intent_analysis["question_type"] = "count"
+        intent_analysis["count_query"] = True
+    elif any(word in question_lower for word in ["list", "show", "display", "get", "find"]):
+        intent_analysis["question_type"] = "list"
+    elif any(word in question_lower for word in ["status", "active", "inactive", "enabled", "disabled"]):
+        intent_analysis["status_query"] = True
+    
+    # Detect hierarchical queries
+    hierarchy_keywords = ["layer", "server", "broker", "eg", "service"]
+    mentioned_levels = [kw for kw in hierarchy_keywords if kw in question_lower]
+    if len(mentioned_levels) > 1:
+        intent_analysis["hierarchical_query"] = True
+    
+    # Map keywords to tables
+    table_keywords = {
+        "layer": ["dbOpTest_layerdetails"],
+        "server": ["dbOpTest_serverdetails"],
+        "broker": ["dbOpTest_brokerdetails"],
+        "eg": ["dbOpTest_egdetails"],
+        "service": ["dbOpTest_servicedetails", "dbOpTest_serviceadditionaldetails"],
+        "schema": ["dbOpTest_schemas"],
+        "ip": ["dbOpTest_serverdetails"],
+        "port": ["dbOpTest_brokerdetails"],
+        "thread": ["dbOpTest_servicedetails"],
+        "deployment": ["dbOpTest_serviceadditionaldetails"],
+        "date": ["dbOpTest_serviceadditionaldetails"]
+    }
+    
+    for keyword, tables in table_keywords.items():
+        if keyword in question_lower:
+            intent_analysis["target_tables"].extend(tables)
+    
+    # Remove duplicates
+    intent_analysis["target_tables"] = list(set(intent_analysis["target_tables"]))
+    
+    # Extract search terms (simple approach)
+    # Look for quoted strings or standalone words that might be search terms
+    search_patterns = [
+        r'"([^"]+)"',  # Quoted strings
+        r"'([^']+)'",  # Single quoted strings
+        r'\b(\d+\.\d+\.\d+\.\d+)\b',  # IP addresses
+        r'\b(\w+_\w+)\b'  # Underscore separated words (likely identifiers)
+    ]
+    
+    for pattern in search_patterns:
+        matches = re.findall(pattern, question_lower)
+        intent_analysis["search_terms"].extend(matches)
+    
+    # Suggest joins based on hierarchical relationships
+    if intent_analysis["hierarchical_query"]:
+        intent_analysis["suggested_joins"] = suggest_joins_for_tables(intent_analysis["target_tables"])
+    
+    return intent_analysis
 
+def suggest_joins_for_tables(tables: List[str]) -> List[Dict[str, str]]:
+    """Suggest appropriate joins based on table relationships"""
+    joins = []
+    
+    # Define common join patterns
+    join_patterns = [
+        {
+            "from": "dbOpTest_layerdetails",
+            "to": "dbOpTest_serverdetails",
+            "condition": "dbOpTest_layerdetails.id = dbOpTest_serverdetails.layer_id"
+        },
+        {
+            "from": "dbOpTest_serverdetails",
+            "to": "dbOpTest_brokerdetails",
+            "condition": "dbOpTest_serverdetails.id = dbOpTest_brokerdetails.server_id"
+        },
+        {
+            "from": "dbOpTest_brokerdetails",
+            "to": "dbOpTest_egdetails",
+            "condition": "dbOpTest_brokerdetails.id = dbOpTest_egdetails.broker_id"
+        },
+        {
+            "from": "dbOpTest_egdetails",
+            "to": "dbOpTest_servicedetails",
+            "condition": "dbOpTest_egdetails.id = dbOpTest_servicedetails.eg_id"
+        },
+        {
+            "from": "dbOpTest_servicedetails",
+            "to": "dbOpTest_serviceadditionaldetails",
+            "condition": "dbOpTest_servicedetails.id = dbOpTest_serviceadditionaldetails.service_id"
+        }
+    ]
+    
+    # Find relevant joins for the target tables
+    for pattern in join_patterns:
+        if pattern["from"] in tables and pattern["to"] in tables:
+            joins.append(pattern)
+    
+    return joins
+
+def preprocess_question(question: str) -> str:
+    """Enhanced question preprocessing with table schema awareness"""
+    question_lower = question.lower().strip()
+    
+    # Analyze question intent
+    intent = analyze_question_intent(question)
+    
     # Extract explicit month-year patterns
     month_year_patterns = [
         r'\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{4})\b',
@@ -141,7 +330,7 @@ def preprocess_question(question: str) -> str:
     ]
 
     date_ctx = get_comprehensive_date_context()
-    extracted_info = {}
+    extracted_info = {"intent": intent}
 
     for pattern in month_year_patterns:
         match = re.search(pattern, question_lower)
@@ -163,8 +352,14 @@ def preprocess_question(question: str) -> str:
             break
 
     # Add extracted information to question for LLM
-    if extracted_info:
-        addition = f" [EXTRACTED: "
+    if extracted_info.get("intent", {}).get("target_tables"):
+        addition = f" [TABLE_ANALYSIS: target_tables={extracted_info['intent']['target_tables']}, "
+        addition += f"question_type={extracted_info['intent']['question_type']}, "
+        addition += f"hierarchical={extracted_info['intent']['hierarchical_query']}]"
+        question += addition
+
+    if 'month' in extracted_info or 'year' in extracted_info:
+        addition = f" [DATE_EXTRACTED: "
         if 'month' in extracted_info:
             addition += f"month={extracted_info['month']} "
         if 'year' in extracted_info:
@@ -172,7 +367,7 @@ def preprocess_question(question: str) -> str:
         addition += "]"
         question += addition
 
-        print(f"DEBUG - Extracted date info: {extracted_info}")
+        print(f"DEBUG - Extracted info: {extracted_info}")
         print(f"DEBUG - Enhanced question: {question}")
 
     return question
@@ -189,6 +384,41 @@ def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
+def create_table_documentation() -> str:
+    """Create comprehensive table documentation for LLM context"""
+    doc = "=== DATABASE SCHEMA DOCUMENTATION ===\n\n"
+    
+    # Add hierarchical overview
+    doc += "HIERARCHICAL STRUCTURE:\n"
+    doc += "Layer -> Server -> Broker -> EG -> Service -> Service Additional Details\n\n"
+    
+    # Add detailed table information
+    for table_name, schema in TABLE_SCHEMAS.items():
+        doc += f"TABLE: {table_name}\n"
+        doc += f"Description: {schema['description']}\n"
+        doc += "Columns:\n"
+        
+        for col_name, col_info in schema["columns"].items():
+            doc += f"  - {col_name}: {col_info['type']}"
+            if col_info.get("primary_key"):
+                doc += " (PRIMARY KEY)"
+            if col_info.get("foreign_key"):
+                doc += f" (REFERENCES {col_info['foreign_key']})"
+            if col_info.get("searchable"):
+                doc += " (SEARCHABLE)"
+            if col_info.get("status_field"):
+                doc += " (STATUS: 1=Active, 0=Inactive)"
+            doc += "\n"
+        
+        if schema.get("relationships"):
+            doc += "Relationships:\n"
+            for rel_name, rel_info in schema["relationships"].items():
+                doc += f"  - {rel_name}: {rel_info['type']} with {rel_info['table']}\n"
+        
+        doc += "\n"
+    
+    return doc
+
 def clean_markdown_from_sql(raw_sql: str) -> str:
     """BULLETPROOF: Clean markdown from SQL using only safe string operations"""
     print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
@@ -196,16 +426,16 @@ def clean_markdown_from_sql(raw_sql: str) -> str:
     # Start with the raw input
     clean_sql = raw_sql.strip()
 
-    # Method 1: Handle ```
+    # Method 1: Handle ```sql
     if "```sql" in clean_sql:
-        parts = clean_sql.split("```")
+        parts = clean_sql.split("```sql")
         if len(parts) > 1:
             sql_part = parts[1]
             if "```" in sql_part:
-                clean_sql = sql_part.split("```")[0]
+                clean_sql = sql_part.split("```")[0].strip()
                 print(f"DEBUG - Extracted from ```sql block")
 
-    # Method 2: Handle ```
+    # Method 2: Handle general ```
     elif clean_sql.count("```") >= 2:
         parts = clean_sql.split("```")
         if len(parts) >= 3:
@@ -313,17 +543,18 @@ def validate_sql_with_sqlglot(sql: str) -> tuple[str, bool, str]:
         print(f"DEBUG - SQLGlot validation error: {e}")
         return sql, False, f"SQL validation error: {str(e)}"
 
-def clean_and_fix_sql(raw_sql: str) -> str:
-    """BULLETPROOF: Enhanced SQL cleaning with safe string operations"""
-    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
+def intelligent_sql_fix(raw_sql: str, question_intent: Dict[str, Any]) -> str:
+    """Enhanced SQL fixing based on question intent and table analysis"""
+    print(f"DEBUG - Intelligent SQL fix input: {repr(raw_sql)}")
+    print(f"DEBUG - Question intent: {question_intent}")
+
+    # Start with basic cleaning
+    sql = clean_markdown_from_sql(raw_sql)
 
     # Handle common LLM response patterns
-    if "i cannot" in raw_sql.lower() or "i can't" in raw_sql.lower():
+    if "i cannot" in sql.lower() or "i can't" in sql.lower():
         print("DEBUG - LLM refused to generate SQL")
         return "ERROR: LLM refused to generate SQL"
-
-    # Clean markdown
-    sql = clean_markdown_from_sql(raw_sql)
 
     # Clean up semicolons at the end
     sql = re.sub(r'\s*;?\s*$', '', sql)
@@ -334,43 +565,45 @@ def clean_and_fix_sql(raw_sql: str) -> str:
         sql = select_match.group(1).strip()
         print(f"DEBUG - Extracted SELECT statement: {sql}")
 
-    # Fix common table name issues
-    table_mappings = {
-        'layerdetails': 'dbOpTest_layerdetails',
-        'serverdetails': 'dbOpTest_serverdetails',
-        'brokerdetails': 'dbOpTest_brokerdetails',
-        'egdetails': 'dbOpTest_egdetails',
-        'servicedetails': 'dbOpTest_servicedetails',
-        'serviceadditionaldetails': 'dbOpTest_serviceadditionaldetails'
-    }
+    # Fix table names based on schema
+    for table_name in TABLE_SCHEMAS.keys():
+        short_name = table_name.replace('dbOpTest_', '')
+        sql = re.sub(f'\\b{short_name}\\b', table_name, sql, flags=re.IGNORECASE)
 
-    for old_name, new_name in table_mappings.items():
-        sql = re.sub(f'\\b{old_name}\\b', new_name, sql, flags=re.IGNORECASE)
+    # Add intelligent JOIN suggestions based on intent
+    if question_intent.get("hierarchical_query") and question_intent.get("suggested_joins"):
+        print("DEBUG - Adding intelligent JOINs based on question intent")
+        # This would require more sophisticated SQL parsing and reconstruction
 
-    # Fix text field searches (convert = to LIKE for varchar fields)
-    text_fields = ['layer_name', 'serverIP', 'brokerName', 'egName', 'serviceName',
-                   'additionalInstances', 'threadCapicity', 'threadInUse', 'timeout',
-                   'genericName', 'serviceDepDate', 'serviceLastEdit']
+    # Fix text field searches based on schema
+    for table_name, schema in TABLE_SCHEMAS.items():
+        for col_name, col_info in schema["columns"].items():
+            if col_info.get("searchable"):
+                # Convert = to LIKE for searchable text fields
+                pattern = f"({col_name})\\s*=\\s*'([^']*)'"
+                replacement = f"\\1 LIKE '%\\2%'"
+                sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
 
-    for field in text_fields:
-        # Convert = to LIKE for text fields
-        sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-        sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
+    # Fix status field queries
+    status_mappings = {"active": "1", "inactive": "0", "enabled": "1", "disabled": "0"}
+    for text_status, numeric_value in status_mappings.items():
+        sql = re.sub(f"= '{text_status}'", f"= {numeric_value}", sql, flags=re.IGNORECASE)
+        sql = re.sub(f'= "{text_status}"', f"= {numeric_value}", sql, flags=re.IGNORECASE)
 
     # Remove unwanted LIMIT clauses
     sql = re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE)
 
-    # Fix spacing issues in JOIN conditions (remove extra spaces around dots)
+    # Fix spacing issues in JOIN conditions
     sql = re.sub(r'(\w+)\s*\.\s+(\w+)', r'\1.\2', sql)
 
     # Final cleanup - normalize whitespace
     sql = ' '.join(sql.split())
 
-    print(f"DEBUG - Final cleaned SQL: {sql}")
+    print(f"DEBUG - Intelligently fixed SQL: {sql}")
     return sql
 
-def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
-    """Validate SQL using sqlglot and attempt to fix common issues"""
+def validate_and_fix_sql(sql: str, question_intent: Dict[str, Any] = None) -> tuple[str, bool]:
+    """Enhanced validation with intelligent fixing"""
     print(f"DEBUG - Validating SQL: {sql}")
 
     # First, use sqlglot for comprehensive validation
@@ -379,18 +612,19 @@ def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
     if not is_valid:
         print(f"DEBUG - SQLGlot validation failed: {error_msg}")
 
-        # Try some basic fixes and re-validate
-        fixed_sql = sql
+        # Try intelligent fixes based on question intent
+        if question_intent:
+            fixed_sql = intelligent_sql_fix(sql, question_intent)
+        else:
+            # Fallback to basic fixes
+            fixed_sql = sql
+            table_names = ['layerdetails', 'serverdetails', 'brokerdetails', 'egdetails',
+                          'servicedetails', 'serviceadditionaldetails', 'schemas']
 
-        # Fix missing table name prefixes
-        table_names = ['layerdetails', 'serverdetails', 'brokerdetails', 'egdetails',
-                       'servicedetails', 'serviceadditionaldetails']
-
-        for table in table_names:
-            # Add dbOpTest_ prefix if missing
-            pattern = f'\\b{table}\\b(?!_)'
-            replacement = f'dbOpTest_{table}'
-            fixed_sql = re.sub(pattern, replacement, fixed_sql, flags=re.IGNORECASE)
+            for table in table_names:
+                pattern = f'\\b{table}\\b(?!_)'
+                replacement = f'dbOpTest_{table}'
+                fixed_sql = re.sub(pattern, replacement, fixed_sql, flags=re.IGNORECASE)
 
         # Try validation again with fixes
         cleaned_sql, is_valid, error_msg = validate_sql_with_sqlglot(fixed_sql)
@@ -455,141 +689,53 @@ def analyze_sql_structure(sql: str) -> Dict[str, Any]:
         print(f"DEBUG - SQL analysis error: {e}")
         return {'error': str(e)}
 
-def analyze_performance_metrics(results: List[Dict]) -> Dict[str, Any]:
-    """Analyze performance metrics from service details"""
-    if not results:
-        return {}
-    
-    analysis = {
-        'total_services': len(results),
-        'active_services': 0,
-        'inactive_services': 0,
-        'total_thread_capacity': 0,
-        'total_threads_in_use': 0,
-        'utilization_stats': {
-            'high': 0,
-            'medium': 0,
-            'low': 0
-        },
-        'service_status_distribution': defaultdict(int),
-        'eg_distribution': defaultdict(int),
-        'broker_distribution': defaultdict(int)
-    }
-    
-    for record in results:
-        # Count active/inactive services
-        if 'serviceStatus' in record:
-            status = record['serviceStatus']
-            if status == 1:
-                analysis['active_services'] += 1
-            else:
-                analysis['inactive_services'] += 1
-        
-        # Analyze thread utilization if available
-        if 'threadCapicity' in record and 'threadInUse' in record:
-            try:
-                capacity = int(record['threadCapicity'])
-                in_use = int(record['threadInUse'])
-                analysis['total_thread_capacity'] += capacity
-                analysis['total_threads_in_use'] += in_use
-                
-                # Calculate utilization percentage
-                if capacity > 0:
-                    utilization = (in_use / capacity) * 100
-                    if utilization > 75:
-                        analysis['utilization_stats']['high'] += 1
-                    elif utilization > 25:
-                        analysis['utilization_stats']['medium'] += 1
-                    else:
-                        analysis['utilization_stats']['low'] += 1
-            except (ValueError, TypeError):
-                pass
-        
-        # Track distributions
-        if 'serviceName' in record:
-            analysis['service_status_distribution'][record['serviceName']] += 1
-        if 'egName' in record:
-            analysis['eg_distribution'][record['egName']] += 1
-        if 'brokerName' in record:
-            analysis['broker_distribution'][record['brokerName']] += 1
-    
-    # Calculate overall utilization percentage
-    if analysis['total_thread_capacity'] > 0:
-        analysis['overall_utilization'] = (analysis['total_threads_in_use'] / analysis['total_thread_capacity']) * 100
-    else:
-        analysis['overall_utilization'] = 0
-    
-    return analysis
+def sample_table_data(connection, table_name: str, limit: int = 5) -> List[Dict]:
+    """Sample data from table to understand content patterns"""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_name} LIMIT {limit}")
+            return cursor.fetchall()
+    except Exception as e:
+        print(f"DEBUG - Error sampling {table_name}: {e}")
+        return []
 
-def predict_service_trends(results: List[Dict]) -> Dict[str, Any]:
-    """Generate predictions based on service data"""
-    if not results:
-        return {}
+def analyze_data_patterns(connection) -> Dict[str, Any]:
+    """Analyze actual data patterns in tables to improve query generation"""
+    patterns = {}
     
-    # Simple prediction logic based on current utilization
-    prediction = {
-        'capacity_needed': False,
-        'potential_bottlenecks': [],
-        'underutilized_services': [],
-        'recommendations': []
-    }
-    
-    for record in results:
-        if 'threadCapicity' in record and 'threadInUse' in record and 'serviceName' in record:
-            try:
-                capacity = int(record['threadCapicity'])
-                in_use = int(record['threadInUse'])
-                
-                if capacity > 0:
-                    utilization = (in_use / capacity) * 100
+    for table_name in OP_TEST_DB_CONFIG['include_tables']:
+        print(f"DEBUG - Analyzing data patterns for {table_name}")
+        sample_data = sample_table_data(connection, table_name, 10)
+        
+        if sample_data:
+            patterns[table_name] = {
+                'row_count': len(sample_data),
+                'sample_values': {}
+            }
+            
+            # Analyze column value patterns
+            for col_name in sample_data[0].keys():
+                values = [row[col_name] for row in sample_data if row[col_name] is not None]
+                if values:
+                    patterns[table_name]['sample_values'][col_name] = {
+                        'unique_count': len(set(values)),
+                        'sample_values': list(set(values))[:5],  # First 5 unique values
+                        'data_type': type(values[0]).__name__ if values else 'unknown'
+                    }
                     
-                    # Identify potential bottlenecks
-                    if utilization > 90:
-                        prediction['potential_bottlenecks'].append({
-                            'service': record['serviceName'],
-                            'utilization': f"{utilization:.1f}%",
-                            'capacity': capacity,
-                            'in_use': in_use
-                        })
-                    
-                    # Identify underutilized services
-                    elif utilization < 10:
-                        prediction['underutilized_services'].append({
-                            'service': record['serviceName'],
-                            'utilization': f"{utilization:.1f}%",
-                            'capacity': capacity,
-                            'in_use': in_use
-                        })
-            except (ValueError, TypeError):
-                continue
+                    # Special analysis for searchable fields
+                    schema = TABLE_SCHEMAS.get(table_name, {})
+                    col_info = schema.get('columns', {}).get(col_name, {})
+                    if col_info.get('searchable'):
+                        patterns[table_name]['sample_values'][col_name]['is_searchable'] = True
     
-    # Generate recommendations
-    if prediction['potential_bottlenecks']:
-        prediction['capacity_needed'] = True
-        prediction['recommendations'].append(
-            "Consider increasing thread capacity for high-utilization services"
-        )
-    
-    if prediction['underutilized_services']:
-        prediction['recommendations'].append(
-            "Consider consolidating or reducing capacity for underutilized services"
-        )
-    
-    return prediction
+    print(f"DEBUG - Data patterns analysis complete: {patterns}")
+    return patterns
 
 def format_query_results_natural(result: List[Dict], question: str) -> str:
     """Enhanced result formatting with better handling of hierarchical data"""
     if not result:
-        # Perform analysis even when no results to provide better feedback
-        suggestions = "No records found matching your criteria."
-        
-        # Check if this might be a hierarchical query
-        if any(keyword in question.lower() for keyword in ['layer', 'server', 'broker', 'eg', 'service']):
-            suggestions += "\n\n💡 Try navigating the hierarchy:\n"
-            suggestions += "- Layers → Servers → Brokers → EGs → Services\n"
-            suggestions += "- Example: 'Show services under broker AADHAR_EXP'"
-        
-        return suggestions
+        return "I couldn't find any records matching your criteria."
 
     # Handle single value results (like COUNT)
     if len(result) == 1 and len(result[0]) == 1:
@@ -598,10 +744,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             return f"There are {value} records matching your criteria."
         else:
             return f"The result is: {value}"
-
-    # Perform performance analysis
-    performance = analyze_performance_metrics(result)
-    predictions = predict_service_trends(result)
 
     # Handle single record
     if len(result) == 1:
@@ -631,17 +773,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
                     value = "Active" if value == 1 else "Inactive"
 
                 response += f"{icon} {display_name}: {value}\n"
-
-        # Add performance insights if available
-        if 'threadCapicity' in record and 'threadInUse' in record:
-            try:
-                capacity = int(record['threadCapicity'])
-                in_use = int(record['threadInUse'])
-                if capacity > 0:
-                    utilization = (in_use / capacity) * 100
-                    response += f"\n📈 Utilization: {utilization:.1f}% ({in_use} of {capacity} threads)"
-            except (ValueError, TypeError):
-                pass
 
         return response.strip()
 
@@ -679,32 +810,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         response += format_query_results_tabular(result[:5])
         response += f"\n... and {len(result) - 5} more records."
 
-    # Add performance analysis
-    if performance:
-        response += "\n\n📊 Performance Analysis:\n"
-        response += f"- Active Services: {performance['active_services']} ({performance['active_services']/len(result)*100:.1f}%)\n"
-        response += f"- Thread Utilization: {performance['overall_utilization']:.1f}%\n"
-        response += f"  - High (>75%): {performance['utilization_stats']['high']} services\n"
-        response += f"  - Medium (25-75%): {performance['utilization_stats']['medium']} services\n"
-        response += f"  - Low (<25%): {performance['utilization_stats']['low']} services\n"
-
-    # Add predictions if available
-    if predictions:
-        if predictions['potential_bottlenecks']:
-            response += "\n⚠️ Potential Bottlenecks:\n"
-            for bottleneck in predictions['potential_bottlenecks'][:3]:  # Show top 3
-                response += f"- {bottleneck['service']} at {bottleneck['utilization']} utilization\n"
-        
-        if predictions['underutilized_services']:
-            response += "\nℹ️ Underutilized Services:\n"
-            for service in predictions['underutilized_services'][:3]:  # Show top 3
-                response += f"- {service['service']} at {service['utilization']} utilization\n"
-        
-        if predictions['recommendations']:
-            response += "\n💡 Recommendations:\n"
-            for rec in predictions['recommendations']:
-                response += f"- {rec}\n"
-
     return response
 
 def format_query_results_tabular(result: List[Dict]) -> str:
@@ -715,8 +820,7 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     # Select most important columns for display based on available fields
     important_cols_priority = [
         'id', 'layer_name', 'serverIP', 'brokerName', 'brokerStatus',
-        'egName', 'egStatus', 'serviceName', 'serviceStatus', 'genericName',
-        'threadCapicity', 'threadInUse'
+        'egName', 'egStatus', 'serviceName', 'serviceStatus', 'genericName'
     ]
 
     available_cols = [col for col in important_cols_priority if col in result[0]]
@@ -775,12 +879,14 @@ class OpTestDetailsAssistant:
         self.db_handler = None
         self.initialized = False
         self.chat_history = []
+        self.data_patterns = None
+        self.table_relationships = None
 
     def initialize(self):
-        """Initialize the Operational Test Details Assistant"""
+        """Initialize the Enhanced Operational Test Details Assistant"""
         try:
             # Initialize LLM with better parameters
-            self.llm = OllamaLLM(model="myllm:latest", temperature=0.0)  # Lower temperature for consistency
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.0)
 
             # Set up database connection
             db_cfg = OP_TEST_DB_CONFIG['db_config']
@@ -823,69 +929,93 @@ class OpTestDetailsAssistant:
                 'config': OP_TEST_DB_CONFIG
             }
 
+            # Analyze table relationships and data patterns
+            self.table_relationships = analyze_table_relationships()
+            self.data_patterns = analyze_data_patterns(db_conn)
+
             self.initialized = True
+            print("✅ Enhanced assistant initialized with data pattern analysis")
             return True
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
-    def query_op_test_details(self, question: str) -> str:
-        """Enhanced query processing with sqlglot integration"""
-        if not self.db_handler:
-            return "❌ Operational Test database not available."
-
-        try:
-            print(f"DEBUG - Original question: {question}")
-
-            # Preprocess question to extract date information
-            enhanced_question = preprocess_question(question)
-
-            # Get date context
-            date_ctx = get_comprehensive_date_context()
-
-            # Create comprehensive context for the LLM
-            context_info = f"""
-DATABASE SCHEMA HIERARCHY:
-Layer (dbOpTest_layerdetails) → Server (dbOpTest_serverdetails) → Broker (dbOpTest_brokerdetails) → EG (dbOpTest_egdetails) → Service (dbOpTest_servicedetails) → Service Additional Details (dbOpTest_serviceadditionaldetails)
-
-KEY RELATIONSHIPS:
-- layer_id in serverdetails links to layerdetails.id
-- server_id in brokerdetails links to serverdetails.id
-- broker_id in egdetails links to brokerdetails.id
-- eg_id in servicedetails links to egdetails.id
-- service_id in serviceadditionaldetails links to servicedetails.id
-
-STATUS FIELDS:
-- brokerStatus: 1 = Active, 0 = Inactive
-- egStatus: 1 = Active, 0 = Inactive
-- serviceStatus: 1 = Active, 0 = Inactive
-
-PERFORMANCE METRICS:
-- threadCapicity: Total available threads
-- threadInUse: Currently used threads
-- timeout: Service timeout configuration
+    def create_enhanced_context(self, question: str, question_intent: Dict[str, Any]) -> str:
+        """Create enhanced context with table analysis and data patterns"""
+        date_ctx = get_comprehensive_date_context()
+        table_doc = create_table_documentation()
+        
+        context = f"""
+=== ENHANCED DATABASE CONTEXT ===
 
 CURRENT DATE CONTEXT:
 - Today: {date_ctx['current_date']}
 - Current Year: {date_ctx['current_year']}
 - Next Year: {date_ctx['next_year']}
 
-IMPORTANT INSTRUCTIONS:
-- Use exact table names with dbOpTest_ prefix
-- For text searches, use LIKE with % wildcards
-- When querying across hierarchy, use proper JOINs
-- For status checks, use = 1 for active, = 0 for inactive
-- For performance analysis, consider threadCapicity vs threadInUse
+{table_doc}
 
-QUESTION: {enhanced_question}
+QUESTION ANALYSIS:
+- Question Type: {question_intent.get('question_type', 'unknown')}
+- Target Tables: {question_intent.get('target_tables', [])}
+- Hierarchical Query: {question_intent.get('hierarchical_query', False)}
+- Status Query: {question_intent.get('status_query', False)}
+- Count Query: {question_intent.get('count_query', False)}
+
+DATA PATTERNS INSIGHTS:
 """
+        
+        # Add data pattern insights for relevant tables
+        if question_intent.get('target_tables') and self.data_patterns:
+            for table in question_intent['target_tables']:
+                if table in self.data_patterns:
+                    patterns = self.data_patterns[table]
+                    context += f"\n{table} Sample Data:\n"
+                    for col, col_patterns in patterns.get('sample_values', {}).items():
+                        if col_patterns.get('is_searchable'):
+                            context += f"  - {col}: {col_patterns['sample_values']} (searchable)\n"
+                        else:
+                            context += f"  - {col}: {col_patterns['sample_values']}\n"
 
-            # Generate SQL using the chain
+        context += f"""
+
+IMPORTANT SQL GENERATION RULES:
+1. Use exact table names from the schema above
+2. For status fields: 1 = Active/Enabled, 0 = Inactive/Disabled  
+3. Use appropriate JOINs for hierarchical queries
+4. Use LIKE with % wildcards for text searches
+5. Handle date fields appropriately based on their string format
+6. Consider the sample data patterns shown above
+
+ORIGINAL QUESTION: {question}
+"""
+        
+        return context
+
+    def query_op_test_details(self, question: str) -> str:
+        """Enhanced query processing with comprehensive analysis"""
+        if not self.db_handler:
+            return "❌ Operational Test database not available."
+
+        try:
+            print(f"DEBUG - Original question: {question}")
+
+            # Analyze question intent
+            question_intent = analyze_question_intent(question)
+            print(f"DEBUG - Question intent: {question_intent}")
+
+            # Preprocess question to extract date information
+            enhanced_question = preprocess_question(question)
+
+            # Create comprehensive context
+            context_info = self.create_enhanced_context(enhanced_question, question_intent)
+
+            # Generate SQL using the chain with enhanced context
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    print(f"DEBUG - Attempt {attempt + 1} generating SQL")
+                    print(f"DEBUG - Attempt {attempt + 1} generating SQL with enhanced context")
                     raw_sql = self.db_handler['chain'].invoke({"question": context_info})
                     print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
                     break
@@ -895,12 +1025,24 @@ QUESTION: {enhanced_question}
                         return f"❌ Failed to generate SQL query after {max_retries} attempts: {str(e)}"
                     continue
 
-            # Clean and validate SQL with sqlglot
-            sql = clean_and_fix_sql(raw_sql)
-            sql, is_valid = validate_and_fix_sql(sql)
+            # Clean and validate SQL with intelligent fixing
+            sql = intelligent_sql_fix(raw_sql, question_intent)
+            sql, is_valid = validate_and_fix_sql(sql, question_intent)
 
             if not is_valid:
-                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"
+                # Try fallback approach with simpler context
+                print("DEBUG - Trying fallback approach...")
+                fallback_context = f"""
+                Based on these tables: {', '.join(OP_TEST_DB_CONFIG['include_tables'])}
+                Question: {question}
+                Generate a simple SELECT query.
+                """
+                try:
+                    raw_sql = self.db_handler['chain'].invoke({"question": fallback_context})
+                    sql = intelligent_sql_fix(raw_sql, question_intent)
+                    sql, is_valid = validate_and_fix_sql(sql, question_intent)
+                except Exception as e:
+                    return f"❌ Fallback query generation also failed: {str(e)}"
 
             # Analyze SQL structure for additional insights
             sql_analysis = analyze_sql_structure(sql)
@@ -917,10 +1059,10 @@ QUESTION: {enhanced_question}
                     print(f"DEBUG - Query returned {len(result)} rows")
 
                     if not result:
-                        suggestions = self._generate_suggestions(question, sql, sql_analysis)
+                        suggestions = self._generate_enhanced_suggestions(question, sql, sql_analysis, question_intent)
                         return f"I couldn't find any records matching your criteria.\n\n{suggestions}"
 
-                    # Format and return results
+                    # Format and return results with enhanced formatting
                     return format_query_results_natural(result, question)
 
             except pymysql.Error as db_error:
@@ -928,15 +1070,9 @@ QUESTION: {enhanced_question}
                 error_msg = f"❌ Database Error (Code: {error_code}): {str(db_error)}\n"
                 error_msg += f"SQL: {sql}\n"
 
-                # Try to provide helpful suggestions based on error type
-                if "syntax error" in str(db_error).lower():
-                    error_msg += "This appears to be a SQL syntax error. "
-                elif "unknown column" in str(db_error).lower():
-                    error_msg += "This appears to be a column name error. "
-                elif "table" in str(db_error).lower():
-                    error_msg += "This appears to be a table name error. "
-
-                error_msg += "Please try rephrasing your question."
+                # Provide contextual error suggestions
+                error_msg += self._get_contextual_error_help(str(db_error), question_intent)
+                
                 logger.error(f"Database error: {db_error}\nSQL: {sql}")
                 return error_msg
 
@@ -946,45 +1082,70 @@ QUESTION: {enhanced_question}
             logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
             return error_msg
 
-    def _generate_suggestions(self, question: str, sql: str, analysis: Dict[str, Any]) -> str:
-        """Generate helpful suggestions when no results are found"""
-        suggestions = "💡 Suggestions:\n"
+    def _get_contextual_error_help(self, error_msg: str, question_intent: Dict[str, Any]) -> str:
+        """Provide contextual help based on error type and question intent"""
+        help_msg = "\n💡 Contextual Help:\n"
+        
+        if "syntax error" in error_msg.lower():
+            help_msg += "- SQL syntax error detected\n"
+            if question_intent.get('hierarchical_query'):
+                help_msg += "- For hierarchical queries, ensure proper JOIN syntax\n"
+        elif "unknown column" in error_msg.lower():
+            help_msg += "- Column name error detected\n"
+            if question_intent.get('target_tables'):
+                help_msg += f"- Check column names in tables: {', '.join(question_intent['target_tables'])}\n"
+        elif "table" in error_msg.lower():
+            help_msg += "- Table name error detected\n"
+            help_msg += f"- Available tables: {', '.join(OP_TEST_DB_CONFIG['include_tables'])}\n"
+        
+        if question_intent.get('status_query'):
+            help_msg += "- For status queries, use: 1 for Active, 0 for Inactive\n"
+            
+        return help_msg
+
+    def _generate_enhanced_suggestions(self, question: str, sql: str, analysis: Dict[str, Any], question_intent: Dict[str, Any]) -> str:
+        """Generate enhanced suggestions based on question intent and data patterns"""
+        suggestions = "💡 Enhanced Suggestions:\n"
+        
+        # Basic suggestions
         suggestions += "- Try using broader search terms\n"
         suggestions += "- Check if the layer/server/service names are correct\n"
-        suggestions += "- Verify status values (use 1 for active, 0 for inactive)\n"
-        suggestions += "- Consider checking different levels of the hierarchy\n"
-
-        if "status" in question.lower():
+        
+        # Intent-based suggestions
+        if question_intent.get('status_query'):
             suggestions += "- Status values: 1 = Active/Enabled, 0 = Inactive/Disabled\n"
+            
+        if question_intent.get('hierarchical_query'):
+            suggestions += "- Your query spans multiple hierarchy levels\n"
+            if question_intent.get('suggested_joins'):
+                suggestions += f"- Consider relationships: {len(question_intent['suggested_joins'])} joins suggested\n"
+        
+        # Data pattern suggestions
+        if question_intent.get('target_tables') and self.data_patterns:
+            suggestions += "\n📊 Based on actual data patterns:\n"
+            for table in question_intent['target_tables']:
+                if table in self.data_patterns:
+                    patterns = self.data_patterns[table]
+                    for col, col_patterns in patterns.get('sample_values', {}).items():
+                        if col_patterns.get('is_searchable'):
+                            sample_vals = col_patterns['sample_values'][:3]  # Show first 3
+                            suggestions += f"- {col} examples: {', '.join(map(str, sample_vals))}\n"
 
-        if analysis and analysis.get('has_joins'):
-            suggestions += "- Your query involves multiple tables - ensure relationships exist\n"
-
+        # Analysis-based suggestions
         if analysis and analysis.get('tables'):
-            suggestions += f"- Tables involved: {', '.join(analysis['tables'])}\n"
+            suggestions += f"\n🔍 Query involved tables: {', '.join(analysis['tables'])}\n"
+            
+        if analysis and analysis.get('has_joins'):
+            suggestions += "- Query uses table joins - ensure relationships exist\n"
 
-        # Add hierarchical navigation tips
-        if any(keyword in question.lower() for keyword in ['layer', 'server', 'broker', 'eg', 'service']):
-            suggestions += "\n🔍 Navigate the hierarchy:\n"
-            suggestions += "1. Layers contain Servers\n"
-            suggestions += "2. Servers contain Brokers\n"
-            suggestions += "3. Brokers contain EGs\n"
-            suggestions += "4. EGs contain Services\n"
-            suggestions += "Example queries:\n"
-            suggestions += "- 'Show servers in layer AADHAR_EXP'\n"
-            suggestions += "- 'Show services under broker AADHAR_EXP'\n"
-            suggestions += "- 'Find inactive services in layer AADHAR_EXP'"
-
-        suggestions += f"\n🔍 Query executed: {sql}"
-        if analysis:
-            suggestions += f"\n📊 Query analysis: {analysis.get('query_type', 'Unknown')} with {len(analysis.get('tables', []))} tables"
-
+        suggestions += f"\n📝 Generated SQL: {sql}"
+        
         return suggestions
 
     def process_question(self, question: str) -> str:
-        """Process questions with enhanced error handling and sqlglot integration"""
+        """Process questions with enhanced analysis and error handling"""
         if not self.initialized and not self.initialize():
-            return "❌ Operational Test Details Assistant initialization failed. Please check database connection."
+            return "❌ Enhanced Operational Test Details Assistant initialization failed. Please check database connection."
 
         if is_dangerous(question):
             return "❌ Question blocked for security reasons."
@@ -992,7 +1153,7 @@ QUESTION: {enhanced_question}
         # Add to chat history
         self.chat_history.append(f"User: {question}")
 
-        # Get response
+        # Get response with enhanced processing
         response = self.query_op_test_details(question)
 
         # Add response to history
@@ -1001,15 +1162,15 @@ QUESTION: {enhanced_question}
         return response
 
     def start_interactive_session(self, query):
-        """Process single query with comprehensive error handling and sqlglot validation"""
+        """Process single query with comprehensive analysis and validation"""
         if not self.initialize():
-            return "❌ Failed to initialize Operational Test Details Assistant. Check database connection."
+            return "❌ Failed to initialize Enhanced Operational Test Details Assistant. Check database connection."
 
         try:
             if query.lower() in ['exit', 'quit', 'q']:
                 return "👋 Session ended."
 
-            print("🔍 Processing your query with SQLGlot validation...")
+            print("🔍 Processing your query with enhanced analysis...")
             response = self.process_question(query)
             return response
 
@@ -1032,22 +1193,22 @@ QUESTION: {enhanced_question}
                 pass
 
 def OpTestMain(query):
-    """Main function to process Operational Test queries with sqlglot integration"""
-    print("🚀 Starting Operational Test Details Assistant with SQLGlot...")
+    """Main function to process Operational Test queries with enhanced intelligence"""
+    print("🚀 Starting Enhanced Operational Test Details Assistant...")
     assistant = OpTestDetailsAssistant()
     result = assistant.start_interactive_session(query)
-    print("✅ Query processing complete.")
+    print("✅ Enhanced query processing complete.")
     return result
 
-# Test the function with hierarchical queries and sqlglot validation
+# Test the enhanced function
 if __name__ == "__main__":
-    # Test with comprehensive hierarchical queries
+    # Test with various query types
     test_queries = [
         "tell me the layer name where server ip is 24_191",
-        "show active services under broker AADHAR_EXP",
-        "what is the thread utilization for services in layer AADHAR_EXP?",
-        "find inactive brokers",
-        "show services with high thread utilization (>90%)"
+        "how many active services are there?",
+        "show me all brokers with their status",
+        "find services with high thread usage",
+        "list all servers in the application layer"
     ]
 
     for query in test_queries:
