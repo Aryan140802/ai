@@ -3,7 +3,7 @@ import re
 import logging
 import pymysql
 import traceback
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
 import json
 import calendar
@@ -13,6 +13,7 @@ from sqlglot.errors import ParseError
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
+from collections import defaultdict
 
 today_date = date.today()
 
@@ -23,7 +24,7 @@ OP_TEST_DB_CONFIG = {
         "host": "localhost",
         "user": "root",
         "password": "root123",
-        "database": "EIS_n"  # Replace with your actual database name
+        "database": "EIS_n"
     },
     "include_tables": [
         "dbOpTest_layerdetails",
@@ -33,6 +34,61 @@ OP_TEST_DB_CONFIG = {
         "dbOpTest_servicedetails",
         "dbOpTest_serviceadditionaldetails"
     ],
+    "schema_hierarchy": {
+        "dbOpTest_layerdetails": {
+            "primary_key": "id",
+            "children": {
+                "dbOpTest_serverdetails": {
+                    "foreign_key": "layer_id",
+                    "relationship": "one-to-many"
+                }
+            }
+        },
+        "dbOpTest_serverdetails": {
+            "primary_key": "id",
+            "parent": "dbOpTest_layerdetails",
+            "children": {
+                "dbOpTest_brokerdetails": {
+                    "foreign_key": "server_id",
+                    "relationship": "one-to-many"
+                }
+            }
+        },
+        "dbOpTest_brokerdetails": {
+            "primary_key": "id",
+            "parent": "dbOpTest_serverdetails",
+            "children": {
+                "dbOpTest_egdetails": {
+                    "foreign_key": "broker_id",
+                    "relationship": "one-to-many"
+                }
+            }
+        },
+        "dbOpTest_egdetails": {
+            "primary_key": "id",
+            "parent": "dbOpTest_brokerdetails",
+            "children": {
+                "dbOpTest_servicedetails": {
+                    "foreign_key": "eg_id",
+                    "relationship": "one-to-many"
+                }
+            }
+        },
+        "dbOpTest_servicedetails": {
+            "primary_key": "id",
+            "parent": "dbOpTest_egdetails",
+            "children": {
+                "dbOpTest_serviceadditionaldetails": {
+                    "foreign_key": "service_id",
+                    "relationship": "one-to-one"
+                }
+            }
+        },
+        "dbOpTest_serviceadditionaldetails": {
+            "primary_key": "id",
+            "parent": "dbOpTest_servicedetails"
+        }
+    }
 }
 
 # Blocked patterns for security
@@ -144,16 +200,16 @@ def clean_markdown_from_sql(raw_sql: str) -> str:
     if "```sql" in clean_sql:
         parts = clean_sql.split("```")
         if len(parts) > 1:
-            sql_part = parts
+            sql_part = parts[1]
             if "```" in sql_part:
-                clean_sql = sql_part.split("```")
+                clean_sql = sql_part.split("```")[0]
                 print(f"DEBUG - Extracted from ```sql block")
 
     # Method 2: Handle ```
     elif clean_sql.count("```") >= 2:
         parts = clean_sql.split("```")
         if len(parts) >= 3:
-            clean_sql = parts.strip()
+            clean_sql = parts[1].strip()
             print(f"DEBUG - Extracted from ``` block")
 
     # Remove any remaining backticks
@@ -399,10 +455,141 @@ def analyze_sql_structure(sql: str) -> Dict[str, Any]:
         print(f"DEBUG - SQL analysis error: {e}")
         return {'error': str(e)}
 
+def analyze_performance_metrics(results: List[Dict]) -> Dict[str, Any]:
+    """Analyze performance metrics from service details"""
+    if not results:
+        return {}
+    
+    analysis = {
+        'total_services': len(results),
+        'active_services': 0,
+        'inactive_services': 0,
+        'total_thread_capacity': 0,
+        'total_threads_in_use': 0,
+        'utilization_stats': {
+            'high': 0,
+            'medium': 0,
+            'low': 0
+        },
+        'service_status_distribution': defaultdict(int),
+        'eg_distribution': defaultdict(int),
+        'broker_distribution': defaultdict(int)
+    }
+    
+    for record in results:
+        # Count active/inactive services
+        if 'serviceStatus' in record:
+            status = record['serviceStatus']
+            if status == 1:
+                analysis['active_services'] += 1
+            else:
+                analysis['inactive_services'] += 1
+        
+        # Analyze thread utilization if available
+        if 'threadCapicity' in record and 'threadInUse' in record:
+            try:
+                capacity = int(record['threadCapicity'])
+                in_use = int(record['threadInUse'])
+                analysis['total_thread_capacity'] += capacity
+                analysis['total_threads_in_use'] += in_use
+                
+                # Calculate utilization percentage
+                if capacity > 0:
+                    utilization = (in_use / capacity) * 100
+                    if utilization > 75:
+                        analysis['utilization_stats']['high'] += 1
+                    elif utilization > 25:
+                        analysis['utilization_stats']['medium'] += 1
+                    else:
+                        analysis['utilization_stats']['low'] += 1
+            except (ValueError, TypeError):
+                pass
+        
+        # Track distributions
+        if 'serviceName' in record:
+            analysis['service_status_distribution'][record['serviceName']] += 1
+        if 'egName' in record:
+            analysis['eg_distribution'][record['egName']] += 1
+        if 'brokerName' in record:
+            analysis['broker_distribution'][record['brokerName']] += 1
+    
+    # Calculate overall utilization percentage
+    if analysis['total_thread_capacity'] > 0:
+        analysis['overall_utilization'] = (analysis['total_threads_in_use'] / analysis['total_thread_capacity']) * 100
+    else:
+        analysis['overall_utilization'] = 0
+    
+    return analysis
+
+def predict_service_trends(results: List[Dict]) -> Dict[str, Any]:
+    """Generate predictions based on service data"""
+    if not results:
+        return {}
+    
+    # Simple prediction logic based on current utilization
+    prediction = {
+        'capacity_needed': False,
+        'potential_bottlenecks': [],
+        'underutilized_services': [],
+        'recommendations': []
+    }
+    
+    for record in results:
+        if 'threadCapicity' in record and 'threadInUse' in record and 'serviceName' in record:
+            try:
+                capacity = int(record['threadCapicity'])
+                in_use = int(record['threadInUse'])
+                
+                if capacity > 0:
+                    utilization = (in_use / capacity) * 100
+                    
+                    # Identify potential bottlenecks
+                    if utilization > 90:
+                        prediction['potential_bottlenecks'].append({
+                            'service': record['serviceName'],
+                            'utilization': f"{utilization:.1f}%",
+                            'capacity': capacity,
+                            'in_use': in_use
+                        })
+                    
+                    # Identify underutilized services
+                    elif utilization < 10:
+                        prediction['underutilized_services'].append({
+                            'service': record['serviceName'],
+                            'utilization': f"{utilization:.1f}%",
+                            'capacity': capacity,
+                            'in_use': in_use
+                        })
+            except (ValueError, TypeError):
+                continue
+    
+    # Generate recommendations
+    if prediction['potential_bottlenecks']:
+        prediction['capacity_needed'] = True
+        prediction['recommendations'].append(
+            "Consider increasing thread capacity for high-utilization services"
+        )
+    
+    if prediction['underutilized_services']:
+        prediction['recommendations'].append(
+            "Consider consolidating or reducing capacity for underutilized services"
+        )
+    
+    return prediction
+
 def format_query_results_natural(result: List[Dict], question: str) -> str:
     """Enhanced result formatting with better handling of hierarchical data"""
     if not result:
-        return "I couldn't find any records matching your criteria."
+        # Perform analysis even when no results to provide better feedback
+        suggestions = "No records found matching your criteria."
+        
+        # Check if this might be a hierarchical query
+        if any(keyword in question.lower() for keyword in ['layer', 'server', 'broker', 'eg', 'service']):
+            suggestions += "\n\n💡 Try navigating the hierarchy:\n"
+            suggestions += "- Layers → Servers → Brokers → EGs → Services\n"
+            suggestions += "- Example: 'Show services under broker AADHAR_EXP'"
+        
+        return suggestions
 
     # Handle single value results (like COUNT)
     if len(result) == 1 and len(result[0]) == 1:
@@ -411,6 +598,10 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             return f"There are {value} records matching your criteria."
         else:
             return f"The result is: {value}"
+
+    # Perform performance analysis
+    performance = analyze_performance_metrics(result)
+    predictions = predict_service_trends(result)
 
     # Handle single record
     if len(result) == 1:
@@ -440,6 +631,17 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
                     value = "Active" if value == 1 else "Inactive"
 
                 response += f"{icon} {display_name}: {value}\n"
+
+        # Add performance insights if available
+        if 'threadCapicity' in record and 'threadInUse' in record:
+            try:
+                capacity = int(record['threadCapicity'])
+                in_use = int(record['threadInUse'])
+                if capacity > 0:
+                    utilization = (in_use / capacity) * 100
+                    response += f"\n📈 Utilization: {utilization:.1f}% ({in_use} of {capacity} threads)"
+            except (ValueError, TypeError):
+                pass
 
         return response.strip()
 
@@ -477,6 +679,32 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         response += format_query_results_tabular(result[:5])
         response += f"\n... and {len(result) - 5} more records."
 
+    # Add performance analysis
+    if performance:
+        response += "\n\n📊 Performance Analysis:\n"
+        response += f"- Active Services: {performance['active_services']} ({performance['active_services']/len(result)*100:.1f}%)\n"
+        response += f"- Thread Utilization: {performance['overall_utilization']:.1f}%\n"
+        response += f"  - High (>75%): {performance['utilization_stats']['high']} services\n"
+        response += f"  - Medium (25-75%): {performance['utilization_stats']['medium']} services\n"
+        response += f"  - Low (<25%): {performance['utilization_stats']['low']} services\n"
+
+    # Add predictions if available
+    if predictions:
+        if predictions['potential_bottlenecks']:
+            response += "\n⚠️ Potential Bottlenecks:\n"
+            for bottleneck in predictions['potential_bottlenecks'][:3]:  # Show top 3
+                response += f"- {bottleneck['service']} at {bottleneck['utilization']} utilization\n"
+        
+        if predictions['underutilized_services']:
+            response += "\nℹ️ Underutilized Services:\n"
+            for service in predictions['underutilized_services'][:3]:  # Show top 3
+                response += f"- {service['service']} at {service['utilization']} utilization\n"
+        
+        if predictions['recommendations']:
+            response += "\n💡 Recommendations:\n"
+            for rec in predictions['recommendations']:
+                response += f"- {rec}\n"
+
     return response
 
 def format_query_results_tabular(result: List[Dict]) -> str:
@@ -487,7 +715,8 @@ def format_query_results_tabular(result: List[Dict]) -> str:
     # Select most important columns for display based on available fields
     important_cols_priority = [
         'id', 'layer_name', 'serverIP', 'brokerName', 'brokerStatus',
-        'egName', 'egStatus', 'serviceName', 'serviceStatus', 'genericName'
+        'egName', 'egStatus', 'serviceName', 'serviceStatus', 'genericName',
+        'threadCapicity', 'threadInUse'
     ]
 
     available_cols = [col for col in important_cols_priority if col in result[0]]
@@ -617,20 +846,37 @@ class OpTestDetailsAssistant:
 
             # Create comprehensive context for the LLM
             context_info = f"""
+DATABASE SCHEMA HIERARCHY:
+Layer (dbOpTest_layerdetails) → Server (dbOpTest_serverdetails) → Broker (dbOpTest_brokerdetails) → EG (dbOpTest_egdetails) → Service (dbOpTest_servicedetails) → Service Additional Details (dbOpTest_serviceadditionaldetails)
+
+KEY RELATIONSHIPS:
+- layer_id in serverdetails links to layerdetails.id
+- server_id in brokerdetails links to serverdetails.id
+- broker_id in egdetails links to brokerdetails.id
+- eg_id in servicedetails links to egdetails.id
+- service_id in serviceadditionaldetails links to servicedetails.id
+
+STATUS FIELDS:
+- brokerStatus: 1 = Active, 0 = Inactive
+- egStatus: 1 = Active, 0 = Inactive
+- serviceStatus: 1 = Active, 0 = Inactive
+
+PERFORMANCE METRICS:
+- threadCapicity: Total available threads
+- threadInUse: Currently used threads
+- timeout: Service timeout configuration
+
 CURRENT DATE CONTEXT:
 - Today: {date_ctx['current_date']}
 - Current Year: {date_ctx['current_year']}
 - Next Year: {date_ctx['next_year']}
 
-HIERARCHICAL DATABASE STRUCTURE:
-Layer -> Server -> Broker -> EG -> Service -> Service Additional Details
-
 IMPORTANT INSTRUCTIONS:
-- Use exact table names: dbOpTest_layerdetails, dbOpTest_serverdetails, etc.
-- For status fields: 1 = Active/Enabled, 0 = Inactive/Disabled
-- Use JOINs to traverse the hierarchy when needed
+- Use exact table names with dbOpTest_ prefix
 - For text searches, use LIKE with % wildcards
-- Handle date fields appropriately based on their string format
+- When querying across hierarchy, use proper JOINs
+- For status checks, use = 1 for active, = 0 for inactive
+- For performance analysis, consider threadCapicity vs threadInUse
 
 QUESTION: {enhanced_question}
 """
@@ -653,8 +899,8 @@ QUESTION: {enhanced_question}
             sql = clean_and_fix_sql(raw_sql)
             sql, is_valid = validate_and_fix_sql(sql)
 
-            '''if not is_valid:
-                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"'''
+            if not is_valid:
+                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"
 
             # Analyze SQL structure for additional insights
             sql_analysis = analyze_sql_structure(sql)
@@ -716,6 +962,18 @@ QUESTION: {enhanced_question}
 
         if analysis and analysis.get('tables'):
             suggestions += f"- Tables involved: {', '.join(analysis['tables'])}\n"
+
+        # Add hierarchical navigation tips
+        if any(keyword in question.lower() for keyword in ['layer', 'server', 'broker', 'eg', 'service']):
+            suggestions += "\n🔍 Navigate the hierarchy:\n"
+            suggestions += "1. Layers contain Servers\n"
+            suggestions += "2. Servers contain Brokers\n"
+            suggestions += "3. Brokers contain EGs\n"
+            suggestions += "4. EGs contain Services\n"
+            suggestions += "Example queries:\n"
+            suggestions += "- 'Show servers in layer AADHAR_EXP'\n"
+            suggestions += "- 'Show services under broker AADHAR_EXP'\n"
+            suggestions += "- 'Find inactive services in layer AADHAR_EXP'"
 
         suggestions += f"\n🔍 Query executed: {sql}"
         if analysis:
@@ -785,7 +1043,11 @@ def OpTestMain(query):
 if __name__ == "__main__":
     # Test with comprehensive hierarchical queries
     test_queries = [
-        "tell me the layer name where server ip is 24_191"
+        "tell me the layer name where server ip is 24_191",
+        "show active services under broker AADHAR_EXP",
+        "what is the thread utilization for services in layer AADHAR_EXP?",
+        "find inactive brokers",
+        "show services with high thread utilization (>90%)"
     ]
 
     for query in test_queries:
