@@ -680,7 +680,7 @@ if __name__ == "__main__":
         "Count FARs created today",
         "FARs expiring this month",  # Should now include current year
         "All FARs with status resolved",
-        "FARs created next year",
+        "FARs created next yea",
         "Count FARs expiring next year",
         "FARs created this year",
         "Show FARs created last year",
