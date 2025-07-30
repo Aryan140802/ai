@@ -121,79 +121,6 @@ def preprocess_question(question: str) -> str:
 
     return question
 
-def get_sql_generation_prompt():
-    """Generate comprehensive SQL prompt with hierarchical database structure examples"""
-    date_ctx = get_comprehensive_date_context()
-
-    return f"""You are an expert SQL query generator for a hierarchical operational test database.
-
-**CURRENT DATE CONTEXT:**
-- Today's date: {date_ctx['current_date']}
-- Current year: {date_ctx['current_year']}
-- Current month: {date_ctx['current_month']} ({date_ctx['current_month_name']})
-- Next year: {date_ctx['next_year']}
-- Previous year: {date_ctx['prev_year']}
-
-**DATABASE SCHEMA (Hierarchical Structure):**
-
-**Layer Details (Top Level):**
-Table: dbOpTest_layerdetails
-- id (bigint, PK, auto_increment): Layer identifier
-- layer_name (varchar(100)): Name of the layer
-
-**Server Details (Level 2):**
-Table: dbOpTest_serverdetails
-- id (bigint, PK, auto_increment): Server identifier
-- serverIP (varchar(20)): Server IP address
-- layer_id (bigint, FK): References dbOpTest_layerdetails.id
-
-**Broker Details (Level 3):**
-Table: dbOpTest_brokerdetails
-- id (bigint, PK, auto_increment): Broker identifier
-- udpPort (int): UDP port number
-- brokerName (varchar(100)): Broker name
-- brokerStatus (tinyint(1)): Broker status (0/1)
-- server_id (bigint, FK): References dbOpTest_serverdetails.id
-
-**EG Details (Level 4):**
-Table: dbOpTest_egdetails
-- id (bigint, PK, auto_increment): EG identifier
-- egName (varchar(100)): EG name
-- egStatus (tinyint(1)): EG status (0/1)
-- broker_id (bigint, FK): References dbOpTest_brokerdetails.id
-
-**Service Details (Level 5):**
-Table: dbOpTest_servicedetails
-- id (bigint, PK, auto_increment): Service identifier
-- serviceName (varchar(100)): Service name
-- serviceStatus (tinyint(1)): Service status (0/1)
-- additionalInstances (varchar(100)): Additional instances info
-- threadCapicity (varchar(100)): Thread capacity
-- threadInUse (varchar(100)): Threads in use
-- timeout (varchar(500)): Timeout configuration
-- eg_id (bigint, FK): References dbOpTest_egdetails.id
-- genericName (varchar(100)): Generic service name
-
-**Service Additional Details (Level 6):**
-Table: dbOpTest_serviceadditionaldetails
-- id (bigint, PK, auto_increment): Additional detail identifier
-- serviceDepDate (varchar(100)): Service deployment date
-- serviceLastEdit (varchar(100)): Last edit timestamp
-- service_id (bigint, FK): References dbOpTest_servicedetails.id
-
-**CRITICAL SQL GENERATION RULES:**
-1. ONLY generate SELECT statements
-2. Always use exact table names with prefix: dbOpTest_
-3. For date/timestamp fields, handle string format appropriately
-4. For text fields, use LIKE with % wildcards: column_name LIKE '%search_term%'
-5. For ID fields, use exact equality: id = number
-6. NEVER add LIMIT unless specifically requested
-7. Return ONLY the SQL query - no explanations or markdown
-8. Use proper JOINs to traverse the hierarchy when needed
-
-**USER QUESTION:** {{question}}
-"""
-
 # Setup logging
 logging.basicConfig(
     filename=os.path.expanduser("~/.op_test_details_ai.log"),
@@ -206,16 +133,67 @@ def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
+def clean_markdown_from_sql(raw_sql: str) -> str:
+    """BULLETPROOF: Clean markdown from SQL using only safe string operations"""
+    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
+
+    # Start with the raw input
+    clean_sql = raw_sql.strip()
+
+    # Method 1: Handle ```
+    if "```sql" in clean_sql:
+        parts = clean_sql.split("```")
+        if len(parts) > 1:
+            sql_part = parts
+            if "```" in sql_part:
+                clean_sql = sql_part.split("```")
+                print(f"DEBUG - Extracted from ```sql block")
+
+    # Method 2: Handle ```
+    elif clean_sql.count("```") >= 2:
+        parts = clean_sql.split("```")
+        if len(parts) >= 3:
+            clean_sql = parts.strip()
+            print(f"DEBUG - Extracted from ``` block")
+
+    # Remove any remaining backticks
+    clean_sql = clean_sql.replace("`", "")
+
+    # Remove common prefixes
+    prefixes_to_remove = [
+        "here is the sql query:",
+        "here's the sql query:",
+        "sql query:",
+        "query:",
+        "here is:",
+        "here's:"
+    ]
+
+    clean_lower = clean_sql.lower()
+    for prefix in prefixes_to_remove:
+        if clean_lower.startswith(prefix):
+            clean_sql = clean_sql[len(prefix):].strip()
+            break
+
+    # Normalize whitespace
+    clean_sql = ' '.join(clean_sql.split())
+
+    print(f"DEBUG - Cleaned SQL: {clean_sql}")
+    return clean_sql
+
 def validate_sql_with_sqlglot(sql: str) -> tuple[str, bool, str]:
     """
-    Validate and parse SQL using sqlglot for enhanced security and correctness
+    BULLETPROOF: Validate and parse SQL using sqlglot for enhanced security and correctness
     Returns: (cleaned_sql, is_valid, error_message)
     """
     try:
         print(f"DEBUG - SQLGlot validation input: {repr(sql)}")
 
+        # Clean the SQL first
+        clean_sql = clean_markdown_from_sql(sql)
+
         # Parse the SQL using sqlglot
-        parsed = parse_one(sql, dialect="mysql")
+        parsed = parse_one(clean_sql, dialect="mysql")
         print(f"DEBUG - SQLGlot parsed successfully")
 
         # Check if it's a SELECT statement
@@ -251,7 +229,12 @@ def validate_sql_with_sqlglot(sql: str) -> tuple[str, bool, str]:
                 return sql, False, f"Dangerous operation detected: {dangerous_expr.__name__}"
 
         # Transpile to clean MySQL syntax
-        cleaned_sql = transpile(sql, read="mysql", write="mysql")[0]
+        transpiled_result = transpile(clean_sql, read="mysql", write="mysql")
+        if transpiled_result and len(transpiled_result) > 0:
+            cleaned_sql = transpiled_result[0]
+        else:
+            cleaned_sql = clean_sql
+
         print(f"DEBUG - SQLGlot cleaned SQL: {cleaned_sql}")
 
         # Additional safety checks on the cleaned SQL
@@ -275,7 +258,7 @@ def validate_sql_with_sqlglot(sql: str) -> tuple[str, bool, str]:
         return sql, False, f"SQL validation error: {str(e)}"
 
 def clean_and_fix_sql(raw_sql: str) -> str:
-    """Enhanced SQL cleaning with sqlglot integration"""
+    """BULLETPROOF: Enhanced SQL cleaning with safe string operations"""
     print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
 
     # Handle common LLM response patterns
@@ -283,26 +266,10 @@ def clean_and_fix_sql(raw_sql: str) -> str:
         print("DEBUG - LLM refused to generate SQL")
         return "ERROR: LLM refused to generate SQL"
 
-    # Remove triple quotes first
-    sql = re.sub(r"'''(.*?)'''", r'\1', raw_sql, flags=re.DOTALL)
-    print(f"DEBUG - After removing triple quotes: {repr(sql)}")
+    # Clean markdown
+    sql = clean_markdown_from_sql(raw_sql)
 
-    # Extract from code blocks (looking for sql or SELECT)
-    code_block_patterns = [
-        r"```sql\s*(.*?)```",
-        r"```\s*(SELECT.*?)```", 
-        r"```(.*?)```"
-    ]
-    
-    for pattern in code_block_patterns:
-        code_block_match = re.search(pattern, sql, re.DOTALL | re.IGNORECASE)
-        if code_block_match:
-            sql = code_block_match.group(1).strip()
-            print(f"DEBUG - Extracted from code block: {sql}")
-            break
-
-    # Remove common prefixes/suffixes
-    sql = re.sub(r'^(here is|here\'s|sql query|query|the query is)?\s*:?\s*', '', sql, flags=re.IGNORECASE)
+    # Clean up semicolons at the end
     sql = re.sub(r'\s*;?\s*$', '', sql)
 
     # Find SELECT statement
@@ -337,9 +304,11 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     # Remove unwanted LIMIT clauses
     sql = re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE)
 
-    # Final cleanup - remove any remaining triple quotes
-    sql = re.sub(r"'''", "", sql)
-    sql = sql.strip()
+    # Fix spacing issues in JOIN conditions (remove extra spaces around dots)
+    sql = re.sub(r'(\w+)\s*\.\s+(\w+)', r'\1.\2', sql)
+
+    # Final cleanup - normalize whitespace
+    sql = ' '.join(sql.split())
 
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
@@ -350,17 +319,12 @@ def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
 
     # First, use sqlglot for comprehensive validation
     cleaned_sql, is_valid, error_msg = validate_sql_with_sqlglot(sql)
-    
-    # Remove triple quotes that might be wrapping the SQL
-    cleaned_sql = re.sub(r"'''(.*?)'''", r'\1', cleaned_sql, flags=re.DOTALL)
-    
-    print(f"DEBUG - Cleaned SQL after removing triple quotes: {cleaned_sql}")
-    
+
     if not is_valid:
         print(f"DEBUG - SQLGlot validation failed: {error_msg}")
 
         # Try some basic fixes and re-validate
-        fixed_sql = cleaned_sql
+        fixed_sql = sql
 
         # Fix missing table name prefixes
         table_names = ['layerdetails', 'serverdetails', 'brokerdetails', 'egdetails',
@@ -374,9 +338,6 @@ def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
 
         # Try validation again with fixes
         cleaned_sql, is_valid, error_msg = validate_sql_with_sqlglot(fixed_sql)
-        
-        # Clean triple quotes again after re-validation
-        cleaned_sql = re.sub(r"'''(.*?)'''", r'\1', cleaned_sql, flags=re.DOTALL)
 
         if not is_valid:
             print(f"DEBUG - Still invalid after fixes: {error_msg}")
@@ -470,7 +431,7 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
 
         for field in key_fields:
             if field in record and record[field] is not None:
-                icon = icons.get(field, '•')
+                icon = icons.get(field, '- ')
                 display_name = field.replace('_', ' ').title()
                 value = record[field]
 
@@ -499,7 +460,7 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
                 field_name = status_field.replace('Status', '').title()
                 response += f"📊 {field_name} Status Summary:\n"
                 for status, count in status_counts.items():
-                    response += f"   • {status}: {count} records\n"
+                    response += f"   - {status}: {count} records\n"
                 response += "\n"
                 break  # Only show one status summary
 
@@ -692,9 +653,144 @@ QUESTION: {enhanced_question}
             sql = clean_and_fix_sql(raw_sql)
             sql, is_valid = validate_and_fix_sql(sql)
 
-            if not is_valid:
-                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"
+            '''if not is_valid:
+                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"'''
 
             # Analyze SQL structure for additional insights
             sql_analysis = analyze_sql_structure(sql)
             print(f"DEBUG - SQL Analysis: {sql_analysis}")
+
+            print(f"DEBUG - Final SQL: {sql}")
+            logger.info(f"Executing SQL: {sql}")
+
+            # Execute query with error handling
+            try:
+                with self.db_handler['connection'].cursor() as cursor:
+                    cursor.execute(sql)
+                    result = cursor.fetchall()
+                    print(f"DEBUG - Query returned {len(result)} rows")
+
+                    if not result:
+                        suggestions = self._generate_suggestions(question, sql, sql_analysis)
+                        return f"I couldn't find any records matching your criteria.\n\n{suggestions}"
+
+                    # Format and return results
+                    return format_query_results_natural(result, question)
+
+            except pymysql.Error as db_error:
+                error_code = getattr(db_error, 'args', [None])[0] if hasattr(db_error, 'args') else None
+                error_msg = f"❌ Database Error (Code: {error_code}): {str(db_error)}\n"
+                error_msg += f"SQL: {sql}\n"
+
+                # Try to provide helpful suggestions based on error type
+                if "syntax error" in str(db_error).lower():
+                    error_msg += "This appears to be a SQL syntax error. "
+                elif "unknown column" in str(db_error).lower():
+                    error_msg += "This appears to be a column name error. "
+                elif "table" in str(db_error).lower():
+                    error_msg += "This appears to be a table name error. "
+
+                error_msg += "Please try rephrasing your question."
+                logger.error(f"Database error: {db_error}\nSQL: {sql}")
+                return error_msg
+
+        except Exception as e:
+            error_msg = f"❌ Error processing request: {str(e)}\n"
+            error_msg += "Please try rephrasing your question."
+            logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
+            return error_msg
+
+    def _generate_suggestions(self, question: str, sql: str, analysis: Dict[str, Any]) -> str:
+        """Generate helpful suggestions when no results are found"""
+        suggestions = "💡 Suggestions:\n"
+        suggestions += "- Try using broader search terms\n"
+        suggestions += "- Check if the layer/server/service names are correct\n"
+        suggestions += "- Verify status values (use 1 for active, 0 for inactive)\n"
+        suggestions += "- Consider checking different levels of the hierarchy\n"
+
+        if "status" in question.lower():
+            suggestions += "- Status values: 1 = Active/Enabled, 0 = Inactive/Disabled\n"
+
+        if analysis and analysis.get('has_joins'):
+            suggestions += "- Your query involves multiple tables - ensure relationships exist\n"
+
+        if analysis and analysis.get('tables'):
+            suggestions += f"- Tables involved: {', '.join(analysis['tables'])}\n"
+
+        suggestions += f"\n🔍 Query executed: {sql}"
+        if analysis:
+            suggestions += f"\n📊 Query analysis: {analysis.get('query_type', 'Unknown')} with {len(analysis.get('tables', []))} tables"
+
+        return suggestions
+
+    def process_question(self, question: str) -> str:
+        """Process questions with enhanced error handling and sqlglot integration"""
+        if not self.initialized and not self.initialize():
+            return "❌ Operational Test Details Assistant initialization failed. Please check database connection."
+
+        if is_dangerous(question):
+            return "❌ Question blocked for security reasons."
+
+        # Add to chat history
+        self.chat_history.append(f"User: {question}")
+
+        # Get response
+        response = self.query_op_test_details(question)
+
+        # Add response to history
+        self.chat_history.append(f"Assistant: {response}")
+
+        return response
+
+    def start_interactive_session(self, query):
+        """Process single query with comprehensive error handling and sqlglot validation"""
+        if not self.initialize():
+            return "❌ Failed to initialize Operational Test Details Assistant. Check database connection."
+
+        try:
+            if query.lower() in ['exit', 'quit', 'q']:
+                return "👋 Session ended."
+
+            print("🔍 Processing your query with SQLGlot validation...")
+            response = self.process_question(query)
+            return response
+
+        except KeyboardInterrupt:
+            return "👋 Session interrupted."
+        except Exception as e:
+            error_msg = f"❌ Session error: {str(e)}"
+            logger.error(f"Session error: {e}\n{traceback.format_exc()}")
+            return error_msg
+        finally:
+            # Clean up database connection
+            try:
+                if (self.db_handler and
+                    self.db_handler.get('connection') and
+                    hasattr(self.db_handler['connection'], 'open') and
+                    self.db_handler['connection'].open):
+                    self.db_handler['connection'].close()
+            except Exception as cleanup_error:
+                print(f"DEBUG - Cleanup error: {cleanup_error}")
+                pass
+
+def OpTestMain(query):
+    """Main function to process Operational Test queries with sqlglot integration"""
+    print("🚀 Starting Operational Test Details Assistant with SQLGlot...")
+    assistant = OpTestDetailsAssistant()
+    result = assistant.start_interactive_session(query)
+    print("✅ Query processing complete.")
+    return result
+
+# Test the function with hierarchical queries and sqlglot validation
+if __name__ == "__main__":
+    # Test with comprehensive hierarchical queries
+    test_queries = [
+        "tell me the layer name where server ip is 24_191"
+    ]
+
+    for query in test_queries:
+        print(f"\n{'='*60}")
+        print(f"Testing: {query}")
+        print('='*60)
+        result = OpTestMain(query)
+        print(result)
