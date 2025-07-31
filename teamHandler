@@ -99,38 +99,3945 @@ def is_simple_query(question: str) -> Tuple[bool, str, str]:
     Returns: (is_simple, query_type, search_term)
     """
     question_lower = question.lower().strip()
+    question_original = question.strip()
     
     # Check for UID patterns
     uid_patterns = [
         r'(?:employee|emp|user)?\s*(?:id|uid)?\s*(\d+)',
-        r'(\d+)',  # Just a number
-        r'(?:show|find|get)\s+(?:employee|emp|user)?\s*(\d+)'
+        r'(?:show|find|get)\s+(?:employee|emp|user)?\s*(\d+)',
+        r'^\s*(\d+)\s*
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if not search_term:  # Safety check
+        return "SELECT * FROM UserMaster"
+        
+    if query_type == "uid":
+        # Ensure search_term is numeric
+        if search_term.isdigit():
+            return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        # Ensure search_term is valid for SQL
+        if search_term and re.match(r'^[a-zA-Z\s]+
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match and code_match.group(1):
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match and select_match.group(1):
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match and uid_match.group(1):
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name in quotes first
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if name_match and name_match.group(1):
+        name = name_match.group(1).strip()
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for proper case names
+    name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    if name_match and name_match.group(1):
+        name = name_match.group(1).strip()
+        # Additional validation to avoid false positives
+        if len(name) >= 2 and not any(word in question_lower for word in ['select', 'from', 'where', 'table']):
+            return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match and team_match.group(1):
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for project  
+    if 'project' in question_lower:
+        project_match = re.search(r'project\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if project_match and project_match.group(1):
+            return f"SELECT * FROM UserMaster WHERE Project LIKE '%{project_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default fallback
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        try:
+            # Check for simple queries first
+            is_simple, query_type, search_term = is_simple_query(question)
+            
+            if is_simple and search_term:  # Ensure search_term is not empty
+                print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+                return create_simple_sql(query_type, search_term)
+            
+            # For complex queries, use LLM
+            print("DEBUG - Using LLM for complex query")
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+            
+        except Exception as e:
+            print(f"DEBUG - SQL generation error: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant()  # Just a number
     ]
     
     for pattern in uid_patterns:
         match = re.search(pattern, question_lower)
-        if match and any(word in question_lower for word in ['employee', 'emp', 'user', 'id', 'uid']) or match.group(1).isdigit():
+        if match:
             uid = match.group(1)
-            if uid.isdigit() and len(uid) <= 10:  # Reasonable UID length
-                return True, "uid", uid
+            if uid and uid.isdigit() and len(uid) <= 10:  # Reasonable UID length
+                # Check if it's likely a UID query
+                if (any(word in question_lower for word in ['employee', 'emp', 'user', 'id', 'uid']) or 
+                    re.match(r'^\s*\d+\s*
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), question_lower)):  # Just a number
+                    return True, "uid", uid
     
     # Check for name patterns
     name_patterns = [
         r'(?:find|show|get|search)\s+(?:employee|emp|user)?\s*(?:named|with name)?\s*["\']?([a-zA-Z\s]+)["\']?',
         r'(?:employee|emp|user)?\s*(?:named|with name)\s*["\']?([a-zA-Z\s]+)["\']?',
         r'["\']([a-zA-Z\s]{2,40})["\']',  # Quoted names
-        r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b'  # Proper case names
+        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant()  # Proper case names (start to end)
     ]
     
     for pattern in name_patterns:
-        match = re.search(pattern, question)
+        match = re.search(pattern, question_original)
         if match:
             name = match.group(1).strip()
             # Validate it's likely a name (2-40 chars, mostly letters)
-            if (2 <= len(name) <= 40 and 
-                re.match(r'^[a-zA-Z\s]+$', name) and
+            if (name and 2 <= len(name) <= 40 and 
+                re.match(r'^[a-zA-Z\s]+
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), name) and
                 len(name.split()) <= 4):  # Max 4 words
                 return True, "name", name
+    
+    # Additional simple name check - look for patterns like "john", "john smith"
+    simple_name_match = re.match(r'^([a-zA-Z]+(?:\s+[a-zA-Z]+){0,3})\s*
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), question_original)
+    if simple_name_match:
+        name = simple_name_match.group(1).strip()
+        if (name and 2 <= len(name) <= 40 and 
+            not any(word in question_lower for word in ['count', 'team', 'project', 'list', 'show', 'all']) and
+            not re.search(r'\d', name)):  # No numbers in name
+            return True, "name", name
+    
+    return False, "", ""
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), search_term):
+            # Escape single quotes in names
+            safe_name = search_term.replace("'", "''")
+            return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{safe_name}%'"
+    
+    return "SELECT * FROM UserMaster"
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match and code_match.group(1):
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match and select_match.group(1):
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match and uid_match.group(1):
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name in quotes first
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if name_match and name_match.group(1):
+        name = name_match.group(1).strip()
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for proper case names
+    name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    if name_match and name_match.group(1):
+        name = name_match.group(1).strip()
+        # Additional validation to avoid false positives
+        if len(name) >= 2 and not any(word in question_lower for word in ['select', 'from', 'where', 'table']):
+            return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match and team_match.group(1):
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for project  
+    if 'project' in question_lower:
+        project_match = re.search(r'project\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if project_match and project_match.group(1):
+            return f"SELECT * FROM UserMaster WHERE Project LIKE '%{project_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default fallback
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        try:
+            # Check for simple queries first
+            is_simple, query_type, search_term = is_simple_query(question)
+            
+            if is_simple and search_term:  # Ensure search_term is not empty
+                print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+                return create_simple_sql(query_type, search_term)
+            
+            # For complex queries, use LLM
+            print("DEBUG - Using LLM for complex query")
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+            
+        except Exception as e:
+            print(f"DEBUG - SQL generation error: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant()  # Just a number
+    ]
+    
+    for pattern in uid_patterns:
+        match = re.search(pattern, question_lower)
+        if match:
+            uid = match.group(1)
+            if uid and uid.isdigit() and len(uid) <= 10:  # Reasonable UID length
+                # Check if it's likely a UID query
+                if (any(word in question_lower for word in ['employee', 'emp', 'user', 'id', 'uid']) or 
+                    re.match(r'^\s*\d+\s*
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), question_lower)):  # Just a number
+                    return True, "uid", uid
+    
+    # Check for name patterns
+    name_patterns = [
+        r'(?:find|show|get|search)\s+(?:employee|emp|user)?\s*(?:named|with name)?\s*["\']?([a-zA-Z\s]+)["\']?',
+        r'(?:employee|emp|user)?\s*(?:named|with name)\s*["\']?([a-zA-Z\s]+)["\']?',
+        r'["\']([a-zA-Z\s]{2,40})["\']',  # Quoted names
+        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant()  # Proper case names (start to end)
+    ]
+    
+    for pattern in name_patterns:
+        match = re.search(pattern, question_original)
+        if match:
+            name = match.group(1).strip()
+            # Validate it's likely a name (2-40 chars, mostly letters)
+            if (name and 2 <= len(name) <= 40 and 
+                re.match(r'^[a-zA-Z\s]+
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), name) and
+                len(name.split()) <= 4):  # Max 4 words
+                return True, "name", name
+    
+    # Additional simple name check - look for patterns like "john", "john smith"
+    simple_name_match = re.match(r'^([a-zA-Z]+(?:\s+[a-zA-Z]+){0,3})\s*
+
+def create_simple_sql(query_type: str, search_term: str) -> str:
+    """Create optimized SQL for simple queries"""
+    if query_type == "uid":
+        return f"SELECT * FROM UserMaster WHERE Uid = {search_term}"
+    elif query_type == "name":
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{search_term}%'"
+    return ""
+
+def get_sql_prompt() -> str:
+    """Generate concise SQL generation prompt"""
+    today = date.today()
+    
+    return f"""You are an expert SQL query generator. Current date: {today.strftime('%Y-%m-%d')}
+
+DATABASE SCHEMA: UserMaster table with columns:
+{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
+
+FORBIDDEN COLUMNS (NEVER USE): Pwd, SecQ, SecA
+
+RULES:
+1. Generate ONLY SELECT statements
+2. Use exact table name: UserMaster
+3. For text fields, use LIKE with % wildcards
+4. For Uid, use exact equality (=)
+5. Return ONLY the SQL query - no explanations
+6. NO LIMIT clauses
+
+EXAMPLES:
+- "employee 123" → SELECT * FROM UserMaster WHERE Uid = 123
+- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
+- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
+- "count employees" → SELECT COUNT(*) FROM UserMaster
+
+Question: {{question}}
+
+SQL:"""
+
+def clean_sql_fast(raw_sql: str, original_question: str) -> str:
+    """Fast SQL cleaning with minimal processing"""
+    if not raw_sql:
+        return construct_sql_from_question(original_question)
+    
+    # Remove code blocks and common prefixes quickly
+    sql = raw_sql.strip()
+    
+    # Extract SQL from code blocks
+    code_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
+    if code_match:
+        sql = code_match.group(1).strip()
+    
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+    
+    # Quick fixes
+    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
+    sql = ' '.join(sql.split())  # Normalize whitespace
+    sql = sql.strip().rstrip(';')
+    
+    # Remove sensitive fields
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+    
+    return sql if sql.upper().startswith('SELECT') else construct_sql_from_question(original_question)
+
+def construct_sql_from_question(question: str) -> str:
+    """Fast SQL construction from question patterns"""
+    question_lower = question.lower()
+    
+    # Check for UID
+    uid_match = re.search(r'(\d+)', question)
+    if uid_match:
+        return f"SELECT * FROM UserMaster WHERE Uid = {uid_match.group(1)}"
+    
+    # Check for name
+    name_match = re.search(r'["\']([a-zA-Z\s]+)["\']', question)
+    if not name_match:
+        name_match = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', question)
+    
+    if name_match:
+        name = name_match.group(1)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+    
+    # Check for team
+    if 'team' in question_lower:
+        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
+        if team_match:
+            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team_match.group(1)}%'"
+    
+    # Check for count
+    if 'count' in question_lower:
+        return "SELECT COUNT(*) FROM UserMaster"
+    
+    # Default
+    return "SELECT * FROM UserMaster"
+
+def validate_sql_query(sql: str) -> Tuple[bool, str]:
+    """Fast SQL validation"""
+    if not sql:
+        return False, "Empty query"
+    
+    sql_upper = sql.upper().strip()
+    
+    if not sql_upper.startswith('SELECT'):
+        return False, "Must be SELECT statement"
+    
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    if any(op in sql_upper for op in dangerous_ops):
+        return False, "Dangerous operations not allowed"
+    
+    # Check for sensitive fields
+    for field in SENSITIVE_FIELDS:
+        if field.upper() in sql_upper:
+            return False, f"Access to {field} forbidden"
+    
+    if 'USERMASTER' not in sql_upper:
+        return False, "Must reference UserMaster table"
+    
+    return True, "Valid"
+
+def format_results_fast(result: List[Dict], question: str) -> str:
+    """Fast result formatting"""
+    if not result:
+        return "🔍 **No Results Found**\n\nTry using partial names, employee IDs, or broader search terms."
+    
+    # Handle single values (COUNT queries)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        return f"📊 **Result**: {value}"
+    
+    # Handle single employee
+    if len(result) == 1:
+        return format_single_employee_fast(result[0])
+    
+    # Handle multiple employees
+    return format_multiple_employees_fast(result, question)
+
+def format_single_employee_fast(record: Dict) -> str:
+    """Fast single employee formatting"""
+    response = "👤 **Employee Details**\n\n"
+    
+    # Key fields with icons
+    key_fields = [
+        ('Uid', '🆔', 'Employee ID'),
+        ('EmpName', '👤', 'Name'),
+        ('Contact', '📞', 'Contact'),
+        ('TcsEmail', '📧', 'TCS Email'),
+        ('Position', '💼', 'Position'),
+        ('Team', '👥', 'Team'),
+        ('Project', '📂', 'Project')
+    ]
+    
+    for field, icon, label in key_fields:
+        if field in record and record[field]:
+            response += f"{icon} **{label}**: {record[field]}\n"
+    
+    return response
+
+def format_multiple_employees_fast(result: List[Dict], question: str) -> str:
+    """Fast multiple employee formatting"""
+    count = len(result)
+    response = f"👥 **Found {count} employees**\n\n"
+    
+    if count <= 10:
+        for i, record in enumerate(result, 1):
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            team = record.get('Team', '')
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
+    else:
+        for record in result[:10]:
+            name = record.get('EmpName', 'Unknown')
+            uid = record.get('Uid', '')
+            response += f"• **{name}** (ID: {uid})\n"
+        response += f"\n... and {count - 10} more employees."
+    
+    return response
+
+class TeamDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_connection = None
+        self.initialized = False
+
+    def initialize(self) -> bool:
+        """Fast initialization"""
+        try:
+            print("🔧 Initializing Team Details Assistant...")
+            
+            # Initialize LLM with minimal settings
+            self.llm = OllamaLLM(
+                model="myllm:latest", 
+                temperature=0.0,
+                num_ctx=2048  # Reduced context for speed
+            )
+            
+            # Create direct database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            self.db_connection = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=10,
+                read_timeout=10
+            )
+            
+            self.initialized = True
+            print("✅ Team Details Assistant initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            return False
+
+    def generate_sql_fast(self, question: str) -> str:
+        """Fast SQL generation with simple query detection"""
+        # Check for simple queries first
+        is_simple, query_type, search_term = is_simple_query(question)
+        
+        if is_simple:
+            print(f"DEBUG - Simple {query_type} query detected: {search_term}")
+            return create_simple_sql(query_type, search_term)
+        
+        # For complex queries, use LLM
+        print("DEBUG - Using LLM for complex query")
+        try:
+            prompt = get_sql_prompt().format(question=question)
+            raw_sql = self.llm.invoke(prompt)
+            return clean_sql_fast(raw_sql, question)
+        except Exception as e:
+            print(f"DEBUG - LLM generation failed: {e}")
+            return construct_sql_from_question(question)
+
+    def execute_query_fast(self, sql: str) -> Tuple[List[Dict], str]:
+        """Fast query execution"""
+        try:
+            print(f"DEBUG - Executing: {sql}")
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                print(f"DEBUG - Returned {len(result)} rows")
+                return result, "success"
+                
+        except Exception as e:
+            error_msg = f"Database error: {str(e)}"
+            print(f"DEBUG - {error_msg}")
+            return [], error_msg
+
+    def process_question_fast(self, question: str) -> str:
+        """Fast question processing"""
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Initialization failed"
+        
+        # Generate SQL
+        sql = self.generate_sql_fast(question)
+        
+        if not sql:
+            return "❌ Unable to generate SQL query"
+        
+        # Validate
+        is_valid, error_msg = validate_sql_query(sql)
+        if not is_valid:
+            return f"❌ Query validation failed: {error_msg}"
+        
+        print(f"✅ Final SQL: {sql}")
+        
+        # Execute
+        result, status = self.execute_query_fast(sql)
+        
+        if status != "success":
+            return f"❌ {status}"
+        
+        # Format results
+        return format_results_fast(result, question)
+
+    def start_session(self, query: str) -> str:
+        """Main entry point"""
+        try:
+            if not query or not query.strip():
+                return "❌ Please provide a question"
+            
+            if is_dangerous(query):
+                return "❌ Query blocked for security reasons"
+            
+            return self.process_question_fast(query.strip())
+            
+        except Exception as e:
+            error_msg = f"❌ Error: {str(e)}"
+            logger.error(f"Session error: {e}")
+            return error_msg
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
+        except:
+            pass
+
+def Teammain(query: str) -> str:
+    """Optimized main function"""
+    if not query or not query.strip():
+        return "❌ Please provide a question"
+    
+    assistant = TeamDetailsAssistant()
+    return assistant.start_session(query.strip())
+
+# Test function
+def test_assistant():
+    """Test with common queries"""
+    test_queries = [
+        "12345",  # UID only
+        "employee 789",  # UID with keyword
+        "John Smith",  # Name only
+        "find Sarah Kumar",  # Name with keyword
+        "team Development",  # Team query
+        "count employees",  # Count query
+    ]
+    
+    print("🧪 Testing optimized assistant...\n")
+    
+    for query in test_queries:
+        print(f"Query: {query}")
+        result = Teammain(query)
+        print(f"Result: {result[:100]}...\n")
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:])
+        result = Teammain(query)
+        print(result)
+    else:
+        test_assistant(), question_original)
+    if simple_name_match:
+        name = simple_name_match.group(1).strip()
+        if (name and 2 <= len(name) <= 40 and 
+            not any(word in question_lower for word in ['count', 'team', 'project', 'list', 'show', 'all']) and
+            not re.search(r'\d', name)):  # No numbers in name
+            return True, "name", name
     
     return False, "", ""
 
