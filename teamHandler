@@ -6,10 +6,6 @@ import traceback
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, date
 import json
-import sqlparse
-from langchain_community.utilities import SQLDatabase
-from langchain_ollama import OllamaLLM
-from langchain.chains import create_sql_query_chain
 
 # --- TEAM DETAILS CONFIGURATION ---
 TEAM_DB_CONFIG = {
@@ -23,67 +19,10 @@ TEAM_DB_CONFIG = {
     "include_tables": ["UserMaster"],
 }
 
-# Blocked patterns for security
-BLOCKED_PATTERNS = [
-    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
-    r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
-    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
-    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
-    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
-]
-
 # Sensitive fields that should never be included in queries or results
 SENSITIVE_FIELDS = ["Pwd", "SecQ", "SecA"]
 
-# Comprehensive field mappings for better query understanding
-FIELD_MAPPINGS = {
-    # Basic employee info
-    "phone": "Contact", "mobile": "Contact", "contact": "Contact", "phone_number": "Contact",
-    "employee_id": "Uid", "emp_id": "Uid", "id": "Uid", "user_id": "Uid", "userid": "Uid",
-    "name": "EmpName", "employee_name": "EmpName", "emp_name": "EmpName", "fullname": "EmpName",
-    "email": "TcsEmail", "tcs_email": "TcsEmail", "mail": "TcsEmail",
-    "sbi_email": "SbiEmail", "sbi_mail": "SbiEmail",
-    "ad_id": "AdId", "active_directory": "AdId", "ad": "AdId",
-    "position": "Position", "designation": "Position", "role": "Position", "job_title": "Position",
-    "level": "Level", "grade": "Level", "emp_level": "Level",
-    "team": "Team", "team_name": "Team", "department": "Team",
-    "project": "Project", "project_name": "Project", "proj": "Project",
-    
-    # Additional fields
-    "doj": "TcsDoj", "date_of_joining": "TcsDoj", "joining_date": "TcsDoj",
-    "sbi_doj": "SbiDoj", "sbi_joining": "SbiDoj",
-    "id_card": "IdCard", "idcard": "IdCard", "card_id": "IdCard",
-    "access_card": "AccessCard", "accesscard": "AccessCard",
-    "company": "BACompany", "ba_company": "BACompany",
-    "pvc_id": "PvcAppId", "pvc_app_id": "PvcAppId",
-    "pvc_status": "PvcStatus", "status": "PvcStatus",
-    "onboarded": "OnboardedOn", "onboarding_date": "OnboardedOn"
-}
-
-# Enhanced column metadata for better query generation
-COLUMN_INFO = {
-    "Uid": "int - Unique employee identifier (use = for exact match)",
-    "EmpName": "varchar(80) - Employee full name (use LIKE '%name%' for search)",
-    "Contact": "varchar(11) - Phone number (use LIKE '%number%' for search)",
-    "TcsEmail": "varchar(80) - TCS email address (use LIKE '%email%' for search)",
-    "SbiEmail": "varchar(80) - SBI email address (use LIKE '%email%' for search)",  
-    "AdId": "varchar(30) - Active Directory ID (use LIKE '%id%' for search)",
-    "Position": "varchar(20) - Job position/designation (use LIKE '%position%' for search)",
-    "Level": "varchar(10) - Employee level/grade (use LIKE '%level%' for search)",
-    "Team": "varchar(45) - Team name (use LIKE '%team%' for search)",
-    "Project": "varchar(45) - Project name (use LIKE '%project%' for search)",
-    "TcsDoj": "varchar(20) - TCS Date of Joining (use LIKE for search)",
-    "SbiDoj": "varchar(20) - SBI Date of Joining (use LIKE for search)",
-    "IdCard": "varchar(30) - ID Card number (use LIKE for search)",
-    "AccessCard": "varchar(30) - Access Card number (use LIKE for search)",
-    "OnboardedOn": "date - Onboarding date (use date functions)",
-    "BACompany": "varchar(80) - BA Company name (use LIKE for search)",
-    "Phone": "varchar(4) - Phone extension (use LIKE for search)",
-    "PvcAppId": "varchar(30) - PVC Application ID (use LIKE for search)",
-    "PvcStatus": "varchar(30) - PVC Status (use LIKE for search)"
-}
-
-# Setup enhanced logging
+# Setup logging
 logging.basicConfig(
     filename=os.path.expanduser("~/.team_details_ai.log"),
     level=logging.INFO,
@@ -91,345 +30,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def is_dangerous(text: str) -> bool:
-    """Check if text contains dangerous patterns"""
-    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
-
-def preprocess_question(question: str) -> str:
-    """Enhanced question preprocessing with better term mapping"""
-    print(f"DEBUG - Original question: {question}")
+def is_employee_id(query: str) -> Optional[int]:
+    """Check if query is an employee ID and extract it"""
+    # Remove common prefixes and clean the query
+    cleaned = re.sub(r'^(show|find|get|employee|emp|user|id|uid)\s*', '', query.lower()).strip()
+    cleaned = re.sub(r'[^\d]', '', cleaned)  # Keep only digits
     
-    # Convert to lowercase for processing but preserve original case for field names
-    question_lower = question.lower()
-    processed_question = question
+    if cleaned and cleaned.isdigit():
+        return int(cleaned)
     
-    # Apply field mappings
-    for term, field in FIELD_MAPPINGS.items():
-        # Use word boundaries to avoid partial matches
-        pattern = rf'\b{re.escape(term)}\b'
-        if re.search(pattern, question_lower):
-            processed_question = re.sub(pattern, field, processed_question, flags=re.IGNORECASE)
-            print(f"DEBUG - Mapped '{term}' to '{field}'")
-    
-    # Handle common question patterns
-    if re.search(r'\bshow\s+me\b', question_lower):
-        processed_question = re.sub(r'\bshow\s+me\b', 'SELECT * FROM UserMaster WHERE', processed_question, flags=re.IGNORECASE)
-    elif re.search(r'\blist\s+all\b', question_lower):
-        processed_question = re.sub(r'\blist\s+all\b', 'SELECT * FROM UserMaster WHERE', processed_question, flags=re.IGNORECASE)
-    elif re.search(r'\bfind\b', question_lower):
-        processed_question = re.sub(r'\bfind\b', 'SELECT * FROM UserMaster WHERE', processed_question, flags=re.IGNORECASE)
-    elif re.search(r'\bcount\b', question_lower):
-        if not re.search(r'\bselect\b', question_lower):
-            processed_question = f"SELECT COUNT(*) FROM UserMaster WHERE {processed_question}"
-    
-    print(f"DEBUG - Processed question: {processed_question}")
-    return processed_question
-
-def get_comprehensive_sql_prompt() -> str:
-    """Generate comprehensive SQL generation prompt"""
-    today = date.today()
-    
-    return f"""You are an expert SQL query generator for an Employee Management database.
-
-**CURRENT DATE CONTEXT:**
-- Today's date: {today.strftime('%Y-%m-%d')}
-- Current year: {today.year}
-- Current month: {today.month}
-
-**DATABASE SCHEMA:**
-Table: UserMaster (Employee Information)
-
-**ACCESSIBLE COLUMNS:**
-{chr(10).join([f"- {col}: {info}" for col, info in COLUMN_INFO.items()])}
-
-**SENSITIVE COLUMNS (NEVER ACCESS):**
-- Pwd: Password (FORBIDDEN)
-- SecQ: Security Question (FORBIDDEN)  
-- SecA: Security Answer (FORBIDDEN)
-
-**CRITICAL SQL GENERATION RULES:**
-1. ONLY generate SELECT statements
-2. Always use exact table name: UserMaster
-3. NEVER include Pwd, SecQ, or SecA columns in any query
-4. For text fields, use LIKE with % wildcards: column_name LIKE '%search_term%'
-5. For Uid (employee ID), use exact equality: Uid = number
-6. Use proper MySQL syntax for date functions when needed
-7. Return ONLY the SQL query - no explanations, markdown, or extra text
-8. Add reasonable LIMIT only if query might return many results
-9. For partial name searches, always use LIKE '%name%'
-10. For counting, use COUNT(*) or COUNT(column_name)
-
-**QUERY PATTERNS & EXAMPLES:**
-
-**Employee ID Queries:**
-- "employee 12345" → SELECT * FROM UserMaster WHERE Uid = 12345
-- "show employee ID 789" → SELECT * FROM UserMaster WHERE Uid = 789
-
-**Name Searches:**
-- "John Smith" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John Smith%'
-- "employees named John" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John%'
-
-**Team/Project Queries:**
-- "team ABC" → SELECT * FROM UserMaster WHERE Team LIKE '%ABC%'
-- "project XYZ employees" → SELECT * FROM UserMaster WHERE Project LIKE '%XYZ%'
-
-**Contact Queries:**
-- "phone 9876543210" → SELECT * FROM UserMaster WHERE Contact LIKE '%9876543210%'
-- "email john@tcs.com" → SELECT * FROM UserMaster WHERE TcsEmail LIKE '%john@tcs.com%'
-
-**Count Queries:**
-- "count employees" → SELECT COUNT(*) FROM UserMaster
-- "count team ABC" → SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%ABC%'
-
-**Multiple Conditions:**
-- "John in team ABC" → SELECT * FROM UserMaster WHERE EmpName LIKE '%John%' AND Team LIKE '%ABC%'
-
-**Position/Level Queries:**
-- "manager position" → SELECT * FROM UserMaster WHERE Position LIKE '%manager%'
-- "level L3" → SELECT * FROM UserMaster WHERE Level LIKE '%L3%'
-
-**ERROR PREVENTION:**
-- Never use columns Pwd, SecQ, SecA
-- Always use LIKE for text searches except Uid
-- Use proper single quotes for string values
-- Ensure table name is exactly 'UserMaster'
-- Check for proper syntax and valid column names
-
-**RESPONSE FORMAT:**
-Return ONLY the SQL query. Do not include:
-- Explanations
-- Markdown formatting
-- Code blocks
-- Additional text
-
-**USER QUESTION:** {{question}}
-
-Generate the appropriate SQL query:"""
-
-def clean_and_fix_sql(raw_sql: str, original_question: str) -> str:
-    """Enhanced SQL cleaning with comprehensive error handling"""
-    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
-    
-    # Remove comments and format
-    try:
-        formatted_sql = sqlparse.format(raw_sql, strip_comments=True).strip()
-    except:
-        formatted_sql = raw_sql.strip()
-    
-    print(f"DEBUG - After sqlparse: {formatted_sql}")
-    
-    # Handle LLM refusal or non-SQL responses
-    refusal_patterns = [
-        "i cannot", "i can't", "unable to", "not possible", "cannot generate",
-        "forbidden", "not allowed", "restricted", "security"
+    # Check for patterns like "employee 123", "emp id 456", etc.
+    patterns = [
+        r'(?:employee|emp|user|id|uid)\s*[:#-]?\s*(\d+)',
+        r'(\d+)\s*(?:employee|emp|user)?',
+        r'^(\d+)$'
     ]
     
-    if any(pattern in formatted_sql.lower() for pattern in refusal_patterns):
-        print("DEBUG - LLM refused to generate SQL")
-        return "ERROR: LLM_REFUSAL"
+    for pattern in patterns:
+        match = re.search(pattern, query.lower())
+        if match:
+            return int(match.group(1))
     
-    # Extract SQL from various formats
-    sql = formatted_sql
-    
-    # Remove code block formatting
-    code_block_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", sql, re.DOTALL | re.IGNORECASE)
-    if code_block_match:
-        sql = code_block_match.group(1).strip()
-        print(f"DEBUG - Extracted from code block: {sql}")
-    
+    return None
+
+def is_employee_name(query: str) -> Optional[str]:
+    """Check if query is an employee name and extract it"""
     # Remove common prefixes
-    prefixes = [
-        r'^(here is|here\'s|the query is|sql query|query)?\s*:?\s*', 
-        r'^(select statement|sql|query)?\s*:?\s*'
-    ]
-    for prefix in prefixes:
-        sql = re.sub(prefix, '', sql, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^(show|find|get|employee|emp|user|name)\s*', '', query, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r'^(named|called|with name)\s*', '', cleaned, flags=re.IGNORECASE).strip()
     
-    # Find SELECT statement
-    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$|;)', sql, re.IGNORECASE | re.DOTALL)
-    if select_match:
-        sql = select_match.group(1).strip()
-        print(f"DEBUG - Extracted SELECT: {sql}")
+    # Check if it looks like a name (contains letters, may have spaces)
+    if re.match(r'^[a-zA-Z\s\.]+$', cleaned) and len(cleaned.strip()) >= 2:
+        return cleaned.strip()
     
-    # Handle specific patterns from original question
-    if not sql.upper().startswith('SELECT'):
-        sql = construct_sql_from_question(original_question)
-        print(f"DEBUG - Constructed from question: {sql}")
-    
-    # Remove sensitive fields from any query
-    for field in SENSITIVE_FIELDS:
-        # Remove from SELECT list
-        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
-        sql = re.sub(rf',\s*\b{field}\b', '', sql, flags=re.IGNORECASE)
-        # Remove from WHERE conditions
-        sql = re.sub(rf'\b(WHERE|AND|OR)\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', r'\1 ', sql, flags=re.IGNORECASE)
-    
-    # Fix common SQL issues
-    sql = fix_sql_syntax(sql)
-    
-    # Clean up formatting
-    sql = ' '.join(sql.split())  # Normalize whitespace
-    sql = sql.strip().rstrip(';')  # Remove trailing semicolon
-    
-    # Add reasonable limit for large result queries
-    if (not re.search(r'\bLIMIT\b', sql, re.IGNORECASE) and 
-        not re.search(r'\bCOUNT\s*\(', sql, re.IGNORECASE) and
-        not re.search(r'\bUid\s*=', sql, re.IGNORECASE)):  # Don't limit specific ID queries
-        sql += " LIMIT 100"
-    
-    print(f"DEBUG - Final cleaned SQL: {sql}")
-    return sql
-
-def construct_sql_from_question(question: str) -> str:
-    """Construct SQL from question when LLM fails to generate proper SQL"""
-    question_lower = question.lower()
-    
-    # Check for employee ID pattern
-    uid_match = re.search(r'(\d+)', question)
-    if uid_match and any(term in question_lower for term in ['employee', 'emp', 'user', 'id', 'uid']):
-        uid = uid_match.group(1)
-        return f"SELECT * FROM UserMaster WHERE Uid = {uid}"
-    
-    # Check for name search
-    name_patterns = [
-        r'name[d]?\s+["\']([^"\']+)["\']',
-        r'["\']([A-Za-z\s]+)["\']',
-        r'\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b'  # FirstName LastName pattern
-    ]
-    
-    for pattern in name_patterns:
-        match = re.search(pattern, question)
-        if match and any(term in question_lower for term in ['name', 'employee', 'emp']):
-            name = match.group(1)
-            return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
-    
-    # Check for team search
-    if 'team' in question_lower:
-        team_match = re.search(r'team\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
-        if team_match:
-            team = team_match.group(1)
-            return f"SELECT * FROM UserMaster WHERE Team LIKE '%{team}%'"
-    
-    # Check for project search
-    if 'project' in question_lower:
-        project_match = re.search(r'project\s+([A-Za-z0-9_-]+)', question, re.IGNORECASE)
-        if project_match:
-            project = project_match.group(1)
-            return f"SELECT * FROM UserMaster WHERE Project LIKE '%{project}%'"
-    
-    # Check for count query
-    if 'count' in question_lower:
-        if 'team' in question_lower:
-            return "SELECT Team, COUNT(*) as Count FROM UserMaster GROUP BY Team"
-        elif 'project' in question_lower:
-            return "SELECT Project, COUNT(*) as Count FROM UserMaster GROUP BY Project"
-        else:
-            return "SELECT COUNT(*) as Total FROM UserMaster"
-    
-    # Default to all employees with limit
-    return "SELECT * FROM UserMaster LIMIT 10"
-
-def fix_sql_syntax(sql: str) -> str:
-    """Fix common SQL syntax issues"""
-    # Fix table name case
-    sql = re.sub(r'\bfrom\s+usermaster\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bfrom\s+user_master\b', 'FROM UserMaster', sql, flags=re.IGNORECASE)
-    
-    # Fix common column name issues
-    column_fixes = {
-        r'\bempname\b': 'EmpName',
-        r'\bemp_name\b': 'EmpName',
-        r'\btcsemail\b': 'TcsEmail',
-        r'\btcs_email\b': 'TcsEmail',
-        r'\bsbiemail\b': 'SbiEmail',
-        r'\bsbi_email\b': 'SbiEmail',
-        r'\badid\b': 'AdId',
-        r'\bad_id\b': 'AdId'
-    }
-    
-    for pattern, replacement in column_fixes.items():
-        sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
-    
-    # Convert exact matches to LIKE for text fields
-    text_fields = ['EmpName', 'Contact', 'TcsEmail', 'SbiEmail', 'AdId', 'Position', 'Level', 'Team', 'Project']
-    for field in text_fields:
-        # Convert = to LIKE for text fields
-        sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-        sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-    
-    # Clean up multiple spaces and formatting
-    sql = re.sub(r'\s+', ' ', sql)
-    sql = re.sub(r'\s*,\s*', ', ', sql)
-    sql = re.sub(r'\s*=\s*', ' = ', sql)
-    
-    # Fix WHERE clause issues
-    sql = re.sub(r'\bWHERE\s+AND\b', 'WHERE', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bWHERE\s+OR\b', 'WHERE', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bWHERE\s*$', '', sql, flags=re.IGNORECASE)
-    
-    return sql
-
-def validate_sql_query(sql: str) -> Tuple[bool, str]:
-    """Comprehensive SQL validation"""
-    if not sql or sql == "ERROR: LLM_REFUSAL":
-        return False, "LLM refused to generate SQL or returned empty query"
-    
-    sql_upper = sql.upper().strip()
-    
-    # Check if it's a SELECT query
-    if not sql_upper.startswith('SELECT'):
-        return False, "Query must be a SELECT statement"
-    
-    # Check for dangerous operations
-    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE', 'REPLACE']
-    if any(op in sql_upper for op in dangerous_ops):
-        return False, f"Dangerous operations not allowed: {[op for op in dangerous_ops if op in sql_upper]}"
-    
-    # Check for sensitive fields
-    for field in SENSITIVE_FIELDS:
-        if field.upper() in sql_upper:
-            return False, f"Access to sensitive field '{field}' is not allowed"
-    
-    # Check for valid table name
-    if 'USERMASTER' not in sql_upper:
-        return False, "Query must reference UserMaster table"
-    
-    # Basic syntax check
-    if sql.count('(') != sql.count(')'):
-        return False, "Unmatched parentheses in query"
-    
-    return True, "Query is valid"
-
-def format_query_results_natural(result: List[Dict], question: str) -> str:
-    """Enhanced natural language result formatting"""
-    if not result:
-        return generate_no_results_message(question)
-    
-    # Handle COUNT queries
-    if len(result) == 1 and len(result[0]) == 1:
-        value = list(result[0].values())[0]
-        column_name = list(result[0].keys())[0]
-        
-        if "count" in question.lower() or "COUNT" in column_name:
-            return f"📊 Found {value} employee records matching your criteria."
-        else:
-            return f"📋 Result: {value}"
-    
-    # Handle GROUP BY results (like team counts)
-    if len(result) > 1 and len(result[0]) == 2:
-        keys = list(result[0].keys())
-        if any(key.lower() in ['count', 'total'] for key in keys):
-            return format_grouped_results(result, question)
-    
-    # Handle single employee record
-    if len(result) == 1:
-        return format_single_employee(result[0])
-    
-    # Handle multiple employee records
-    return format_multiple_employees(result, question)
+    return None
 
 def format_single_employee(record: Dict) -> str:
-    """Format single employee record"""
+    """Format single employee record with emojis and clean layout"""
+    if not record:
+        return "No employee found."
+    
     response = "👤 **Employee Details**\n\n"
     
     # Priority fields with icons
@@ -453,178 +93,48 @@ def format_single_employee(record: Dict) -> str:
         if field in record and record[field] is not None and str(record[field]).strip():
             response += f"{icon} **{label}**: {record[field]}\n"
     
-    # Add other fields if present
-    other_fields = set(record.keys()) - {field for field, _, _ in priority_fields} - set(SENSITIVE_FIELDS)
-    if other_fields:
-        response += "\n📋 **Additional Information**:\n"
-        for field in sorted(other_fields):
-            if record[field] is not None and str(record[field]).strip():
-                response += f"   • {field}: {record[field]}\n"
-    
     return response
 
-def format_multiple_employees(result: List[Dict], question: str) -> str:
+def format_multiple_employees(result: List[Dict]) -> str:
     """Format multiple employee records"""
     count = len(result)
     response = f"👥 **Found {count} employees**\n\n"
     
-    # Add summary information
-    if 'Team' in result[0]:
-        team_summary = {}
-        for record in result:
-            team = record.get('Team', 'Unknown')
-            team_summary[team] = team_summary.get(team, 0) + 1
-        
-        if len(team_summary) > 1:
-            response += "📊 **Team Distribution**:\n"
-            for team, count in sorted(team_summary.items()):
-                response += f"   • {team}: {count} employees\n"
-            response += "\n"
-    
-    # Show detailed results based on count
-    if count <= 5:
-        response += "📋 **Detailed Results**:\n\n"
+    # Show up to 10 employees in detail
+    if count <= 10:
         for i, record in enumerate(result, 1):
-            response += f"**{i}. {record.get('EmpName', 'Unknown')}**\n"
-            key_info = []
-            if record.get('Uid'): key_info.append(f"ID: {record['Uid']}")
-            if record.get('Team'): key_info.append(f"Team: {record['Team']}")
-            if record.get('Position'): key_info.append(f"Position: {record['Position']}")
-            if record.get('Contact'): key_info.append(f"Contact: {record['Contact']}")
-            response += f"   {' | '.join(key_info)}\n\n"
-    
-    elif count <= 20:
-        response += f"📋 **Summary List** (showing all {count}):\n\n"
-        for record in result:
             name = record.get('EmpName', 'Unknown')
-            team = record.get('Team', '')
-            uid = record.get('Uid', '')
-            response += f"• **{name}** (ID: {uid}) - {team}\n"
-    
+            uid = record.get('Uid', 'N/A')
+            team = record.get('Team', 'N/A')
+            contact = record.get('Contact', 'N/A')
+            
+            response += f"**{i}. {name}**\n"
+            response += f"   🆔 ID: {uid} | 👥 Team: {team} | 📞 Contact: {contact}\n\n"
     else:
-        response += f"📋 **Sample Results** (showing first 10 of {count}):\n\n"
-        for record in result[:10]:
+        # Show first 5 for large results
+        response += "**First 5 results:**\n\n"
+        for i, record in enumerate(result[:5], 1):
             name = record.get('EmpName', 'Unknown')
-            team = record.get('Team', '')
-            uid = record.get('Uid', '')
-            response += f"• **{name}** (ID: {uid}) - {team}\n"
-        response += f"\n... and {count - 10} more employees."
-    
-    return response
-
-def format_grouped_results(result: List[Dict], question: str) -> str:
-    """Format grouped results like team counts"""
-    response = "📊 **Summary Results**\n\n"
-    
-    total = 0
-    for record in result:
-        keys = list(record.keys())
-        group_key = [k for k in keys if k.lower() not in ['count', 'total']][0]
-        count_key = [k for k in keys if k.lower() in ['count', 'total']][0]
+            uid = record.get('Uid', 'N/A')
+            team = record.get('Team', 'N/A')
+            
+            response += f"{i}. **{name}** (ID: {uid}) - {team}\n"
         
-        group_value = record[group_key] or 'Unknown'
-        count_value = record[count_key]
-        total += count_value
-        
-        response += f"• **{group_value}**: {count_value} employees\n"
-    
-    response += f"\n📋 **Total**: {total} employees"
-    return response
-
-def generate_no_results_message(question: str) -> str:
-    """Generate helpful message when no results found"""
-    response = "🔍 **No Results Found**\n\n"
-    response += "I couldn't find any employee records matching your criteria.\n\n"
-    
-    response += "💡 **Suggestions**:\n"
-    response += "• Try using partial names or broader search terms\n"
-    response += "• Check spelling of names, teams, or projects\n"
-    response += "• Use employee ID for exact matches\n"
-    response += "• Try searching by team or project instead\n\n"
-    
-    # Add specific suggestions based on question type
-    question_lower = question.lower()
-    if 'team' in question_lower:
-        response += "• For teams, try common names like 'Development', 'Testing', etc.\n"
-    elif 'project' in question_lower:
-        response += "• For projects, try partial project codes or names\n"
-    elif re.search(r'\d+', question):
-        response += "• For employee IDs, ensure the number exists in the system\n"
-    elif any(name_word in question_lower for name_word in ['name', 'employee', 'emp']):
-        response += "• For names, try first name only or last name only\n"
+        response += f"\n... and {count - 5} more employees found."
     
     return response
 
-class TeamDetailsAssistant:
+class FastTeamDetailsAssistant:
     def __init__(self):
-        self.llm = None
-        self.db_handler = None
+        self.db_connection = None
         self.initialized = False
-        self.chat_history = []
-        self.retry_count = 0
-        self.max_retries = 3
 
     def initialize(self) -> bool:
-        """Initialize the Team Details Assistant with enhanced error handling"""
+        """Quick initialization - just database connection"""
         try:
-            print("🔧 Initializing Team Details Assistant...")
-            
-            # Initialize LLM with optimal settings
-            self.llm = OllamaLLM(
-                model="myllm:latest", 
-                temperature=0.0,  # Deterministic responses
-                num_ctx=4096,     # Larger context window
-                repeat_penalty=1.1
-            )
-            
-            # Test LLM connection
-            try:
-                test_response = self.llm.invoke("SELECT")
-                print("✅ LLM connection successful")
-            except Exception as e:
-                print(f"❌ LLM connection failed: {e}")
-                return False
-            
-            # Set up database connection
             db_cfg = TEAM_DB_CONFIG['db_config']
-            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
             
-            # Test database connection first
-            try:
-                import pymysql
-                test_conn = pymysql.connect(
-                    host=db_cfg['host'],
-                    user=db_cfg['user'],
-                    password=db_cfg['password'],
-                    database=db_cfg['database'],
-                    connect_timeout=10
-                )
-                test_conn.close()
-                print("✅ Database connection successful")
-            except Exception as e:
-                print(f"❌ Database connection failed: {e}")
-                return False
-            
-            # Connect to database for LLM
-            db_for_llm = SQLDatabase.from_uri(
-                uri,
-                include_tables=TEAM_DB_CONFIG.get("include_tables"),
-                engine_args={
-                    "pool_pre_ping": True,
-                    "pool_recycle": 3600,
-                    "connect_args": {
-                        "connect_timeout": 30,
-                        "read_timeout": 30,
-                        "charset": "utf8mb4"
-                    }
-                }
-            )
-            
-            # Create query chain
-            chain = create_sql_query_chain(self.llm, db_for_llm)
-            
-            # Create direct connection for executing queries
-            db_conn = pymysql.connect(
+            self.db_connection = pymysql.connect(
                 host=db_cfg['host'],
                 user=db_cfg['user'],
                 password=db_cfg['password'],
@@ -632,357 +142,292 @@ class TeamDetailsAssistant:
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True,
-                connect_timeout=30,
-                read_timeout=30
+                connect_timeout=10
             )
             
-            self.db_handler = {
-                'chain': chain,
-                'connection': db_conn,
-                'config': TEAM_DB_CONFIG
-            }
-            
             self.initialized = True
-            print("✅ Team Details Assistant initialized successfully")
             return True
             
         except Exception as e:
-            error_msg = f"Initialization failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            logger.error(f"Database connection failed: {e}")
             return False
 
-    def generate_sql_with_retry(self, question: str) -> str:
-        """Generate SQL with retry mechanism and fallback strategies"""
-        enhanced_question = preprocess_question(question)
-        
-        # Create comprehensive prompt
-        prompt = get_comprehensive_sql_prompt().format(question=enhanced_question)
-        
-        for attempt in range(self.max_retries):
-            try:
-                print(f"DEBUG - SQL generation attempt {attempt + 1}")
-                
-                # Try using the chain first
-                if attempt == 0:
-                    raw_sql = self.db_handler['chain'].invoke({"question": prompt})
-                else:
-                    # Direct LLM invocation as fallback
-                    raw_sql = self.llm.invoke(prompt)
-                
-                print(f"DEBUG - Raw SQL (attempt {attempt + 1}): {repr(raw_sql)}")
-                
-                # Clean and validate SQL
-                cleaned_sql = clean_and_fix_sql(raw_sql, question)
-                
-                if cleaned_sql and cleaned_sql != "ERROR: LLM_REFUSAL":
-                    is_valid, error_msg = validate_sql_query(cleaned_sql)
-                    if is_valid:
-                        return cleaned_sql
-                    else:
-                        print(f"DEBUG - SQL validation failed (attempt {attempt + 1}): {error_msg}")
-                
-                # If we reach here, the attempt failed
-                print(f"DEBUG - Attempt {attempt + 1} failed, trying different approach")
-                
-            except Exception as e:
-                print(f"DEBUG - Exception in attempt {attempt + 1}: {e}")
-                if attempt == self.max_retries - 1:
-                    raise
-                continue
-        
-        # Final fallback - construct from question patterns
-        print("DEBUG - All attempts failed, using fallback construction")
-        return construct_sql_from_question(question)
-
-    def execute_query_safely(self, sql: str) -> tuple[List[Dict], str]:
-        """Execute query with comprehensive error handling"""
+    def query_by_employee_id(self, emp_id: int) -> str:
+        """Fast query by employee ID"""
         try:
-            print(f"DEBUG - Executing SQL: {sql}")
+            sql = f"SELECT * FROM UserMaster WHERE Uid = {emp_id}"
             
-            with self.db_handler['connection'].cursor() as cursor:
-                # Set reasonable timeout
-                cursor.execute("SET SESSION max_execution_time = 30000")  # 30 seconds
-                
-                # Execute the main query
+            with self.db_connection.cursor() as cursor:
                 cursor.execute(sql)
-                result = cursor.fetchall()
+                result = cursor.fetchone()
                 
-                print(f"DEBUG - Query returned {len(result)} rows")
-                logger.info(f"Successfully executed query: {sql} - returned {len(result)} rows")
-                
-                return result, "success"
-                
-        except pymysql.Error as db_error:
-            error_code = getattr(db_error, 'args', [None])[0]
-            error_msg = str(db_error)
-            
-            print(f"DEBUG - Database error: {error_msg}")
-            logger.error(f"Database error (Code: {error_code}): {error_msg}\nSQL: {sql}")
-            
-            # Categorize and provide helpful error messages
-            if "syntax error" in error_msg.lower():
-                return [], f"SQL syntax error: {error_msg}\nPlease try rephrasing your question."
-            elif "unknown column" in error_msg.lower():
-                return [], f"Unknown column error: {error_msg}\nPlease check column names."
-            elif "table" in error_msg.lower() and "doesn't exist" in error_msg.lower():
-                return [], f"Table error: {error_msg}\nDatabase table may not be available."
-            elif "timeout" in error_msg.lower():
-                return [], "Query timeout: The query took too long to execute. Please try a more specific search."
-            else:
-                return [], f"Database error: {error_msg}"
-                
+                if result:
+                    # Remove sensitive fields
+                    for field in SENSITIVE_FIELDS:
+                        result.pop(field, None)
+                    return format_single_employee(result)
+                else:
+                    return f"❌ No employee found with ID: {emp_id}"
+                    
         except Exception as e:
-            error_msg = f"Unexpected error executing query: {str(e)}"
-            print(f"DEBUG - {error_msg}")
-            logger.error(f"{error_msg}\n{traceback.format_exc()}")
-            return [], error_msg
+            logger.error(f"Error querying employee ID {emp_id}: {e}")
+            return f"❌ Error retrieving employee {emp_id}: {str(e)}"
 
-    def query_team_details(self, question: str) -> str:
-        """Enhanced query processing with comprehensive error handling"""
-        if not self.db_handler:
-            return "❌ Team Details database not available. Please check initialization."
+    def query_by_employee_name(self, name: str) -> str:
+        """Fast query by employee name"""
+        try:
+            # Try exact match first
+            sql = f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%' LIMIT 20"
+            
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                results = cursor.fetchall()
+                
+                if results:
+                    # Remove sensitive fields from all results
+                    for result in results:
+                        for field in SENSITIVE_FIELDS:
+                            result.pop(field, None)
+                    
+                    if len(results) == 1:
+                        return format_single_employee(results[0])
+                    else:
+                        return format_multiple_employees(results)
+                else:
+                    return f"❌ No employee found with name containing: '{name}'"
+                    
+        except Exception as e:
+            logger.error(f"Error querying employee name '{name}': {e}")
+            return f"❌ Error searching for employee '{name}': {str(e)}"
+
+    def handle_complex_query(self, query: str) -> str:
+        """Handle more complex queries with simple pattern matching"""
+        query_lower = query.lower()
         
         try:
-            print(f"\n{'='*60}")
-            print(f"Processing question: {question}")
-            print('='*60)
+            # Team queries
+            if 'team' in query_lower:
+                team_match = re.search(r'team\s+([a-zA-Z0-9_\-\s]+)', query, re.IGNORECASE)
+                if team_match:
+                    team = team_match.group(1).strip()
+                    sql = f"SELECT * FROM UserMaster WHERE Team LIKE '%{team}%' LIMIT 50"
+                    return self.execute_and_format(sql, f"team '{team}'")
             
-            # Generate SQL with retry mechanism
-            sql = self.generate_sql_with_retry(question)
+            # Project queries
+            if 'project' in query_lower:
+                project_match = re.search(r'project\s+([a-zA-Z0-9_\-\s]+)', query, re.IGNORECASE)
+                if project_match:
+                    project = project_match.group(1).strip()
+                    sql = f"SELECT * FROM UserMaster WHERE Project LIKE '%{project}%' LIMIT 50"
+                    return self.execute_and_format(sql, f"project '{project}'")
             
-            if not sql or sql == "ERROR: LLM_REFUSAL":
-                return ("❌ Unable to generate appropriate SQL query for your question. "
-                       "Please try rephrasing with more specific terms like employee ID, name, team, or project.")
+            # Position queries
+            if any(pos in query_lower for pos in ['manager', 'developer', 'analyst', 'lead', 'position']):
+                pos_patterns = ['manager', 'developer', 'analyst', 'lead', 'engineer', 'architect']
+                for pos in pos_patterns:
+                    if pos in query_lower:
+                        sql = f"SELECT * FROM UserMaster WHERE Position LIKE '%{pos}%' LIMIT 50"
+                        return self.execute_and_format(sql, f"position containing '{pos}'")
             
-            # Final validation
-            is_valid, validation_error = validate_sql_query(sql)
-            if not is_valid:
-                return f"❌ Query validation failed: {validation_error}\nPlease try a different question."
+            # Count queries
+            if 'count' in query_lower:
+                if 'team' in query_lower:
+                    sql = "SELECT Team, COUNT(*) as Count FROM UserMaster GROUP BY Team ORDER BY Count DESC"
+                elif 'project' in query_lower:
+                    sql = "SELECT Project, COUNT(*) as Count FROM UserMaster GROUP BY Project ORDER BY Count DESC"
+                else:
+                    sql = "SELECT COUNT(*) as Total FROM UserMaster"
+                return self.execute_and_format(sql, "count query")
             
-            print(f"✅ Final SQL: {sql}")
+            # Contact queries
+            phone_match = re.search(r'(\d{10,})', query)
+            if phone_match:
+                phone = phone_match.group(1)
+                sql = f"SELECT * FROM UserMaster WHERE Contact LIKE '%{phone}%' LIMIT 10"
+                return self.execute_and_format(sql, f"phone number '{phone}'")
             
-            # Execute query
-            result, status = self.execute_query_safely(sql)
+            # Email queries
+            email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', query)
+            if email_match:
+                email = email_match.group(1)
+                sql = f"SELECT * FROM UserMaster WHERE TcsEmail LIKE '%{email}%' OR SbiEmail LIKE '%{email}%' LIMIT 10"
+                return self.execute_and_format(sql, f"email '{email}'")
             
-            if status != "success":
-                return f"❌ {status}"
-            
-            # Format and return results
-            formatted_result = format_query_results_natural(result, question)
-            
-            # Add query info for debugging (optional)
-            if len(result) > 10 or "count" not in question.lower():
-                formatted_result += f"\n\n🔍 **Query executed**: `{sql}`"
-            
-            return formatted_result
+            # Default fallback
+            return "❓ I couldn't understand your query. Please try:\n• Employee ID (e.g., '12345')\n• Employee name (e.g., 'John Smith')\n• 'team ABC' or 'project XYZ'\n• 'count employees' or 'count teams'"
             
         except Exception as e:
-            error_msg = f"❌ Error processing request: {str(e)}"
-            print(f"DEBUG - {error_msg}")
-            logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
-            return f"{error_msg}\nPlease try rephrasing your question or contact support."
+            logger.error(f"Error in complex query '{query}': {e}")
+            return f"❌ Error processing query: {str(e)}"
 
-    def process_question(self, question: str) -> str:
-        """Process questions with comprehensive validation and error handling"""
-        # Input validation
-        if not question or not question.strip():
-            return "❌ Please provide a question about team details."
+    def execute_and_format(self, sql: str, description: str) -> str:
+        """Execute SQL and format results"""
+        try:
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                results = cursor.fetchall()
+                
+                if not results:
+                    return f"❌ No results found for {description}"
+                
+                # Remove sensitive fields
+                for result in results:
+                    for field in SENSITIVE_FIELDS:
+                        result.pop(field, None)
+                
+                # Handle count queries
+                if len(results) == 1 and 'Count' in results[0]:
+                    count_val = list(results[0].values())
+                    if len(count_val) == 1:
+                        return f"📊 Total: {count_val[0]} records"
+                
+                # Handle group by results
+                if len(results) > 1 and 'Count' in results[0]:
+                    response = f"📊 **Results for {description}:**\n\n"
+                    for result in results:
+                        keys = list(result.keys())
+                        group_key = [k for k in keys if k != 'Count'][0]
+                        group_val = result[group_key] or 'Unknown'
+                        count_val = result['Count']
+                        response += f"• **{group_val}**: {count_val}\n"
+                    return response
+                
+                # Handle regular results
+                if len(results) == 1:
+                    return format_single_employee(results[0])
+                else:
+                    return format_multiple_employees(results)
+                    
+        except Exception as e:
+            logger.error(f"Error executing SQL '{sql}': {e}")
+            return f"❌ Database error: {str(e)}"
+
+    def process_query(self, query: str) -> str:
+        """Main query processing - optimized for speed"""
+        if not query or not query.strip():
+            return "❌ Please provide a query (employee ID, name, team, etc.)"
         
-        question = question.strip()
-        
-        if len(question) > 500:
-            return "❌ Question too long. Please keep it under 500 characters."
+        query = query.strip()
         
         # Initialize if needed
         if not self.initialized:
             if not self.initialize():
-                return ("❌ Team Details Assistant initialization failed. "
-                       "Please check database connection and try again.")
+                return "❌ Database connection failed"
         
-        # Security check
-        if is_dangerous(question):
-            logger.warning(f"Blocked dangerous question: {question}")
-            return "❌ Question blocked for security reasons. Please rephrase your query."
-        
-        # Add to chat history
-        self.chat_history.append(f"User: {question}")
-        
-        # Get response
-        response = self.query_team_details(question)
-        
-        # Add response to history
-        self.chat_history.append(f"Assistant: {response}")
-        
-        # Keep history manageable
-        if len(self.chat_history) > 20:
-            self.chat_history = self.chat_history[-20:]
-        
-        return response
-
-    def get_help_message(self) -> str:
-        """Generate helpful usage information"""
-        return """
-🤖 **Team Details Assistant Help**
-
-**What you can ask:**
-• Employee details by ID: "Show employee 12345" or "Employee ID 789"
-• Search by name: "Find John Smith" or "Employees named Sarah"  
-• Team information: "List team ABC members" or "Count team XYZ"
-• Project details: "Show project DEF employees" or "Project ABC team"
-• Contact info: "Phone number 9876543210" or "Email john@tcs.com"
-• Position/Level: "All managers" or "Level L3 employees"
-• Counts and summaries: "Count all employees" or "Team wise count"
-
-**Example questions:**
-• "Show me employee with ID 12345"
-• "List all employees in team Development"
-• "Find employees named John"
-• "Count employees by team"
-• "Show managers in project ABC"
-• "Employee with phone 9876543210"
-
-**Note:** Sensitive information like passwords and security questions are not accessible for privacy protection.
-"""
-
-    def start_interactive_session(self, query: str) -> str:
-        """Process single query with comprehensive error handling"""
         try:
-            # Handle special commands
-            if query.lower() in ['exit', 'quit', 'q']:
-                return "👋 Session ended."
-            elif query.lower() in ['help', '?']:
-                return self.get_help_message()
+            # Fast path 1: Check if it's an employee ID
+            emp_id = is_employee_id(query)
+            if emp_id:
+                print(f"DEBUG - Detected employee ID: {emp_id}")
+                return self.query_by_employee_id(emp_id)
             
-            print("🔍 Processing your query...")
-            response = self.process_question(query)
-            return response
+            # Fast path 2: Check if it's an employee name
+            emp_name = is_employee_name(query)
+            if emp_name:
+                print(f"DEBUG - Detected employee name: {emp_name}")
+                return self.query_by_employee_name(emp_name)
             
-        except KeyboardInterrupt:
-            return "👋 Session interrupted by user."
+            # Fallback: Handle complex queries
+            print(f"DEBUG - Processing complex query: {query}")
+            return self.handle_complex_query(query)
+            
         except Exception as e:
-            error_msg = f"❌ Session error: {str(e)}"
-            logger.error(f"Session error: {e}\n{traceback.format_exc()}")
-            return f"{error_msg}\nPlease try again or contact support."
-        finally:
-            # Ensure cleanup
-            self.cleanup()
+            logger.error(f"Error processing query '{query}': {e}")
+            return f"❌ Error: {str(e)}"
 
     def cleanup(self):
-        """Clean up resources"""
+        """Clean up database connection"""
         try:
-            if (self.db_handler and 
-                self.db_handler.get('connection') and 
-                hasattr(self.db_handler['connection'], 'open') and
-                self.db_handler['connection'].open):
-                self.db_handler['connection'].close()
-                print("DEBUG - Database connection closed")
-        except Exception as e:
-            print(f"DEBUG - Cleanup error: {e}")
-
-    def __del__(self):
-        """Destructor to ensure cleanup"""
-        self.cleanup()
-
-def Teammain(query: str) -> str:
-    """Main function to process team queries with enhanced robustness"""
-    if not query or not query.strip():
-        return "❌ Please provide a question about team details."
-    
-    print("🚀 Starting Team Details Assistant...")
-    assistant = TeamDetailsAssistant()
-    
-    try:
-        result = assistant.start_interactive_session(query.strip())
-        print("✅ Query processing complete.")
-        return result
-    except Exception as e:
-        error_msg = f"❌ Critical error in main function: {str(e)}"
-        logger.error(f"Critical error: {e}\n{traceback.format_exc()}")
-        return f"{error_msg}\nPlease try again or contact support."
-    finally:
-        # Ensure cleanup even if error occurs
-        try:
-            assistant.cleanup()
+            if self.db_connection and self.db_connection.open:
+                self.db_connection.close()
         except:
             pass
 
-# Enhanced test function
-def test_assistant():
-    """Test the assistant with various query types"""
+    def __del__(self):
+        self.cleanup()
+
+def Teammain(query: str) -> str:
+    """Fast main function for team queries"""
+    if not query or not query.strip():
+        return "❌ Please provide a query"
+    
+    assistant = FastTeamDetailsAssistant()
+    
+    try:
+        result = assistant.process_query(query.strip())
+        return result
+    except Exception as e:
+        logger.error(f"Critical error: {e}")
+        return f"❌ Critical error: {str(e)}"
+    finally:
+        assistant.cleanup()
+
+# Quick test function
+def test_fast_queries():
+    """Test common query patterns"""
     test_queries = [
-        # Employee ID queries
-        "Show me employee with ID 12345",
-        "Employee 789",
-        "Find employee ID 555",
+        # Employee ID tests
+        "12345",
+        "employee 67890", 
+        "show emp 111",
+        "find user 222",
         
-        # Name searches
-        "List all employees named John",
-        "Find Sarah Smith",
-        "Employees with name containing 'Kumar'",
+        # Name tests
+        "John Smith",
+        "employee Sarah",
+        "find Kumar",
+        "show Mary Johnson",
         
-        # Team queries
-        "Show all employees in team Development",
-        "List team ABC members",
-        "Count employees by team",
+        # Team tests
+        "team Development",
+        "show team ABC",
+        "list team XYZ",
         
-        # Project queries
-        "Show project XYZ employees",
-        "List all employees in project ABC",
-        "Count employees by project",
+        # Project tests
+        "project Alpha",
+        "show project Beta",
         
-        # Contact queries
-        "Employee with phone 9876543210",
-        "Find email john@tcs.com",
-        "Show employee with contact 555-1234",
+        # Count tests
+        "count employees",
+        "count teams",
+        "count projects",
         
-        # Position/Level queries
-        "All managers",
-        "Employees at level L3",
-        "Show all senior developers",
+        # Contact tests
+        "9876543210",
+        "phone 1234567890",
+        "john@tcs.com",
         
-        # Complex queries
-        "John in team Development",
-        "Managers in project ABC",
-        "Count active employees",
-        
-        # Edge cases
-        "Count all employees",
-        "Show all teams",
-        "List all projects",
-        
-        # Invalid/challenging queries
-        "xyz123nonsense",
-        "Show me password for employee 123",
-        "",
-        "a" * 600  # Too long
+        # Complex tests
+        "managers",
+        "developers",
+        "lead positions"
     ]
     
-    print("🧪 Testing Team Details Assistant with various queries...\n")
+    print("🚀 Testing Fast Team Details Assistant...\n")
     
     for i, query in enumerate(test_queries, 1):
-        print(f"\n{'='*60}")
-        print(f"Test {i:2d}: {query[:50]}{'...' if len(query) > 50 else ''}")
-        print('='*60)
+        print(f"\n--- Test {i}: '{query}' ---")
+        start_time = datetime.now()
         
         try:
             result = Teammain(query)
-            print("✅ Result:")
-            print(result[:500] + ("..." if len(result) > 500 else ""))
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            print(f"⏱️  Response time: {duration:.2f}s")
+            print(f"📝 Result: {result[:200]}{'...' if len(result) > 200 else ''}")
         except Exception as e:
             print(f"❌ Error: {e}")
-    
-    print("\n🏁 Testing completed!")
 
 if __name__ == "__main__":
-    # Interactive test mode
     import sys
     
     if len(sys.argv) > 1:
         # Command line query
         query = " ".join(sys.argv[1:])
+        print(f"Query: {query}")
         result = Teammain(query)
-        print(result)
+        print(f"Result: {result}")
     else:
-        # Run comprehensive tests
-        test_assistant()
+        # Run performance tests
+        test_fast_queries()
