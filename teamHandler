@@ -29,7 +29,11 @@ BLOCKED_PATTERNS = [
     r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
     r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
     r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
-    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
+    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b",
+    r"\bdrop\s+table\b", r"\balter\s+table\b", r"\bcreate\s+table\b",
+    r"\binsert\s+into\b", r"\bupdate\s+set\b", r"\bdelete\s+from\b",
+    r"\btruncate\s+table\b", r"\bunion\s+all\s+select\b", r"\bgrant\b", r"\brevoke\b",
+    r"\bexec\b", r"\bexecute\b", r"\bxp_cmdshell\b", r"\bload_file\b", r"\binto\s+outfile\b", r"\binto\s+dumpfile\b"
 ]
 
 # Sensitive fields that should never be included in queries or results
@@ -47,6 +51,7 @@ FIELD_MAPPINGS = {
     "name": "EmpName",
     "employee_name": "EmpName",
     "emp_name": "EmpName",
+    "username": "EmpName", # Added this mapping
     "email": "TcsEmail",
     "tcs_email": "TcsEmail",
     "sbi_email": "SbiEmail",
@@ -57,7 +62,7 @@ FIELD_MAPPINGS = {
     "project": "Project"
 }
 
-# Column metadata for better query generation
+# Column metadata for better query generation (used in LLM prompt)
 COLUMN_INFO = {
     "Uid": "int - Unique employee identifier (use = for exact match)",
     "EmpName": "text - Employee name (use LIKE for search)",
@@ -83,96 +88,90 @@ def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
-def clean_and_fix_sql(raw_sql: str, question: str) -> str:
+def clean_and_fix_sql(raw_sql: str) -> str:
     """Clean and fix SQL with proper handling for different column types"""
-    logger.debug(f"Raw SQL input: {repr(raw_sql)}")
-    
-    # Handle case where raw_sql is None or empty
-    if not raw_sql:
-        logger.warning("Received empty SQL from LLM")
-        return ""
-    
+    print(f"DEBUG - Raw SQL input to clean_and_fix_sql: {repr(raw_sql)}")
+    sql_parsed = sqlparse.format(raw_sql, strip_comments=True).strip()
+
     # Extract SQL from code block if present
-    match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
+    match = re.search(r"```sql\s*(.*?)\s*```", sql_parsed, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1).strip()
-        logger.debug(f"Extracted from code block: {sql}")
+        print(f"DEBUG - Extracted from code block: {sql}")
     else:
-        sql = raw_sql.strip()
-    
-    # Remove any markdown formatting
-    sql = re.sub(r"```", "", sql)
-    
-    # Handle case where LLM returns descriptive text with an ID
-    if not sql.upper().startswith('SELECT'):
-        # Try to extract ID from question or raw_sql
-        id_match = re.search(r"\b(\d{4,})\b", question) or re.search(r"\b(\d{4,})\b", raw_sql)
-        if id_match:
-            uid = id_match.group(1)
-            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
-            logger.info(f"Constructed UID query from text: {sql}")
-            return sql
-        
-        # Try to extract name from question
-        name_match = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b", question)
-        if name_match:
-            name = name_match.group(1)
-            sql = f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%'"
-            logger.info(f"Constructed name query from text: {sql}")
-            return sql
-    
-    # Remove comments and format SQL
-    try:
-        sql = sqlparse.format(sql, strip_comments=True).strip()
-    except Exception as e:
-        logger.error(f"Error formatting SQL: {e}")
-    
+        # If no code block, try to find a SELECT statement at the beginning
+        select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql_parsed, re.IGNORECASE | re.DOTALL)
+        if select_match:
+            sql = select_match.group(1).strip()
+            print(f"DEBUG - Extracted SELECT: {sql}")
+        else:
+            # Fallback: assume the entire parsed output is the intended SQL.
+            sql = sql_parsed.strip()
+            print(f"DEBUG - No explicit SELECT or code block, using parsed raw SQL: {sql}")
+
+    print(f"DEBUG - SQL before sensitive field processing: {sql}")
+
     # Remove sensitive fields from query
     for field in SENSITIVE_FIELDS:
-        # Remove field from SELECT list
-        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+        # Remove field from SELECT list, careful not to remove "FROM UserMaster"
+        sql = re.sub(rf'(?<!FROM\s)\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
         sql = re.sub(rf',\s*\b{field}\b', '', sql, flags=re.IGNORECASE)
-        
+
         # Remove WHERE conditions involving sensitive fields
-        sql = re.sub(rf'\bWHERE\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', 'WHERE ', sql, flags=re.IGNORECASE)
-        sql = re.sub(rf'\b(AND|OR)\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', '', sql, flags=re.IGNORECASE)
-    
-    # Clean up SQL syntax
-    sql = re.sub(r',\s*,', ',', sql)
-    sql = re.sub(r'SELECT\s*,', 'SELECT *', sql, flags=re.IGNORECASE)
-    sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'WHERE\s+(AND|OR)', 'WHERE', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE)
-    
+        # This regex looks for: (AND|OR|WHERE) + field + operator + value + (AND|OR|end of string)
+        # It replaces the entire found condition with a space to allow cleanup.
+        sql = re.sub(rf'\b(AND|OR|WHERE)\s*\b{field}\b\s*(=|LIKE|IN|IS|NOT IS|!=)\s*\'?[^\'"]*\'?\s*', ' ', sql, flags=re.IGNORECASE)
+
+    # Clean up any leftover 'WHERE AND', 'WHERE OR', or just 'WHERE' if conditions are removed.
+    sql = re.sub(r'\bWHERE\s*(AND|OR)\b', 'WHERE', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\b(AND|OR)\s*\b(AND|OR)\b', r'\2', sql, flags=re.IGNORECASE) # e.g., AND AND becomes AND
+    sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE) # Remove trailing WHERE if no conditions left
+    sql = re.sub(r'FROM\s*WHERE', 'FROM', sql, flags=re.IGNORECASE) # If WHERE is left without conditions after FROM
+
+    # Clean up any leftover commas or empty SELECT clauses
+    sql = re.sub(r',\s*,', ',', sql) # Remove double commas
+    sql = re.sub(r'SELECT\s*,', 'SELECT ', sql, flags=re.IGNORECASE) # Remove leading comma after SELECT
+    sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE) # Remove comma before FROM
+
+    # If the SELECT list is empty after removing sensitive fields, make it SELECT *
+    # This also handles cases where there are just spaces between SELECT and FROM
+    if re.search(r"SELECT\s*FROM", sql, re.IGNORECASE):
+        sql = re.sub(r"SELECT\s*FROM", "SELECT * FROM", sql, flags=re.IGNORECASE)
+    elif re.search(r"SELECT\s*\s*FROM", sql, re.IGNORECASE): # Case for "SELECT   FROM"
+        sql = re.sub(r"SELECT\s*\s*FROM", "SELECT * FROM", sql, flags=re.IGNORECASE)
+
+
     # Convert exact matches to LIKE for text fields
     text_fields = ['EmpName', 'Contact', 'TcsEmail', 'SbiEmail', 'AdId', 'Position', 'Level', 'Team', 'Project']
     for field in text_fields:
+        # Convert = to LIKE for text fields only, ensuring quotes are handled
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
         sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-    
+
     # Remove trailing semicolons
     sql = sql.strip().rstrip(";")
-    
-    logger.debug(f"Final cleaned SQL: {sql}")
+
+    print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
 def format_query_results_natural(result: List[Dict], question: str) -> str:
     """Format database results in natural language"""
     if not result:
         return "I couldn't find any employee records matching your criteria."
-    
+
     # Handle single value results (like COUNT)
     if len(result) == 1 and len(result[0]) == 1:
         value = list(result[0].values())[0]
         if "count" in question.lower():
             return f"There are {value} employee records matching your criteria."
-        return f"The result is: {value}"
-    
+        else:
+            return f"The result is: {value}"
+
     # Handle single record
     if len(result) == 1:
         record = result[0]
-        response = "I found the following employee details:\n\n"
-        
+        response = f"I found 1 employee record:\n\n"
+
         # Format key information naturally
         if 'Uid' in record:
             response += f"🆔 Employee ID: {record['Uid']}\n"
@@ -194,88 +193,102 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
             response += f"👥 Team: {record['Team']}\n"
         if 'Project' in record:
             response += f"📂 Project: {record['Project']}\n"
-        
+
         return response.strip()
-    
-    # Handle multiple records
-    response = f"I found {len(result)} employee records:\n\n"
-    
+
+    # Handle multiple records - provide summary + tabular format
+    response = f"I found {len(result)} employee records matching your criteria:\n\n"
+
     # Add summary information
     if 'Team' in result[0]:
         team_counts = {}
         for record in result:
             team = record.get('Team', 'Unknown')
             team_counts[team] = team_counts.get(team, 0) + 1
-        
-        response += "📊 Team Distribution:\n"
+
+        response += "📊 Team Summary:\n"
         for team, count in team_counts.items():
-            response += f"   • {team}: {count} employees\n"
+            response += f"    • {team}: {count} employees\n"
         response += "\n"
-    
-    # Show tabular format for multiple records
-    response += "📋 Employee List:\n"
+
+    # For multiple records, show tabular format
+    response += "📋 Detailed Results:\n"
     response += format_query_results_tabular(result)
-    
+
     return response
 
 def format_query_results_tabular(result: List[Dict]) -> str:
     """Format database results in tabular format"""
     if not result:
         return "No records found."
-    
+
+    # Get columns from first record
     columns = list(result[0].keys())
+
+    # Convert dict results to tuples for formatting
     result_tuples = [tuple(row.values()) for row in result]
-    
+
+    output = []
+
     # Calculate column widths with reasonable limits
     col_widths = []
     for i, col in enumerate(columns):
         max_content_width = max(len(str(row[i])) for row in result_tuples) if result_tuples else 0
-        col_width = min(max(len(str(col)), max_content_width), 40)  # Max 40 chars per column
+        col_width = min(max(len(str(col)), max_content_width), 60)  # Max 60 chars per column
         col_widths.append(col_width)
-    
+
     # Build header
     header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
     separator = "-+-".join("-" * width for width in col_widths)
-    
-    # Build rows
-    rows = []
+    output.append(header)
+    output.append(separator)
+
+    # Add rows
     for row in result_tuples:
         formatted_row = " | ".join(
-            (str(val)[:37] + "..." if len(str(val)) > 40 else str(val)).ljust(width)
+            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width)
+            if val is not None else "NULL".ljust(width)
             for val, width in zip(row, col_widths)
         )
-        rows.append(formatted_row)
-    
-    return "\n".join([header, separator] + rows + [f"\nTotal records: {len(result)}"])
+        output.append(formatted_row)
+
+    output.append(f"\nTotal records: {len(result)}")
+    return "\n".join(output)
 
 def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
-    if not sql:
-        return False
-    
     sql_clean = sql.strip().lower()
-    
+    print(f"DEBUG - Validating SQL: {repr(sql_clean)}")
+
     # Check if it starts with SELECT
     starts_with_select = sql_clean.startswith('select')
-    
-    # Check for dangerous operations
+
+    # Check for dangerous operations (case-insensitive and whole words)
+    # Using re.search with word boundaries to avoid false positives (e.g., 'update' in a string 'latest_update_time')
     has_dangerous_ops = any(
-        kw in sql_clean for kw in [
-            'insert', 'update', 'delete', 'drop', 
-            'alter', 'create', 'truncate', 'grant',
-            'revoke', 'exec', 'execute', 'shutdown'
-        ]
+        re.search(r'\b' + re.escape(kw) + r'\b', sql_clean)
+        for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create',
+                   'truncate', 'grant', 'revoke', 'union all', 'union distinct']
     )
-    
-    # Check if it's just descriptive text
-    is_descriptive = any(
-        phrase in sql_clean for phrase in [
-            'this is', 'sql query', 'the query', 
-            'here is', 'query is', 'would be'
-        ]
+
+    # Check for specific command execution patterns
+    has_cmd_execution = any(
+        re.search(r'\b' + re.escape(cmd) + r'\b', sql_clean)
+        for cmd in ['exec', 'execute', 'xp_cmdshell', 'load_file', 'into outfile', 'into dumpfile']
     )
-    
-    return starts_with_select and not has_dangerous_ops and not is_descriptive
+
+    # Check if it's just descriptive text (lowercased keywords and check for common conversational starts)
+    # This specifically checks if it *doesn't* start with SELECT but contains conversational phrases
+    is_descriptive = (
+        not starts_with_select and
+        any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is', '```', 'select statement'])
+    )
+
+    is_valid = starts_with_select and not has_dangerous_ops and not has_cmd_execution and not is_descriptive
+
+    print(f"DEBUG - SQL validation: starts_with_select={starts_with_select}, has_dangerous_ops={has_dangerous_ops}, has_cmd_execution={has_cmd_execution}, is_descriptive={is_descriptive}, final_valid={is_valid}")
+
+    return is_valid
 
 class TeamDetailsAssistant:
     def __init__(self):
@@ -283,18 +296,23 @@ class TeamDetailsAssistant:
         self.db_handler = None
         self.initialized = False
         self.chat_history = []
+        self.chain = None # Initialize chain attribute here
 
     def initialize(self):
         """Initialize the Team Details Assistant"""
+        if self.initialized:
+            logger.info("Team Details Assistant already initialized.")
+            return True
+
         try:
             # Initialize LLM
             self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-            
+
             # Set up database connection
             db_cfg = TEAM_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
-            
-            # Connect to database
+
+            # Connect to database for LLM
             db_for_llm = SQLDatabase.from_uri(
                 uri,
                 include_tables=TEAM_DB_CONFIG.get("include_tables"),
@@ -307,10 +325,10 @@ class TeamDetailsAssistant:
                     }
                 }
             )
-            
-            # Create query chain with custom prompt
-            chain = create_sql_query_chain(self.llm, db_for_llm)
-            
+
+            # Create query chain
+            self.chain = create_sql_query_chain(self.llm, db_for_llm) # Assign to self.chain
+
             # Create direct connection for executing queries
             db_conn = pymysql.connect(
                 host=db_cfg['host'],
@@ -321,135 +339,159 @@ class TeamDetailsAssistant:
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True
             )
-            
+
             self.db_handler = {
-                'chain': chain,
                 'connection': db_conn,
                 'config': TEAM_DB_CONFIG
             }
-            
+
             self.initialized = True
-            logger.info("TeamDetailsAssistant initialized successfully")
+            logger.info("Team Details Assistant initialized successfully.")
             return True
-            
+
         except Exception as e:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
     def query_team_details(self, question: str) -> str:
-        """Query team details database and return results"""
-        if not self.db_handler:
-            return "❌ Team Details database not available."
-        
+        """Query team details database and always show results"""
+        # Ensure initialization has occurred or attempt it
+        if not self.initialized and not self.initialize():
+            return "❌ Team Details database not available or assistant could not be initialized. Please check connection details."
+
+        raw_sql = "" # Initialize raw_sql here to ensure it's available for error messages
         try:
             # Preprocess the question to map common terms to database fields
             processed_question = question.lower()
             for term, field in FIELD_MAPPINGS.items():
                 pattern = rf'\b{re.escape(term)}\b'
                 processed_question = re.sub(pattern, field, processed_question, flags=re.IGNORECASE)
-            
-            # Enhanced prompt with clear instructions
+
+            # Add context about sensitive fields and desired query behavior
             enhanced_question = f"""
-{processed_question}
+Based on the following schema:
+CREATE TABLE UserMaster (
+    Uid INT PRIMARY KEY,
+    EmpName VARCHAR(255),
+    Contact VARCHAR(255),
+    TcsEmail VARCHAR(255),
+    SbiEmail VARCHAR(255),
+    AdId VARCHAR(255),
+    Position VARCHAR(255),
+    Level VARCHAR(255),
+    Team VARCHAR(255),
+    Project VARCHAR(255)
+    -- Pwd, SecQ, SecA are sensitive and should NEVER be queried.
+);
 
-Database Schema:
-- Table: UserMaster
-- Columns: {', '.join(f"{k} ({v})" for k, v in COLUMN_INFO.items())}
+User query: {processed_question}
 
-Instructions:
-1. Only query non-sensitive fields: Uid, EmpName, Contact, TcsEmail, SbiEmail, AdId, Position, Level, Team, Project
-2. For names, emails, or text fields, use LIKE with wildcards for partial matching
-3. For IDs, use exact matching with =
-4. Never include Pwd, SecQ, or SecA fields
-5. Return complete results (no LIMIT unless specified in the question)
-6. Focus on answering the user's question directly
+IMPORTANT INSTRUCTIONS:
+- Generate a single, executable SQL SELECT query for the UserMaster table.
+- NEVER include or reference these sensitive fields in your query: Pwd, SecQ, SecA.
+- If the user asks for "phone" or "mobile", use the "Contact" field.
+- For text fields (EmpName, Contact, TcsEmail, SbiEmail, AdId, Position, Level, Team, Project), use the LIKE operator for searching (e.g., `EmpName LIKE '%John%'` for partial matches).
+- For Uid (employee ID), use the exact match operator (=) if a specific ID is provided (e.g., `Uid = 123`).
+- If the query is about a specific employee by name or ID, return all relevant non-sensitive fields (SELECT *).
+- Ensure the query is valid and syntactically correct for MySQL.
+- Do not include any conversational text, explanations, or markdown fences (```sql) in your output, just the SQL query itself.
+- Do not add LIMIT to the query unless explicitly requested by the user.
 """
-            
-            logger.info(f"Processing question: {question}")
-            logger.debug(f"Enhanced question: {enhanced_question}")
-            
-            # Generate the SQL query
-            raw_sql = self.db_handler['chain'].invoke({"question": enhanced_question})
+
+            print(f"DEBUG - Original question: {question}")
+            print(f"DEBUG - Processed question for LLM: {enhanced_question}")
+
+            # Generate the SQL query using the standard chain
+            raw_sql = self.chain.invoke({"question": enhanced_question}) # Use self.chain
+            print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
             logger.info(f"Generated SQL: {raw_sql}")
-            
+
             # Clean and fix the SQL
-            sql = clean_and_fix_sql(raw_sql, question)
+            sql = clean_and_fix_sql(raw_sql)
+            print(f"DEBUG - Final SQL after cleaning: {sql}")
             logger.info(f"Cleaned SQL: {sql}")
-            
+
             # Validate query safety
             if not is_select_query(sql):
-                logger.warning(f"Invalid query generated: {sql}")
-                return "❌ Could not generate a valid query. Please try rephrasing your question."
-            
-            # Additional security check
+                return f"❌ Error: The generated query is not a safe SELECT statement or is malformed. Raw LLM output was: {repr(raw_sql)}. Cleaned to: {sql}. Only safe SELECT queries are allowed. Please rephrase your question."
+
+            # Additional security check for sensitive fields (after cleaning)
             for sensitive_field in SENSITIVE_FIELDS:
                 if sensitive_field.lower() in sql.lower():
-                    logger.warning(f"Blocked query containing sensitive field: {sensitive_field}")
-                    return "🚫 Cannot access sensitive information. Please rephrase your query."
-            
+                    logger.warning(f"Blocked query containing sensitive field after cleaning: {sensitive_field}. Query: {sql}")
+                    return f"🚫 Cannot access sensitive information like '{sensitive_field}'. Please rephrase your query without requesting sensitive data."
+
             # Execute the query
             with self.db_handler['connection'].cursor() as cursor:
                 try:
-                    logger.debug(f"Executing SQL: {sql}")
+                    print(f"DEBUG - Executing SQL: {sql}")
                     cursor.execute(sql)
                     result = cursor.fetchall()
+                    print(f"DEBUG - Query result count: {len(result)}")
                     logger.info(f"Query returned {len(result)} rows")
-                    
-                    # Format output
+
+                    # Format output in natural language
                     if not result:
-                        response = "No matching employee records found.\n"
-                        response += "💡 Try searching with:\n"
-                        response += "- Partial names (e.g., 'John' instead of 'John Smith')\n"
-                        response += "- Different identifiers (ID, email, etc.)\n"
-                        response += "- Broader team or project names\n"
+                        response = "I couldn't find any employee records matching your criteria.\n\n"
+                        response += "💡 Suggestions:\n"
+                        response += "• Try using broader search terms or check for typos (e.g., full name, correct employee ID).\n"
+                        response += "• Ensure the data you are looking for actually exists in the database.\n"
+                        response += "• You can ask questions like 'Show me employee with ID 12345' or 'List all employees named John Doe'.\n"
+                        response += f"\n🔍 Query executed: {sql}" # Always show query for no results to aid debugging
                         return response
-                    
-                    return format_query_results_natural(result, question)
-                    
+                    else:
+                        natural_response = format_query_results_natural(result, question)
+                        # Optionally add query for debugging purposes if needed
+                        # natural_response += f"\n\n🔍 Query executed: {sql}"
+                        return natural_response
+
                 except pymysql.Error as db_error:
-                    error_msg = f"❌ Database error: {str(db_error)}"
-                    logger.error(f"Database error: {db_error}\nSQL: {sql}")
+                    error_msg = f"❌ Database Error during query execution: {str(db_error)}\n"
+                    error_msg += f"SQL Query that caused error: {sql}\n"
+                    error_msg += f"Original LLM output: {repr(raw_sql)}\n"
+                    error_msg += "Please review the SQL query for correctness, ensure data type matches, or try rephrasing your question."
+                    logger.error(f"Database execution error: {db_error}\nSQL: {sql}\nRaw LLM Output: {raw_sql}")
                     return error_msg
-                except Exception as e:
-                    error_msg = f"❌ Error processing results: {str(e)}"
-                    logger.error(f"Result processing error: {e}\n{traceback.format_exc()}")
-                    return error_msg
-                    
+
         except Exception as e:
-            error_msg = f"❌ Error processing request: {str(e)}"
-            logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
+            error_msg = f"❌ An unexpected error occurred during request processing: {str(e)}\n"
+            error_msg += f"Raw LLM output (if available): {repr(raw_sql) if raw_sql else 'N/A'}\n"
+            error_msg += "Please try rephrasing your question or contact support if the issue persists."
+            logger.error(f"General query processing error: {e}\n{traceback.format_exc()}")
             return error_msg
 
     def process_question(self, question: str) -> str:
         """Process questions and return results"""
+        # Initialize the assistant if not already initialized
+        if not self.initialized:
+            if not self.initialize():
+                return "❌ Team Details Assistant initialization failed. Please check database connection and logs."
+
         if is_dangerous(question):
-            return "❌ Question blocked for security reasons."
-            
-        if not self.initialized and not self.initialize():
-            return "❌ Team Details Assistant initialization failed. Please check database connection."
-        
+            return "❌ Question blocked for security reasons. Your query contains potentially dangerous commands."
+
         # Add to chat history
         self.chat_history.append(f"User: {question}")
-        
+
         # Get response
         response = self.query_team_details(question)
-        
+
         # Add response to history
         self.chat_history.append(f"Assistant: {response}")
-        
+
         return response
 
     def start_interactive_session(self, query):
         """Process single query and return result"""
+        # Initialization is now handled inside process_question to ensure it's always ready
         try:
-            if not self.initialize():
-                return "❌ Failed to initialize Team Details Assistant."
-            
             if query.lower() in ['exit', 'quit', 'q']:
                 return "👋 Session ended."
-            
-            return self.process_question(query)
-            
+
+            print("🔍 Processing your query...")
+            response = self.process_question(query)
+            return response
+
         except KeyboardInterrupt:
             return "👋 Session interrupted."
         except Exception as e:
@@ -457,35 +499,45 @@ Instructions:
             logger.error(f"Session error: {e}\n{traceback.format_exc()}")
             return error_msg
         finally:
-            # Clean up database connection
+            # Clean up database connection if it was opened by this assistant instance.
+            # This ensures resources are released even if an error occurs.
             try:
-                if self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
+                if self.initialized and self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
                     self.db_handler['connection'].close()
+                    logger.info("Database connection closed.")
+                    self.initialized = False # Reset initialized state after closing connection
             except Exception as e:
-                logger.error(f"Error closing connection: {e}")
+                logger.error(f"Error closing database connection: {e}")
+
 
 def Teammain(query):
     """Main function to process team queries"""
-    logger.info(f"Processing query: {query}")
+    print("🚀 Starting Team Details Assistant...")
     assistant = TeamDetailsAssistant()
     result = assistant.start_interactive_session(query)
-    logger.info(f"Query result: {result[:200]}...")  # Log first 200 chars of result
+    print("✅ Query processing complete.")
     return result
 
 # Test the function
 if __name__ == "__main__":
     # Test with sample queries
     test_queries = [
-        "Show me employee with ID 12345",
-        "Find all employees named John",
-        "List employees in Project ABC",
-        "Count employees by team",
-        "Who is John Smith?",
-        "12345",  # Just an ID
-        "John",   # Just a name
-        "What's the email of employee 12345?"
+        "Show me employee with ID 12345", # Test with Uid
+        "List all employees named John",   # Test with EmpName LIKE
+        "Show me all employees in Project ABC", # Test with Project
+        "Count employees by team", # Test with aggregation
+        "What is the contact number of employee_id 12345?", # Test with specific field and ID
+        "find all employees whose username is 'jane doe'", # Test with username mapping
+        "who is uid 54321", # Test with direct uid query
+        "tell me about employee john doe", # Test with general name query
+        "give me employee details for 98765", # Test with general ID query
+        "show me everyone", # Test with general query (should be SELECT *)
+        "show me Pwd for employee 123", # Test sensitive field blocking
+        "drop table UserMaster", # Test dangerous query blocking
+        "select Uid, Pwd from UserMaster where Uid = 1", # Test sensitive field removal in SELECT
+        "select * from UserMaster where SecQ = 'test'", # Test sensitive field removal in WHERE
     ]
-    
+
     for query in test_queries:
         print(f"\n{'='*60}")
         print(f"Testing: {query}")
