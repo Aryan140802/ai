@@ -586,10 +586,13 @@ class ResultFormatter:
         columns = list(result[0].keys())
         col_widths = []
         for col in columns:
-            max_width = max(
-                len(str(col)),
-                max(len(str(row.get(col, ''))) for row in result) if result else 0
-            )
+            try:
+                max_width = max(
+                    len(str(col)),
+                    max(len(str(row.get(col, ''))) for row in result if row.get(col) is not None)
+                )
+            except ValueError:
+                max_width = len(str(col))
             col_widths.append(min(max_width, 30))
         
         output = []
@@ -598,17 +601,23 @@ class ResultFormatter:
         bot_border = "└" + "┴".join("─" * (width + 2) for width in col_widths) + "┘"
         
         output.append(top_border)
-        header = "│" + " │ ".join(col.ljust(width) for col, width in zip(columns, col_widths)) + "│"
+        header = "│" + " │ ".join(str(col).ljust(width) for col, width in zip(columns, col_widths)) + "│"
         output.append(header)
         output.append(mid_border)
         
         for row in result:
-            formatted_row = "│" + " │ ".join(
-                str(row.get(col, ''))[:27] + "..." if len(str(row.get(col, ''))) > 30 
-                else str(row.get(col, '')).ljust(width)
-                for col, width in zip(columns, col_widths)
-            ) + "│"
-            output.append(formatted_row)
+            try:
+                formatted_row = "│" + " │ ".join(
+                    (str(row.get(col, '')[:27]) + "...").ljust(width) if len(str(row.get(col, ''))) > 30
+                    else str(row.get(col, '')).ljust(width)
+                    for col, width in zip(columns, col_widths)
+                ) + "│"
+                output.append(formatted_row)
+            except Exception as e:
+                logger.error(f"Error formatting row: {e}, Row data: {row}")
+                print(f"DEBUG - Error formatting row: {e}")
+                print(f"DEBUG - Problematic row: {row}")
+                output.append("│ Error formatting row data │")
         
         output.append(bot_border)
         output.append(f"\nTotal records displayed: {len(result)}")
