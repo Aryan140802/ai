@@ -67,6 +67,93 @@ def is_sensitive_field(field_name: str) -> bool:
         return False
     return any(re.search(pattern, field_name.lower()) for pattern in SENSITIVE_PATTERNS)
 
+class ContextManager:
+    """Manages conversation context and provides relevant information"""
+    
+    def __init__(self, context: Dict = None):
+        self.context = context or {}
+        self.conversation_history = self.context.get('conversation_history', [])
+        self.last_query_type = self.context.get('last_query_type')
+        self.last_results = self.context.get('last_results')
+    
+    def get_relevant_context(self, current_query: str) -> str:
+        """Extract relevant context for the current query"""
+        if not self.conversation_history:
+            return ""
+        
+        context_info = []
+        
+        # Look for pronoun references and context clues
+        current_lower = current_query.lower()
+        
+        # Check for pronouns that might reference previous queries
+        pronouns = ['he', 'she', 'they', 'him', 'her', 'them', 'his', 'their', 'this', 'that', 'these', 'those']
+        has_pronouns = any(pronoun in current_lower.split() for pronoun in pronouns)
+        
+        # Check for continuation words
+        continuation_words = ['also', 'and', 'more', 'other', 'another', 'same', 'similar']
+        has_continuation = any(word in current_lower for word in continuation_words)
+        
+        # Check for incomplete references
+        incomplete_refs = ['phone', 'email', 'contact', 'details', 'info', 'information']
+        has_incomplete_ref = any(ref in current_lower for ref in incomplete_refs) and len(current_query.split()) <= 3
+        
+        if has_pronouns or has_continuation or has_incomplete_ref:
+            # Get the last few relevant interactions
+            recent_context = self.conversation_history[-3:]  # Last 3 interactions
+            
+            for interaction in recent_context:
+                if interaction.get('query_type') == 'team':
+                    context_info.append(f"Previous query: {interaction['query']}")
+                    
+                    # Extract names or IDs from previous responses
+                    response = interaction.get('response', '')
+                    if response:
+                        # Look for employee names or IDs in previous responses
+                        name_matches = re.findall(r'Name[:\s]+([A-Za-z\s]+)', response, re.IGNORECASE)
+                        id_matches = re.findall(r'(?:ID|Employee ID)[:\s]+(\w+)', response, re.IGNORECASE)
+                        
+                        if name_matches:
+                            context_info.append(f"Previously mentioned employee: {name_matches[0].strip()}")
+                        if id_matches:
+                            context_info.append(f"Previously mentioned ID: {id_matches[0].strip()}")
+        
+        return " | ".join(context_info) if context_info else ""
+    
+    def enhance_query_with_context(self, query: str) -> str:
+        """Enhance the current query with relevant context"""
+        context_str = self.get_relevant_context(query)
+        
+        if context_str:
+            enhanced_query = f"Context: {context_str} | Current Query: {query}"
+            logger.info(f"Enhanced query with context: {enhanced_query}")
+            return enhanced_query
+        
+        return query
+    
+    def detect_follow_up_type(self, query: str) -> str:
+        """Detect if this is a follow-up query and what type"""
+        if not self.conversation_history:
+            return "initial"
+        
+        query_lower = query.lower()
+        
+        # Check for specific follow-up patterns
+        if any(word in query_lower for word in ['phone', 'contact', 'number']):
+            return "contact_info"
+        elif any(word in query_lower for word in ['email', 'mail']):
+            return "email_info"
+        elif any(word in query_lower for word in ['team', 'department', 'group']):
+            return "team_info"
+        elif any(word in query_lower for word in ['position', 'role', 'designation']):
+            return "role_info"
+        elif any(word in query_lower for word in ['more', 'details', 'info', 'information']):
+            return "detailed_info"
+        elif any(word in query_lower for word in ['he', 'she', 'him', 'her', 'they', 'them']):
+            return "pronoun_reference"
+        
+        return "general"
+
 class DatabaseSchemaManager:
     """Manages database schema discovery and caching"""
     
@@ -277,13 +364,14 @@ class DatabaseSchemaManager:
         return "\n".join(info_parts)
 
 class SQLQueryProcessor:
-    """Processes and validates SQL queries"""
+    """Processes and validates SQL queries with context awareness"""
     
-    def __init__(self, schema_manager: DatabaseSchemaManager):
+    def __init__(self, schema_manager: DatabaseSchemaManager, context_manager: ContextManager = None):
         self.schema_manager = schema_manager
+        self.context_manager = context_manager
     
     def clean_and_validate_sql(self, raw_sql: str, question: str) -> Tuple[str, bool]:
-        """Clean SQL and validate it's safe"""
+        """Clean SQL and validate it's safe with context consideration"""
         try:
             logger.info(f"Processing raw SQL: {raw_sql}")
             
@@ -307,6 +395,10 @@ class SQLQueryProcessor:
             # Fix column references
             sql = self._fix_column_references(sql)
             
+            # Apply context-based optimizations
+            if self.context_manager:
+                sql = self._apply_context_optimizations(sql, question)
+            
             # Optimize for text searches
             sql = self._optimize_text_searches(sql)
             
@@ -319,6 +411,37 @@ class SQLQueryProcessor:
         except Exception as e:
             logger.error(f"SQL processing error: {e}")
             return "", False
+    
+    def _apply_context_optimizations(self, sql: str, question: str) -> str:
+        """Apply context-based optimizations to SQL"""
+        if not self.context_manager or not self.context_manager.conversation_history:
+            return sql
+        
+        # Get the follow-up type
+        follow_up_type = self.context_manager.detect_follow_up_type(question)
+        
+        if follow_up_type == "pronoun_reference":
+            # Try to extract name or ID from previous context
+            context_str = self.context_manager.get_relevant_context(question)
+            
+            # Look for employee names or IDs in context
+            name_match = re.search(r'Previously mentioned employee:\s*([A-Za-z\s]+)', context_str)
+            id_match = re.search(r'Previously mentioned ID:\s*(\w+)', context_str)
+            
+            if name_match and not re.search(r'WHERE.*LIKE.*%.*%', sql, re.IGNORECASE):
+                name = name_match.group(1).strip()
+                # Add WHERE clause for the name if not already present
+                if 'WHERE' not in sql.upper():
+                    name_col = self.schema_manager.field_mappings.get('name', 'name')
+                    sql += f" WHERE `{name_col}` LIKE '%{name}%'"
+            elif id_match and not re.search(r'WHERE.*=', sql, re.IGNORECASE):
+                emp_id = id_match.group(1).strip()
+                # Add WHERE clause for the ID if not already present
+                if 'WHERE' not in sql.upper():
+                    id_col = self.schema_manager.field_mappings.get('id', 'id')
+                    sql += f" WHERE `{id_col}` = '{emp_id}'"
+        
+        return sql
     
     def _contains_sql(self, text: str) -> bool:
         """Check if text contains SQL"""
@@ -455,13 +578,20 @@ class SQLQueryProcessor:
         return sql
 
 class ResultFormatter:
-    """Formats query results for display"""
+    """Formats query results for display with context awareness"""
     
-    @staticmethod
-    def format_natural(result: List[Dict], question: str) -> str:
-        """Format results in natural language"""
+    def __init__(self, context_manager: ContextManager = None):
+        self.context_manager = context_manager
+    
+    def format_natural(self, result: List[Dict], question: str) -> str:
+        """Format results in natural language with context consideration"""
         if not result:
-            return ResultFormatter._no_results_message(question)
+            return self._no_results_message(question)
+        
+        # Check if this is a follow-up query
+        follow_up_type = "initial"
+        if self.context_manager:
+            follow_up_type = self.context_manager.detect_follow_up_type(question)
         
         # Handle single value results
         if len(result) == 1 and len(result[0]) == 1:
@@ -472,30 +602,64 @@ class ResultFormatter:
         
         # Handle single record
         if len(result) == 1:
-            return ResultFormatter._format_single_record(result[0])
+            return self._format_single_record(result[0], follow_up_type)
         
         # Handle multiple records
-        return ResultFormatter._format_multiple_records(result, question)
+        return self._format_multiple_records(result, question, follow_up_type)
     
-    @staticmethod
-    def _no_results_message(question: str) -> str:
-        """Generate helpful no results message"""
-        suggestions = [
+    def _no_results_message(self, question: str) -> str:
+        """Generate helpful no results message with context awareness"""
+        base_suggestions = [
             "Try using broader search terms",
             "Check spelling of names or terms",
             "Try searching by partial matches",
             "Verify the data exists in the database"
         ]
         
+        # Add context-specific suggestions
+        if self.context_manager and self.context_manager.conversation_history:
+            context_suggestions = [
+                "Make sure you're referring to the same employee from previous queries",
+                "Try using the full name or employee ID from earlier results"
+            ]
+            base_suggestions.extend(context_suggestions)
+        
         response = "I couldn't find any employee records matching your criteria.\n\n"
         response += "💡 Suggestions:\n"
-        response += "\n".join(f"• {suggestion}" for suggestion in suggestions)
+        response += "\n".join(f"• {suggestion}" for suggestion in base_suggestions)
         
         return response
     
-    @staticmethod
-    def _format_single_record(record: Dict) -> str:
-        """Format single record nicely"""
+    def _format_single_record(self, record: Dict, follow_up_type: str = "initial") -> str:
+        """Format single record nicely with context awareness"""
+        if follow_up_type == "contact_info":
+            # Focus on contact information
+            contact_info = []
+            for key, value in record.items():
+                if any(term in key.lower() for term in ['contact', 'phone', 'mobile', 'cell']):
+                    contact_info.append(f"📞 {key}: {value}")
+            if contact_info:
+                return "📞 Contact Information:\n" + "\n".join(contact_info)
+        
+        elif follow_up_type == "email_info":
+            # Focus on email information
+            email_info = []
+            for key, value in record.items():
+                if any(term in key.lower() for term in ['email', 'mail']):
+                    email_info.append(f"📧 {key}: {value}")
+            if email_info:
+                return "📧 Email Information:\n" + "\n".join(email_info)
+        
+        elif follow_up_type == "team_info":
+            # Focus on team/department information
+            team_info = []
+            for key, value in record.items():
+                if any(term in key.lower() for term in ['team', 'department', 'group', 'project']):
+                    team_info.append(f"👥 {key}: {value}")
+            if team_info:
+                return "👥 Team Information:\n" + "\n".join(team_info)
+        
+        # Default comprehensive format
         response = "I found 1 employee record:\n\n"
         
         # Define display order and icons with flexible field matching
@@ -532,11 +696,14 @@ class ResultFormatter:
             if key not in displayed_fields and value is not None and str(value).strip():
                 response += f"📋 {key}: {value}\n"
         
+        # Add context-aware follow-up suggestions
+        if self.context_manager:
+            response += "\n💬 You can ask for specific details like 'phone number', 'email', or 'team info'"
+        
         return response.strip()
     
-    @staticmethod
-    def _format_multiple_records(result: List[Dict], question: str) -> str:
-        """Format multiple records with summary"""
+    def _format_multiple_records(self, result: List[Dict], question: str, follow_up_type: str = "initial") -> str:
+        """Format multiple records with summary and context awareness"""
         response = f"I found {len(result)} employee records matching your criteria:\n\n"
         
         # Add summary if we have team information
@@ -561,12 +728,15 @@ class ResultFormatter:
         
         # Show detailed results
         response += "📋 Detailed Results:\n"
-        response += ResultFormatter._format_tabular(result)
+        response += self._format_tabular(result)
+        
+        # Add context-aware suggestions for multiple results
+        if self.context_manager and len(result) > 5:
+            response += "\n\n💡 Tip: You can ask for specific details about any employee by name or ID"
         
         return response
     
-    @staticmethod
-    def _format_tabular(result: List[Dict]) -> str:
+    def _format_tabular(self, result: List[Dict]) -> str:
         """Format results in table format optimized for frontend display"""
         if not result:
             return "No records found."
@@ -615,11 +785,13 @@ class ResultFormatter:
         return "\n".join(output)
 
 class TeamDetailsAssistant:
-    def __init__(self):
+    def __init__(self, context: Dict = None):
         self.llm = None
         self.db_connection = None
         self.schema_manager = None
         self.sql_processor = None
+        self.context_manager = ContextManager(context)
+        self.result_formatter = ResultFormatter(self.context_manager)
         self.initialized = False
     
     def initialize(self) -> bool:
@@ -637,7 +809,7 @@ class TeamDetailsAssistant:
             
             # Initialize schema manager
             self.schema_manager = DatabaseSchemaManager(self.db_connection)
-            self.sql_processor = SQLQueryProcessor(self.schema_manager)
+            self.sql_processor = SQLQueryProcessor(self.schema_manager, self.context_manager)
             
             self.initialized = True
             logger.info("Team Details Assistant initialized successfully")
@@ -702,7 +874,7 @@ class TeamDetailsAssistant:
             return False
     
     def process_question(self, question: str) -> str:
-        """Process user question and return results with enhanced debugging"""
+        """Process user question and return results with enhanced debugging and context"""
         if not self.initialized and not self.initialize():
             return "❌ Team Details Assistant initialization failed. Please check database connection and LLM setup."
         
@@ -712,8 +884,12 @@ class TeamDetailsAssistant:
         try:
             print(f"DEBUG - Processing question: {question}")
             
+            # Enhance query with context
+            enhanced_question = self.context_manager.enhance_query_with_context(question)
+            print(f"DEBUG - Enhanced question: {enhanced_question}")
+            
             # Map user terms to database columns
-            mapped_question = self.schema_manager.map_user_terms(question)
+            mapped_question = self.schema_manager.map_user_terms(enhanced_question)
             print(f"DEBUG - Mapped question: {mapped_question}")
             
             # Generate SQL using LLM
@@ -741,8 +917,8 @@ class TeamDetailsAssistant:
             
             print(f"DEBUG - Query execution successful, formatting results...")
             
-            # Format and return results
-            formatted_result = ResultFormatter.format_natural(result, question)
+            # Format and return results with context awareness
+            formatted_result = self.result_formatter.format_natural(result, question)
             return formatted_result
             
         except Exception as e:
@@ -753,15 +929,22 @@ class TeamDetailsAssistant:
             return f"❌ Error processing your question: {str(e)}"
     
     def _generate_sql_with_llm(self, question: str) -> str:
-        """Generate SQL using LLM"""
+        """Generate SQL using LLM with context awareness"""
         try:
             # Create context for LLM
             schema_info = self.schema_manager.get_column_info_string()
             safe_columns = self.schema_manager.get_safe_columns()
             
+            # Add context information to the prompt
+            context_info = ""
+            if self.context_manager and self.context_manager.conversation_history:
+                context_str = self.context_manager.get_relevant_context(question)
+                if context_str:
+                    context_info = f"\nContext from previous conversation: {context_str}\n"
+            
             context = f"""
 Question: {question}
-
+{context_info}
 Database: UserMaster table with the following columns:
 {schema_info}
 
@@ -773,6 +956,7 @@ IMPORTANT RULES:
 5. Always include proper table name: UserMaster
 6. Do not include sensitive fields in any query
 7. Limit results appropriately (minimum LIMIT 20)
+8. If the question refers to previous context, use the context information provided
 
 Generate a SQL query to answer the question.
 """
@@ -838,13 +1022,16 @@ Generate a SQL query to answer the question.
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
 
-def Teammain(query: str) -> str:
-    """Main function to process team queries"""
+def Teammain(query: str, context: Dict = None) -> str:
+    """Main function to process team queries with context support"""
     if not query or not query.strip():
         return "❌ Please provide a valid query."
     
     logger.info(f"Processing query: {query}")
-    assistant = TeamDetailsAssistant()
+    if context:
+        logger.info(f"Context history length: {len(context.get('conversation_history', []))}")
+    
+    assistant = TeamDetailsAssistant(context)
     
     try:
         result = assistant.process_question(query.strip())
@@ -857,25 +1044,39 @@ def Teammain(query: str) -> str:
 
 # Test the function
 if __name__ == "__main__":
-    # Test with sample queries
+    # Test with sample queries and context
+    test_context = {
+        'conversation_history': [
+            {
+                'query': 'Show me employee with name Aryan',
+                'response': '🆔 Employee ID: 12345\n👤 Name: Aryan Kumar\n📞 Contact: 9876543210',
+                'timestamp': time.time() - 300,
+                'query_type': 'team'
+            }
+        ],
+        'last_query_type': 'team',
+        'created_at': time.time() - 300
+    }
+    
     test_queries = [
-        "Show me employee with ID 12345",
-        "tell me details about aryan",
-        "details of abhishek", 
-        "phone number of aryan",
-        "details of 2798445",
-        "List all employees in team ABC",
-        "Count employees by team"
+        ("Show me employee with ID 12345", None),
+        ("tell me details about aryan", None), 
+        ("his phone number", test_context),  # Context-dependent query
+        ("what is his email?", test_context),  # Context-dependent query
+        ("List all employees in team ABC", None),
+        ("Count employees by team", None)
     ]
     
-    print("🚀 Starting Team Details Assistant Tests...")
+    print("🚀 Starting Team Details Assistant Tests with Context...")
     print("=" * 60)
     
-    for i, query in enumerate(test_queries, 1):
+    for i, (query, context) in enumerate(test_queries, 1):
         print(f"\n🔍 Test {i}: {query}")
+        if context:
+            print(f"📋 Context: Previous query about {context['conversation_history'][-1]['query']}")
         print("-" * 40)
         try:
-            result = Teammain(query)
+            result = Teammain(query, context)
             print(result)
         except Exception as e:
             print(f"❌ Error in test {i}: {e}")
