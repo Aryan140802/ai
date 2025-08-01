@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import json
 import sqlparse
+from functools import lru_cache
+import mysql.connector.pooling
 
 # Try to import langchain components, but continue if not available
 try:
@@ -25,7 +27,9 @@ TEAM_DB_CONFIG = {
         "host": "localhost",
         "user": "root",
         "password": "root123",
-        "database": "EIS_n"
+        "database": "EIS_n",
+        "pool_name": "team_pool",
+        "pool_size": 5
     },
     "include_tables": ["UserMaster"],
 }
@@ -74,8 +78,8 @@ def is_sensitive_field(field_name: str) -> bool:
 class DatabaseSchemaManager:
     """Manages database schema discovery and caching"""
     
-    def __init__(self, connection):
-        self.connection = connection
+    def __init__(self, connection_pool):
+        self.connection_pool = connection_pool
         self.schema_cache = {}
         self.field_mappings = {}
         self.safe_columns = []
@@ -83,11 +87,12 @@ class DatabaseSchemaManager:
     
     def load_schema(self):
         """Load and cache database schema with enhanced debugging"""
+        connection = None
         try:
+            connection = self.connection_pool.get_connection()
             print("DEBUG - Loading database schema...")
             
-            with self.connection.cursor() as cursor:
-                # First, check if UserMaster table exists
+            with connection.cursor(dictionary=True) as cursor:
                 cursor.execute("""
                     SELECT TABLE_NAME 
                     FROM INFORMATION_SCHEMA.TABLES 
@@ -96,7 +101,6 @@ class DatabaseSchemaManager:
                 
                 table_check = cursor.fetchone()
                 if not table_check:
-                    # Try to find similar tables
                     cursor.execute("""
                         SELECT TABLE_NAME 
                         FROM INFORMATION_SCHEMA.TABLES 
@@ -114,7 +118,6 @@ class DatabaseSchemaManager:
                 
                 print("DEBUG - UserMaster table found, loading columns...")
                 
-                # Get all columns for UserMaster table
                 cursor.execute("""
                     SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT
                     FROM INFORMATION_SCHEMA.COLUMNS 
@@ -138,7 +141,6 @@ class DatabaseSchemaManager:
                     
                     print(f"DEBUG -   Column: {col_name} ({col_type})")
                     
-                    # Skip sensitive fields
                     if is_sensitive_field(col_name):
                         print(f"DEBUG -     -> Skipped (sensitive)")
                         logger.info(f"Skipping sensitive field: {col_name}")
@@ -156,7 +158,6 @@ class DatabaseSchemaManager:
                 print(f"DEBUG - Schema loaded with {len(self.safe_columns)} safe columns: {self.safe_columns}")
                 logger.info(f"Loaded schema with {len(self.safe_columns)} safe columns: {self.safe_columns}")
                 
-                # Create intelligent field mappings based on actual columns
                 self._create_field_mappings()
                 print("DEBUG - Field mappings created")
                 
@@ -164,12 +165,11 @@ class DatabaseSchemaManager:
             logger.error(f"Schema loading failed: {e}")
             print(f"DEBUG - Schema loading failed: {e}")
             
-            # Set minimal fallback columns if schema loading fails
             self.safe_columns = []
             print("DEBUG - Using fallback: trying to get columns from table directly")
             
             try:
-                with self.connection.cursor() as cursor:
+                with connection.cursor(dictionary=True) as cursor:
                     cursor.execute("DESCRIBE UserMaster")
                     desc_result = cursor.fetchall()
                     for row in desc_result:
@@ -179,16 +179,18 @@ class DatabaseSchemaManager:
                     print(f"DEBUG - Fallback found columns: {self.safe_columns}")
             except Exception as fallback_error:
                 print(f"DEBUG - Fallback also failed: {fallback_error}")
-                self.safe_columns = ['*']  # Last resort
+                self.safe_columns = ['*']
             
             if not self.safe_columns:
                 raise Exception(f"Could not load any safe columns from database: {e}")
+        finally:
+            if connection:
+                connection.close()
     
     def _create_field_mappings(self):
         """Create intelligent field mappings based on actual column names"""
         self.field_mappings = {}
         
-        # Find actual columns for common terms
         id_col = self._find_column_by_patterns(['uid', 'user_?id', 'emp_?id', 'employee_?id', '^id$'])
         name_col = self._find_column_by_patterns(['name', 'emp_?name', 'employee_?name', 'full_?name'])
         contact_col = self._find_column_by_patterns(['contact', 'phone', 'mobile', 'cell'])
@@ -198,7 +200,6 @@ class DatabaseSchemaManager:
         project_col = self._find_column_by_patterns(['project', 'proj'])
         level_col = self._find_column_by_patterns(['level', 'grade', 'band'])
         
-        # Create mappings
         if id_col:
             self.field_mappings['id'] = id_col
             self.field_mappings['employee_id'] = id_col
@@ -249,6 +250,7 @@ class DatabaseSchemaManager:
         """Get list of safe (non-sensitive) columns"""
         return self.safe_columns.copy()
     
+    @lru_cache(maxsize=1000)
     def map_user_terms(self, question: str) -> str:
         """Map user terms to actual database columns"""
         mapped_question = question.lower()
@@ -291,34 +293,23 @@ class SQLQueryProcessor:
         try:
             logger.info(f"Processing raw SQL: {raw_sql}")
             
-            # Handle non-SQL responses
             if not self._contains_sql(raw_sql):
-                # Try to construct SQL from question
                 constructed_sql = self._construct_sql_from_question(question)
                 if constructed_sql:
                     return self._finalize_sql(constructed_sql), True
                 return "", False
             
-            # Extract SQL from various formats
             sql = self._extract_sql(raw_sql)
             
             if not sql:
                 return "", False
             
-            # Validate and clean
             if not self._is_safe_select(sql):
                 return "", False
             
-            # Remove sensitive fields
             sql = self._remove_sensitive_fields(sql)
-            
-            # Fix column references
             sql = self._fix_column_references(sql)
-            
-            # Optimize for text searches
             sql = self._optimize_text_searches(sql)
-            
-            # Add limits and final cleanup
             sql = self._finalize_sql(sql)
             
             logger.info(f"Final processed SQL: {sql}")
@@ -341,17 +332,14 @@ class SQLQueryProcessor:
         if not raw_sql:
             return ""
             
-        # Try code block first
         code_block_match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
         if code_block_match:
             return code_block_match.group(1).strip()
         
-        # Try to find SELECT statement
         select_match = re.search(r"(SELECT.*?)(?:\n\n|$|;)", raw_sql, re.IGNORECASE | re.DOTALL)
         if select_match:
             return select_match.group(1).strip()
         
-        # Clean and return
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^.*?(SELECT|INSERT|UPDATE|DELETE)", r"\1", sql, flags=re.IGNORECASE | re.DOTALL)
         return sql.strip()
@@ -364,24 +352,20 @@ class SQLQueryProcessor:
         
         question_lower = question.lower()
         
-        # Look for ID-based queries
         id_match = re.search(r'\b(\d+)\b', question)
         id_column = self.schema_manager._find_column_by_patterns(['uid', 'id', 'user_id', 'emp_id'])
         
         if id_match and id_column:
             return f"SELECT * FROM UserMaster WHERE `{id_column}` = {id_match.group(1)}"
         
-        # Look for name-based queries
         name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
         if name_column:
-            # Extract potential name
             name_match = re.search(r'(?:details?|info|about|of)\s+(\w+)', question_lower)
             if name_match:
                 name = name_match.group(1)
                 return f"SELECT * FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
         
-        # Default: select all with limit
-        return "SELECT * FROM UserMaster LIMIT 10"
+        return "SELECT * FROM UserMaster LIMIT 20"
     
     def _is_safe_select(self, sql: str) -> bool:
         """Validate SQL is safe SELECT only"""
@@ -407,7 +391,6 @@ class SQLQueryProcessor:
         if not safe_columns:
             return sql
         
-        # If SELECT *, replace with safe columns
         if re.search(r'SELECT\s+\*', sql, re.IGNORECASE):
             safe_cols_str = ', '.join(f"`{col}`" for col in safe_columns if col != '*')
             if safe_cols_str:
@@ -419,29 +402,22 @@ class SQLQueryProcessor:
         """Fix column references to match actual schema"""
         safe_columns = self.schema_manager.get_safe_columns()
         
-        # First, normalize all existing backticks and quotes
-        # Remove any existing backticks/quotes around column names
         for actual_col in safe_columns:
             if actual_col == '*':
                 continue
             
-            # Remove various quote patterns and replace with single backticks
             patterns_to_clean = [
-                (f'```{actual_col}```', f'`{actual_col}`'),  # Triple backticks
-                (f'``{actual_col}``', f'`{actual_col}`'),    # Double backticks
-                (f'"{actual_col}"', f'`{actual_col}`'),       # Double quotes
-                (f"'{actual_col}'", f'`{actual_col}`'),       # Single quotes
+                (f'```{actual_col}```', f'`{actual_col}`'),
+                (f'``{actual_col}``', f'`{actual_col}`'),
+                (f'"{actual_col}"', f'`{actual_col}`'),
+                (f"'{actual_col}'", f'`{actual_col}`'),
             ]
             
             for pattern, replacement in patterns_to_clean:
                 sql = sql.replace(pattern, replacement)
             
-            # Handle unquoted column names (but be careful with SQL keywords)
-            # Use word boundaries to avoid partial matches
-            import re
             sql = re.sub(f'\\b{re.escape(actual_col)}\\b(?![`"\'])', f'`{actual_col}`', sql, flags=re.IGNORECASE)
         
-        # Clean up any remaining double backticks that might have been created
         sql = re.sub(r'`{2,}', '`', sql)
         
         return sql
@@ -453,7 +429,6 @@ class SQLQueryProcessor:
             
         for col_name, col_info in self.schema_manager.schema_cache['UserMaster'].items():
             if col_info.get('type') in ['varchar', 'text', 'char']:
-                # Convert = to LIKE for text fields - handle various quote patterns
                 patterns = [
                     (f"`{col_name}`\\s*=\\s*'([^']*)'", f"`{col_name}` LIKE '%\\1%'"),
                     (f"`{col_name}`\\s*=\\s*\"([^\"]*)\"", f"`{col_name}` LIKE '%\\1%'"),
@@ -469,15 +444,12 @@ class SQLQueryProcessor:
         if not sql:
             return sql
             
-        # Remove trailing semicolons
         sql = sql.strip().rstrip(';')
         
-        # Add reasonable limit if none exists
         if not re.search(r'\bLIMIT\b', sql, re.IGNORECASE):
             if not re.search(r'\bCOUNT\s*\(', sql, re.IGNORECASE):
-                sql += " LIMIT 50"
+                sql += " LIMIT 20"
         
-        # Clean up extra whitespace
         sql = re.sub(r'\s+', ' ', sql).strip()
         
         return sql
@@ -487,22 +459,29 @@ class ResultFormatter:
     
     @staticmethod
     def format_natural(result: List[Dict], question: str) -> str:
-        """Format results in natural language"""
+        """Format results in natural language with enhanced formatting"""
         if not result:
             return ResultFormatter._no_results_message(question)
         
-        # Handle single value results
         if len(result) == 1 and len(result[0]) == 1:
             value = list(result[0].values())[0]
             if "count" in question.lower():
-                return f"There are {value} employee records matching your criteria."
-            return f"The result is: {value}"
+                return f"""
+                ╔════════════════════════════╗
+                ║         Query Result        ║
+                ╚════════════════════════════╝
+                Total employees: {value}
+                """
+            return f"""
+            ╔════════════════════════════╗
+            ║         Query Result        ║
+            ╚════════════════════════════╝
+            Result: {value}
+            """
         
-        # Handle single record
         if len(result) == 1:
             return ResultFormatter._format_single_record(result[0])
         
-        # Handle multiple records
         return ResultFormatter._format_multiple_records(result, question)
     
     @staticmethod
@@ -515,18 +494,19 @@ class ResultFormatter:
             "Verify the data exists in the database"
         ]
         
-        response = "I couldn't find any employee records matching your criteria.\n\n"
-        response += "💡 Suggestions:\n"
-        response += "\n".join(f"• {suggestion}" for suggestion in suggestions)
+        return f"""
+        ╔════════════════════════════╗
+        ║        No Results Found    ║
+        ╚════════════════════════════╝
+        No employee records found for: {question}
         
-        return response
+        📌 Suggestions:
+        {'\n'.join(f"  • {suggestion}" for suggestion in suggestions)}
+        """
     
     @staticmethod
     def _format_single_record(record: Dict) -> str:
-        """Format single record nicely"""
-        response = "I found 1 employee record:\n\n"
-        
-        # Define display order and icons with flexible field matching
+        """Format single record with boxed layout"""
         field_patterns = [
             ('🆔 Employee ID', ['uid', 'id', 'emp_id', 'employee_id', 'user_id']),
             ('👤 Name', ['empname', 'name', 'employee_name', 'full_name', 'emp_name']),
@@ -539,11 +519,14 @@ class ResultFormatter:
             ('📂 Project', ['project', 'proj'])
         ]
         
+        response = ["╔════════════════════════════╗"]
+        response.append("║      Employee Details      ║")
+        response.append("╚════════════════════════════╝")
+        
         displayed_fields = set()
         
         for icon_label, possible_fields in field_patterns:
             for field in possible_fields:
-                # Find matching field (case-insensitive)
                 actual_field = None
                 for record_key in record.keys():
                     if record_key.lower() == field.lower():
@@ -551,23 +534,25 @@ class ResultFormatter:
                         break
                 
                 if actual_field and record[actual_field] is not None and str(record[actual_field]).strip():
-                    response += f"{icon_label}: {record[actual_field]}\n"
+                    response.append(f"{icon_label}: {record[actual_field]}")
                     displayed_fields.add(actual_field)
                     break
         
-        # Add any remaining fields not in the standard display
         for key, value in record.items():
             if key not in displayed_fields and value is not None and str(value).strip():
-                response += f"📋 {key}: {value}\n"
+                response.append(f"📋 {key}: {value}")
         
-        return response.strip()
+        return "\n".join(response)
     
     @staticmethod
     def _format_multiple_records(result: List[Dict], question: str) -> str:
-        """Format multiple records with summary"""
-        response = f"I found {len(result)} employee records matching your criteria:\n\n"
+        """Format multiple records with summary and boxed layout"""
+        response = [
+            "╔════════════════════════════╗",
+            f"║ Found {len(result)} Employee Records ║",
+            "╚════════════════════════════╝"
+        ]
         
-        # Add summary if we have team information
         team_field = None
         for field in ['Team', 'team', 'Department', 'department', 'Group', 'group']:
             if field in result[0]:
@@ -582,53 +567,51 @@ class ResultFormatter:
                     team_counts[team] = team_counts.get(team, 0) + 1
             
             if len(team_counts) > 1:
-                response += "📊 Team Summary:\n"
+                response.append("\n📊 Team Distribution:")
                 for team, count in sorted(team_counts.items()):
-                    response += f"   • {team}: {count} employees\n"
-                response += "\n"
+                    response.append(f"  • {team}: {count} employees")
+                response.append("")
         
-        # Show detailed results
-        response += "📋 Detailed Results:\n"
-        response += ResultFormatter._format_tabular(result)
+        response.append("📋 Detailed Results:")
+        response.append(ResultFormatter._format_tabular(result))
         
-        return response
+        return "\n".join(response)
     
     @staticmethod
     def _format_tabular(result: List[Dict]) -> str:
-        """Format results in table format"""
+        """Format results in boxed table format"""
         if not result:
             return "No records found."
         
         columns = list(result[0].keys())
-        
-        # Calculate column widths
         col_widths = []
         for col in columns:
             max_width = max(
                 len(str(col)),
                 max(len(str(row.get(col, ''))) for row in result) if result else 0
             )
-            col_widths.append(min(max_width, 30))  # Cap at 30 chars
+            col_widths.append(min(max_width, 30))
         
-        # Build table
         output = []
+        top_border = "┌" + "┬".join("─" * (width + 2) for width in col_widths) + "┐"
+        mid_border = "├" + "┼".join("─" * (width + 2) for width in col_widths) + "┤"
+        bot_border = "└" + "┴".join("─" * (width + 2) for width in col_widths) + "┘"
         
-        # Header
-        header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
-        separator = "-+-".join("-" * width for width in col_widths)
+        output.append(top_border)
+        header = "│" + " │ ".join(col.ljust(width) for col, width in zip(columns, col_widths)) + "│"
         output.append(header)
-        output.append(separator)
+        output.append(mid_border)
         
-        # Rows
         for row in result:
-            formatted_row = " | ".join(
+            formatted_row = "│" + " │ ".join(
                 str(row.get(col, ''))[:27] + "..." if len(str(row.get(col, ''))) > 30 
                 else str(row.get(col, '')).ljust(width)
                 for col, width in zip(columns, col_widths)
-            )
+            ) + "│"
             output.append(formatted_row)
         
-        output.append(f"\nTotal records: {len(result)}")
+        output.append(bot_border)
+        output.append(f"\nTotal records displayed: {len(result)}")
         return "\n".join(output)
 
 class FallbackSQLGenerator:
@@ -637,23 +620,21 @@ class FallbackSQLGenerator:
     def __init__(self, schema_manager: DatabaseSchemaManager):
         self.schema_manager = schema_manager
     
+    @lru_cache(maxsize=1000)
     def generate_sql(self, question: str) -> str:
         """Generate SQL using pattern matching"""
         question_lower = question.lower()
         safe_columns = self.schema_manager.get_safe_columns()
         
         if not safe_columns:
-            return "SELECT * FROM UserMaster LIMIT 10"
+            return "SELECT * FROM UserMaster LIMIT 20"
         
-        # Pattern-based SQL generation
         if re.search(r'\b(\d+)\b', question):
-            # ID-based query
             id_match = re.search(r'\b(\d+)\b', question)
             id_column = self.schema_manager._find_column_by_patterns(['uid', 'id', 'user_id', 'emp_id'])
             if id_match and id_column:
                 return f"SELECT * FROM UserMaster WHERE `{id_column}` = {id_match.group(1)}"
         
-        # Name-based query
         name_patterns = [r'details?\s+(?:about|of)\s+(\w+)', r'(?:info|information)\s+(?:about|of)\s+(\w+)', r'find\s+(\w+)']
         for pattern in name_patterns:
             match = re.search(pattern, question_lower)
@@ -663,7 +644,6 @@ class FallbackSQLGenerator:
                 if name_column:
                     return f"SELECT * FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
         
-        # Phone/contact query
         if any(term in question_lower for term in ['phone', 'contact', 'mobile', 'number']):
             contact_column = self.schema_manager._find_column_by_patterns(['contact', 'phone', 'mobile'])
             name_match = re.search(r'(?:phone|contact|mobile|number)\s+(?:of|for)\s+(\w+)', question_lower)
@@ -673,23 +653,20 @@ class FallbackSQLGenerator:
                 if name_column:
                     return f"SELECT `{contact_column}` FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
         
-        # Count queries
         if 'count' in question_lower:
             return "SELECT COUNT(*) as total_employees FROM UserMaster"
         
-        # Team queries
         if any(term in question_lower for term in ['team', 'department', 'group']):
             team_column = self.schema_manager._find_column_by_patterns(['team', 'department', 'group'])
             if team_column:
                 return f"SELECT `{team_column}`, COUNT(*) as count FROM UserMaster GROUP BY `{team_column}`"
         
-        # Default query
-        return "SELECT * FROM UserMaster LIMIT 10"
+        return "SELECT * FROM UserMaster LIMIT 20"
 
 class TeamDetailsAssistant:
     def __init__(self):
         self.llm = None
-        self.db_connection = None
+        self.connection_pool = None
         self.schema_manager = None
         self.sql_processor = None
         self.fallback_generator = None
@@ -700,15 +677,12 @@ class TeamDetailsAssistant:
         try:
             logger.info("Initializing Team Details Assistant...")
             
-            # Initialize database connection first
             if not self._init_database():
                 return False
             
-            # Initialize LLM (optional)
             self._init_llm()
             
-            # Initialize schema manager
-            self.schema_manager = DatabaseSchemaManager(self.db_connection)
+            self.schema_manager = DatabaseSchemaManager(self.connection_pool)
             self.sql_processor = SQLQueryProcessor(self.schema_manager)
             self.fallback_generator = FallbackSQLGenerator(self.schema_manager)
             
@@ -721,39 +695,40 @@ class TeamDetailsAssistant:
             return False
     
     def _init_database(self) -> bool:
-        """Initialize database connection with enhanced debugging"""
+        """Initialize database connection pool"""
         try:
             db_cfg = TEAM_DB_CONFIG['db_config']
-            print(f"DEBUG - Connecting to database: {db_cfg['host']}/{db_cfg['database']}")
+            print(f"DEBUG - Creating connection pool: {db_cfg['host']}/{db_cfg['database']}")
             
-            self.db_connection = pymysql.connect(
+            self.connection_pool = mysql.connector.pooling.MySQLConnectionPool(
+                pool_name=db_cfg['pool_name'],
+                pool_size=db_cfg['pool_size'],
                 host=db_cfg['host'],
                 user=db_cfg['user'],
                 password=db_cfg['password'],
                 database=db_cfg['database'],
                 charset='utf8mb4',
-                cursorclass=pymysql.cursors.DictCursor,
-                autocommit=True,
+                use_pure=True,
                 connect_timeout=10,
-                read_timeout=30
+                option_files=None
             )
             
-            # Test connection
-            with self.db_connection.cursor() as cursor:
+            connection = self.connection_pool.get_connection()
+            with connection.cursor(dictionary=True) as cursor:
                 cursor.execute("SELECT 1 as test")
                 test_result = cursor.fetchone()
                 print(f"DEBUG - Database connection test: {test_result}")
+            connection.close()
             
-            print("DEBUG - Database connection established successfully")
-            logger.info("Database connection established")
+            print("DEBUG - Connection pool created successfully")
+            logger.info("Database connection pool established")
             return True
             
         except Exception as e:
-            error_msg = f"Database connection failed: {e}"
+            error_msg = f"Connection pool creation failed: {e}"
             logger.error(error_msg)
             print(f"DEBUG - {error_msg}")
             
-            # Additional debugging info
             db_cfg = TEAM_DB_CONFIG['db_config']
             print(f"DEBUG - Connection details:")
             print(f"DEBUG -   Host: {db_cfg['host']}")
@@ -767,7 +742,6 @@ class TeamDetailsAssistant:
         try:
             if LANGCHAIN_AVAILABLE:
                 self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-                # Test LLM
                 test_response = self.llm.invoke("SELECT 1")
                 logger.info("LLM initialized successfully")
                 return True
@@ -780,21 +754,29 @@ class TeamDetailsAssistant:
             return False
     
     def process_question(self, question: str) -> str:
-        """Process user question and return results with enhanced debugging"""
+        """Process user question and return results"""
         if not self.initialized and not self.initialize():
-            return "❌ Team Details Assistant initialization failed. Please check database connection."
+            return """
+            ╔════════════════════════════╗
+            ║        Error Occurred      ║
+            ╚════════════════════════════╝
+            Initialization failed. Please check database connection.
+            """
         
         if is_dangerous(question):
-            return "❌ Question blocked for security reasons."
+            return """
+            ╔════════════════════════════╗
+            ║        Security Alert      ║
+            ╚════════════════════════════╝
+            Question blocked for security reasons.
+            """
         
         try:
             print(f"DEBUG - Processing question: {question}")
             
-            # Map user terms to database columns
             mapped_question = self.schema_manager.map_user_terms(question)
             print(f"DEBUG - Mapped question: {mapped_question}")
             
-            # Generate SQL
             if self.llm and LANGCHAIN_AVAILABLE:
                 print("DEBUG - Using LLM for SQL generation")
                 raw_sql = self._generate_sql_with_llm(mapped_question)
@@ -804,23 +786,31 @@ class TeamDetailsAssistant:
             
             print(f"DEBUG - Raw SQL generated: {raw_sql}")
             
-            # Process and validate SQL
             final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
             print(f"DEBUG - Final SQL: {final_sql}")
             print(f"DEBUG - SQL is valid: {is_valid}")
             
             if not is_valid:
-                return f"❌ Could not generate valid SQL query. Please rephrase your question.\nDebug info: {raw_sql}"
+                return f"""
+                ╔════════════════════════════╗
+                ║        Invalid Query       ║
+                ╚════════════════════════════╝
+                Could not generate valid SQL query. Please rephrase your question.
+                Debug info: {raw_sql}
+                """
             
-            # Execute query
             result = self._execute_query(final_sql)
             
             if result is None:
-                return "❌ Query execution failed. Check the debug output above for details."
+                return """
+                ╔════════════════════════════╗
+                ║        Query Failed        ║
+                ╚════════════════════════════╝
+                Query execution failed. Check the debug output for details.
+                """
             
             print(f"DEBUG - Query execution successful, formatting results...")
             
-            # Format and return results
             formatted_result = ResultFormatter.format_natural(result, question)
             return formatted_result
             
@@ -829,12 +819,16 @@ class TeamDetailsAssistant:
             logger.error(f"Question processing error: {e}\n{error_trace}")
             print(f"DEBUG - Question processing error: {e}")
             print(f"DEBUG - Full traceback: {error_trace}")
-            return f"❌ Error processing your question: {str(e)}"
+            return f"""
+            ╔════════════════════════════╗
+            ║        Error Occurred      ║
+            ╚════════════════════════════╝
+            Error processing your question: {str(e)}
+            """
     
     def _generate_sql_with_llm(self, question: str) -> str:
         """Generate SQL using LLM"""
         try:
-            # Create context for LLM
             schema_info = self.schema_manager.get_column_info_string()
             safe_columns = self.schema_manager.get_safe_columns()
             
@@ -856,7 +850,6 @@ IMPORTANT RULES:
 Generate a SQL query to answer the question.
 """
             
-            # Create a simple query chain if possible
             if LANGCHAIN_AVAILABLE:
                 db_cfg = TEAM_DB_CONFIG['db_config']
                 uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
@@ -879,15 +872,12 @@ Generate a SQL query to answer the question.
             return self.fallback_generator.generate_sql(question)
     
     def _execute_query(self, sql: str) -> Optional[List[Dict]]:
-        """Execute SQL query safely with enhanced error handling"""
+        """Execute SQL query safely"""
+        connection = None
         try:
-            # Check if connection is still alive
-            if not self.db_connection.open:
-                logger.error("Database connection is closed, attempting to reconnect...")
-                if not self._init_database():
-                    return None
+            connection = self.connection_pool.get_connection()
             
-            with self.db_connection.cursor() as cursor:
+            with connection.cursor(dictionary=True) as cursor:
                 logger.info(f"Executing SQL: {sql}")
                 print(f"DEBUG - Executing SQL: {sql}")
                 
@@ -899,15 +889,14 @@ Generate a SQL query to answer the question.
                 
                 return result
                 
-        except pymysql.Error as e:
-            error_code = getattr(e, 'args', [None])[0] if hasattr(e, 'args') and e.args else 'Unknown'
+        except mysql.connector.Error as e:
+            error_code = e.errno if hasattr(e, 'errno') else 'Unknown'
             error_msg = str(e)
             
             logger.error(f"MySQL Error {error_code}: {error_msg}")
             print(f"DEBUG - MySQL Error {error_code}: {error_msg}")
             print(f"DEBUG - Failed SQL: {sql}")
             
-            # Provide specific error information
             if "Unknown column" in error_msg:
                 available_cols = self.schema_manager.get_safe_columns()
                 print(f"DEBUG - Available columns: {available_cols}")
@@ -926,20 +915,28 @@ Generate a SQL query to answer the question.
             print(f"DEBUG - Unexpected error: {e}")
             print(f"DEBUG - Failed SQL: {sql}")
             return None
+        finally:
+            if connection:
+                connection.close()
     
     def cleanup(self):
         """Clean up resources"""
         try:
-            if self.db_connection and self.db_connection.open:
-                self.db_connection.close()
-                logger.info("Database connection closed")
+            if self.connection_pool:
+                self.connection_pool._remove_connections()
+                logger.info("Connection pool closed")
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
 
 def Teammain(query: str) -> str:
     """Main function to process team queries"""
     if not query or not query.strip():
-        return "❌ Please provide a valid query."
+        return """
+        ╔════════════════════════════╗
+        ║        Invalid Input       ║
+        ╚════════════════════════════╝
+        Please provide a valid query.
+        """
     
     logger.info(f"Processing query: {query}")
     assistant = TeamDetailsAssistant()
@@ -949,13 +946,16 @@ def Teammain(query: str) -> str:
         return result
     except Exception as e:
         logger.error(f"Main function error: {e}")
-        return f"❌ An unexpected error occurred: {str(e)}"
+        return f"""
+        ╔════════════════════════════╗
+        ║        Error Occurred      ║
+        ╚════════════════════════════╝
+        An unexpected error occurred: {str(e)}
+        """
     finally:
         assistant.cleanup()
 
-# Test the function
 if __name__ == "__main__":
-    # Test with sample queries
     test_queries = [
         "Show me employee with ID 12345",
         "tell me details about aryan",
@@ -966,17 +966,23 @@ if __name__ == "__main__":
         "Count employees by team"
     ]
     
-    print("🚀 Starting Team Details Assistant Tests...")
-    print("=" * 60)
+    print("╔════════════════════════════════════════╗")
+    print("║     Team Details Assistant Tests       ║")
+    print("╚════════════════════════════════════════╝")
     
     for i, query in enumerate(test_queries, 1):
         print(f"\n🔍 Test {i}: {query}")
-        print("-" * 40)
+        print("─" * 40)
         try:
             result = Teammain(query)
             print(result)
         except Exception as e:
-            print(f"❌ Error in test {i}: {e}")
-        print("-" * 40)
+            print(f"""
+            ╔════════════════════════════╗
+            ║        Test Failed         ║
+            ╚════════════════════════════╝
+            Error in test {i}: {e}
+            """)
+        print("─" * 40)
     
     print("\n✅ All tests completed!")
