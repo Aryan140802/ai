@@ -1,0 +1,125 @@
+from django.shortcuts import render
+import subprocess
+from django.http import JsonResponse
+import json
+from django.views.decorators.csrf import csrf_exempt
+import requests
+import os
+from .aiFar_v10 import *
+from .aiTeam_v3 import *
+from .aiSys_v1 import *
+from .aiWork_v11 import *
+
+
+# Create your views here.
+@csrf_exempt
+def chat(request):
+    if request.method == 'POST':
+       #return JsonResponse({'response':"hello bro"})
+       data = json.loads(request.body)
+       model = data.get('model')
+       p = data.get('message')
+       #p="hello how are you"
+       #return JsonResponse({'response':"hello bro"})
+       print(repr(p))
+       #p=str(p.strip())
+       '''if not model or not p:
+           return JsonResponse({"error":"Model and prompt are required"},status=500,safe=False)'''
+
+       try:
+          response = requests.post(
+                  'http://localhost:11434/api/generate/',
+                  json={
+                      "model":"myllm:latest",
+                   "prompt":str(p),
+                   "stream":False
+
+                      }
+          )
+          '''result=subprocess.run(
+                  ['ollama','ge','model'],
+                  input=prompt.encode(),
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  timeout=60
+                  )
+          #print(response.json())
+          if result.returncode == 0:
+              return JsonResponse({'response': result.stdout.decode()})
+          else :
+              return JsonResponse({'error':result.stderr.decode},status=500)'''
+          if response.status_code == 200:
+             result=response.json()
+             return JsonResponse({'response': result.get('response','').strip()})
+          else:
+             return JsonResponse({'error': response.txt}, status=500,safe=False)
+       except Exception as e:
+             return JsonResponse({'error': str(e)},status=500)
+
+@csrf_exempt
+def chatFarNew(request):
+    if request.method == 'POST':
+       #return JsonResponse({'response':"hello bro"})
+       data = json.loads(request.body)
+       model = data.get('model')
+       p = data.get('message')
+       output=Farmain(p)
+       print("---------")
+       print(output)
+       print("after output")
+       return JsonResponse({'response': output},status=200,safe=False)
+    else:
+       return JsonResponse({'error': str(e)},status=500,safe=False)
+    return JsonResponse({'error': str(e)},status=500,safe=False)
+
+@csrf_exempt
+def chatTeamNew(request):
+    if request.method == 'POST':
+       #return JsonResponse({'response':"hello bro"})
+       data = json.loads(request.body)
+       model = data.get('model')
+       p = data.get('message')
+       output=Teammain(p)
+       print("---------")
+       print(output)
+       print("after output")
+       return JsonResponse({'response': output},status=200,safe=False)
+    else:
+       return JsonResponse({'error': str(e)},status=500)
+    return JsonResponse({'error': str(e)},status=500)
+
+
+
+@csrf_exempt
+def chatSystemNew(request):
+    if request.method == 'POST':
+       #return JsonResponse({'response':"hello bro"})
+       data = json.loads(request.body)
+       model = data.get('model')
+       p = data.get('message')
+       output=ComplianceMain(p)
+       print("---------")
+       print(output)
+       print("after output")
+       return JsonResponse({'response': output},status=200,safe=False)
+    else:
+       return JsonResponse({'error': str(e)},status=500)
+    return JsonResponse({'error': str(e)},status=500)
+
+
+
+@csrf_exempt
+def chatWorkloadNew(request):
+    if request.method == 'POST':
+       #return JsonResponse({'response':"hello bro"})
+       data = json.loads(request.body)
+       model = data.get('model')
+       p = data.get('message')
+       output=OpTestMain(p)
+       print("---------")
+       print(output)
+       print("after output")
+       return JsonResponse({'response': output},status=200,safe=False)
+    else:
+       return JsonResponse({'error': str(e)},status=500)
+    return JsonResponse({'error': str(e)},status=500)
