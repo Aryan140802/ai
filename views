@@ -10,6 +10,72 @@ from .aiTeam_v3 import *
 from .aiSys_v1 import *
 from .aiWork_v11 import *
 
+# In-memory context storage (for production, consider using Redis or database)
+USER_CONTEXTS = {}
+
+def get_or_create_session_id(request):
+    """Get or create a session ID for context management"""
+    # Try to get session ID from request data or headers
+    session_id = None
+    
+    if hasattr(request, 'session') and request.session.session_key:
+        session_id = request.session.session_key
+    elif request.META.get('HTTP_X_SESSION_ID'):
+        session_id = request.META.get('HTTP_X_SESSION_ID')
+    else:
+        # Generate a simple session ID based on IP and timestamp
+        import time
+        import hashlib
+        ip = request.META.get('REMOTE_ADDR', 'unknown')
+        timestamp = str(time.time())
+        session_id = hashlib.md5(f"{ip}_{timestamp}".encode()).hexdigest()[:16]
+    
+    return session_id
+
+def get_user_context(session_id):
+    """Get user context for a session"""
+    if session_id not in USER_CONTEXTS:
+        USER_CONTEXTS[session_id] = {
+            'conversation_history': [],
+            'last_query_type': None,
+            'last_results': None,
+            'created_at': time.time()
+        }
+    return USER_CONTEXTS[session_id]
+
+def update_user_context(session_id, query, response, query_type='general'):
+    """Update user context with new query and response"""
+    context = get_user_context(session_id)
+    
+    # Add to conversation history (keep last 10 exchanges)
+    context['conversation_history'].append({
+        'query': query,
+        'response': response,
+        'timestamp': time.time(),
+        'query_type': query_type
+    })
+    
+    # Keep only last 10 exchanges to prevent memory bloat
+    if len(context['conversation_history']) > 10:
+        context['conversation_history'] = context['conversation_history'][-10:]
+    
+    context['last_query_type'] = query_type
+    context['last_results'] = response
+    
+    return context
+
+def clean_old_contexts():
+    """Clean contexts older than 1 hour"""
+    import time
+    current_time = time.time()
+    sessions_to_remove = []
+    
+    for session_id, context in USER_CONTEXTS.items():
+        if current_time - context.get('created_at', 0) > 3600:  # 1 hour
+            sessions_to_remove.append(session_id)
+    
+    for session_id in sessions_to_remove:
+        del USER_CONTEXTS[session_id]
 
 # Create your views here.
 @csrf_exempt
@@ -59,67 +125,175 @@ def chat(request):
 @csrf_exempt
 def chatFarNew(request):
     if request.method == 'POST':
-       #return JsonResponse({'response':"hello bro"})
-       data = json.loads(request.body)
-       model = data.get('model')
-       p = data.get('message')
-       output=Farmain(p)
-       print("---------")
-       print(output)
-       print("after output")
-       return JsonResponse({'response': output},status=200,safe=False)
+       try:
+           data = json.loads(request.body)
+           model = data.get('model')
+           p = data.get('message')
+           
+           # Get session context
+           session_id = get_or_create_session_id(request)
+           context = get_user_context(session_id)
+           
+           # Clean old contexts periodically
+           clean_old_contexts()
+           
+           # Pass context to the main function
+           output = Farmain(p, context)
+           
+           # Update context with new query and response
+           update_user_context(session_id, p, output, 'farming')
+           
+           print("---------")
+           print(output)
+           print("after output")
+           
+           return JsonResponse({
+               'response': output,
+               'session_id': session_id
+           }, status=200, safe=False)
+       except Exception as e:
+           return JsonResponse({'error': str(e)}, status=500, safe=False)
     else:
-       return JsonResponse({'error': str(e)},status=500,safe=False)
-    return JsonResponse({'error': str(e)},status=500,safe=False)
+       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
 
 @csrf_exempt
 def chatTeamNew(request):
     if request.method == 'POST':
-       #return JsonResponse({'response':"hello bro"})
-       data = json.loads(request.body)
-       model = data.get('model')
-       p = data.get('message')
-       output=Teammain(p)
-       print("---------")
-       print(output)
-       print("after output")
-       return JsonResponse({'response': output},status=200,safe=False)
+       try:
+           data = json.loads(request.body)
+           model = data.get('model')
+           p = data.get('message')
+           
+           # Get session context
+           session_id = get_or_create_session_id(request)
+           context = get_user_context(session_id)
+           
+           # Clean old contexts periodically
+           clean_old_contexts()
+           
+           # Pass context to the main function
+           output = Teammain(p, context)
+           
+           # Update context with new query and response
+           update_user_context(session_id, p, output, 'team')
+           
+           print("---------")
+           print(f"Session ID: {session_id}")
+           print(f"Context history length: {len(context['conversation_history'])}")
+           print(output)
+           print("after output")
+           
+           return JsonResponse({
+               'response': output,
+               'session_id': session_id,
+               'context_length': len(context['conversation_history'])
+           }, status=200, safe=False)
+       except Exception as e:
+           return JsonResponse({'error': str(e)}, status=500, safe=False)
     else:
-       return JsonResponse({'error': str(e)},status=500)
-    return JsonResponse({'error': str(e)},status=500)
-
-
+       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
 
 @csrf_exempt
 def chatSystemNew(request):
     if request.method == 'POST':
-       #return JsonResponse({'response':"hello bro"})
-       data = json.loads(request.body)
-       model = data.get('model')
-       p = data.get('message')
-       output=ComplianceMain(p)
-       print("---------")
-       print(output)
-       print("after output")
-       return JsonResponse({'response': output},status=200,safe=False)
+       try:
+           data = json.loads(request.body)
+           model = data.get('model')
+           p = data.get('message')
+           
+           # Get session context
+           session_id = get_or_create_session_id(request)
+           context = get_user_context(session_id)
+           
+           # Clean old contexts periodically
+           clean_old_contexts()
+           
+           # Pass context to the main function
+           output = ComplianceMain(p, context)
+           
+           # Update context with new query and response
+           update_user_context(session_id, p, output, 'system')
+           
+           print("---------")
+           print(output)
+           print("after output")
+           
+           return JsonResponse({
+               'response': output,
+               'session_id': session_id
+           }, status=200, safe=False)
+       except Exception as e:
+           return JsonResponse({'error': str(e)}, status=500, safe=False)
     else:
-       return JsonResponse({'error': str(e)},status=500)
-    return JsonResponse({'error': str(e)},status=500)
-
-
+       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
 
 @csrf_exempt
 def chatWorkloadNew(request):
     if request.method == 'POST':
-       #return JsonResponse({'response':"hello bro"})
-       data = json.loads(request.body)
-       model = data.get('model')
-       p = data.get('message')
-       output=OpTestMain(p)
-       print("---------")
-       print(output)
-       print("after output")
-       return JsonResponse({'response': output},status=200,safe=False)
+       try:
+           data = json.loads(request.body)
+           model = data.get('model')
+           p = data.get('message')
+           
+           # Get session context
+           session_id = get_or_create_session_id(request)
+           context = get_user_context(session_id)
+           
+           # Clean old contexts periodically
+           clean_old_contexts()
+           
+           # Pass context to the main function
+           output = OpTestMain(p, context)
+           
+           # Update context with new query and response
+           update_user_context(session_id, p, output, 'workload')
+           
+           print("---------")
+           print(output)
+           print("after output")
+           
+           return JsonResponse({
+               'response': output,
+               'session_id': session_id
+           }, status=200, safe=False)
+       except Exception as e:
+           return JsonResponse({'error': str(e)}, status=500, safe=False)
     else:
-       return JsonResponse({'error': str(e)},status=500)
-    return JsonResponse({'error': str(e)},status=500)
+       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
+
+@csrf_exempt
+def clear_context(request):
+    """Clear user context for a session"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            session_id = data.get('session_id') or get_or_create_session_id(request)
+            
+            if session_id in USER_CONTEXTS:
+                del USER_CONTEXTS[session_id]
+                return JsonResponse({'message': 'Context cleared successfully'})
+            else:
+                return JsonResponse({'message': 'No context found for this session'})
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def get_context_info(request):
+    """Get context information for debugging"""
+    if request.method == 'GET':
+        try:
+            session_id = request.GET.get('session_id') or get_or_create_session_id(request)
+            context = get_user_context(session_id)
+            
+            return JsonResponse({
+                'session_id': session_id,
+                'conversation_count': len(context['conversation_history']),
+                'last_query_type': context.get('last_query_type'),
+                'created_at': context.get('created_at')
+            })
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
