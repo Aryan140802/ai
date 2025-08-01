@@ -256,7 +256,7 @@ class DatabaseSchemaManager:
         mapped_question = question.lower()
         
         for term, actual_column in self.field_mappings.items():
-            pattern = rf'\b{re.escape(term)}\b'
+            pattern = r'\b' + re.escape(term) + r'\b'
             mapped_question = re.sub(pattern, actual_column, mapped_question, flags=re.IGNORECASE)
         
         return mapped_question
@@ -407,31 +407,37 @@ class SQLQueryProcessor:
                 continue
             
             patterns_to_clean = [
-                (f'```{actual_col}```', f'`{actual_col}`'),
-                (f'``{actual_col}``', f'`{actual_col}`'),
-                (f'"{actual_col}"', f'`{actual_col}`'),
-                (f"'{actual_col}'", f'`{actual_col}`'),
+                (r'```' + re.escape(actual_col) + r'```', f'`{actual_col}`'),
+                (r'``' + re.escape(actual_col) + r'``', f'`{actual_col}`'),
+                (r'"' + re.escape(actual_col) + r'"', f'`{actual_col}`'),
+                (r"'" + re.escape(actual_col) + r"'", f'`{actual_col}`'),
             ]
             
             for pattern, replacement in patterns_to_clean:
                 sql = sql.replace(pattern, replacement)
             
-            sql = re.sub(f'\\b{re.escape(actual_col)}\\b(?![`"\'])', f'`{actual_col}`', sql, flags=re.IGNORECASE)
+            sql = re.sub(r'\b' + re.escape(actual_col) + r'\b(?![`"\'])', f'`{actual_col}`', sql, flags=re.IGNORECASE)
         
         sql = re.sub(r'`{2,}', '`', sql)
         
         return sql
     
     def _optimize_text_searches(self, sql: str) -> str:
-        """Optimize text field searches"""
+        """Optimize text field searches without backslashes in f-strings"""
         if 'UserMaster' not in self.schema_manager.schema_cache:
             return sql
             
         for col_name, col_info in self.schema_manager.schema_cache['UserMaster'].items():
             if col_info.get('type') in ['varchar', 'text', 'char']:
+                # Pre-construct patterns to avoid backslashes in f-strings
+                single_quote_pattern = r'`{}`\s*=\s*\'([^\']*)\''.format(col_name)
+                double_quote_pattern = r'`{}`\s*=\s*\"([^\"]*)\}'.format(col_name)
+                single_quote_replacement = r'`{}` LIKE \'%\1%\'".format(col_name)
+                double_quote_replacement = r'`{}` LIKE \'%\1%\'".format(col_name)
+                
                 patterns = [
-                    (f"`{col_name}`\\s*=\\s*'([^']*)'", f"`{col_name}` LIKE '%\\1%'"),
-                    (f"`{col_name}`\\s*=\\s*\"([^\"]*)\"", f"`{col_name}` LIKE '%\\1%'"),
+                    (single_quote_pattern, single_quote_replacement),
+                    (double_quote_pattern, double_quote_replacement),
                 ]
                 
                 for pattern, replacement in patterns:
@@ -465,19 +471,20 @@ class ResultFormatter:
         
         if len(result) == 1 and len(result[0]) == 1:
             value = list(result[0].values())[0]
+            value = str(value) if value is not None else ''
             if "count" in question.lower():
-                return f"""
+                return """
                 ╔════════════════════════════╗
                 ║         Query Result        ║
                 ╚════════════════════════════╝
-                Total employees: {value}
-                """
-            return f"""
+                Total employees: {}
+                """.format(value)
+            return """
             ╔════════════════════════════╗
             ║         Query Result        ║
             ╚════════════════════════════╝
-            Result: {value}
-            """
+            Result: {}
+            """.format(value)
         
         if len(result) == 1:
             return ResultFormatter._format_single_record(result[0])
@@ -494,15 +501,15 @@ class ResultFormatter:
             "Verify the data exists in the database"
         ]
         
-        return f"""
+        return """
         ╔════════════════════════════╗
         ║        No Results Found    ║
         ╚════════════════════════════╝
-        No employee records found for: {question}
+        No employee records found for: {}
         
         📌 Suggestions:
-        {'\n'.join(f"  • {suggestion}" for suggestion in suggestions)}
-        """
+        {}
+        """.format(question, '\n'.join(f"  • {suggestion}" for suggestion in suggestions))
     
     @staticmethod
     def _format_single_record(record: Dict) -> str:
@@ -608,7 +615,7 @@ class ResultFormatter:
         for row in result:
             try:
                 formatted_row = "│" + " │ ".join(
-                    (str(row.get(col, '')[:27]) + "...").ljust(width) if len(str(row.get(col, ''))) > 30
+                    str(row.get(col, ''))[:27] + "..." if len(str(row.get(col, ''))) > 30
                     else str(row.get(col, '')).ljust(width)
                     for col, width in zip(columns, col_widths)
                 ) + "│"
@@ -800,13 +807,13 @@ class TeamDetailsAssistant:
             print(f"DEBUG - SQL is valid: {is_valid}")
             
             if not is_valid:
-                return f"""
+                return """
                 ╔════════════════════════════╗
                 ║        Invalid Query       ║
                 ╚════════════════════════════╝
                 Could not generate valid SQL query. Please rephrase your question.
-                Debug info: {raw_sql}
-                """
+                Debug info: {}
+                """.format(raw_sql)
             
             result = self._execute_query(final_sql)
             
@@ -828,12 +835,12 @@ class TeamDetailsAssistant:
             logger.error(f"Question processing error: {e}\n{error_trace}")
             print(f"DEBUG - Question processing error: {e}")
             print(f"DEBUG - Full traceback: {error_trace}")
-            return f"""
+            return """
             ╔════════════════════════════╗
             ║        Error Occurred      ║
             ╚════════════════════════════╝
-            Error processing your question: {str(e)}
-            """
+            Error processing your question: {}
+            """.format(str(e))
     
     def _generate_sql_with_llm(self, question: str) -> str:
         """Generate SQL using LLM"""
@@ -841,15 +848,15 @@ class TeamDetailsAssistant:
             schema_info = self.schema_manager.get_column_info_string()
             safe_columns = self.schema_manager.get_safe_columns()
             
-            context = f"""
-Question: {question}
+            context = """
+Question: {}
 
 Database: UserMaster table with the following columns:
-{schema_info}
+{}
 
 IMPORTANT RULES:
 1. ONLY use SELECT statements
-2. ONLY reference these available columns: {', '.join(safe_columns)}
+2. ONLY reference these available columns: {}
 3. Use LIKE '%value%' for text searches, not exact equals
 4. For numeric IDs, use exact equals (=)
 5. Always include proper table name: UserMaster
@@ -857,7 +864,7 @@ IMPORTANT RULES:
 7. Limit results appropriately (use LIMIT clause)
 
 Generate a SQL query to answer the question.
-"""
+""".format(question, schema_info, ', '.join(safe_columns))
             
             if LANGCHAIN_AVAILABLE:
                 db_cfg = TEAM_DB_CONFIG['db_config']
@@ -955,12 +962,12 @@ def Teammain(query: str) -> str:
         return result
     except Exception as e:
         logger.error(f"Main function error: {e}")
-        return f"""
+        return """
         ╔════════════════════════════╗
         ║        Error Occurred      ║
         ╚════════════════════════════╝
-        An unexpected error occurred: {str(e)}
-        """
+        An unexpected error occurred: {}
+        """.format(str(e))
     finally:
         assistant.cleanup()
 
@@ -986,12 +993,12 @@ if __name__ == "__main__":
             result = Teammain(query)
             print(result)
         except Exception as e:
-            print(f"""
+            print("""
             ╔════════════════════════════╗
             ║        Test Failed         ║
             ╚════════════════════════════╝
-            Error in test {i}: {e}
-            """)
+            Error in test {}: {}
+            """.format(i, e))
         print("─" * 40)
     
     print("\n✅ All tests completed!")
