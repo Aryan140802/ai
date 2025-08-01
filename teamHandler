@@ -419,21 +419,30 @@ class SQLQueryProcessor:
         """Fix column references to match actual schema"""
         safe_columns = self.schema_manager.get_safe_columns()
         
-        # Create a mapping of quoted and unquoted column references
+        # First, normalize all existing backticks and quotes
+        # Remove any existing backticks/quotes around column names
         for actual_col in safe_columns:
             if actual_col == '*':
                 continue
-                
-            # Replace various quote styles with backticks
-            patterns = [
-                (f'`{actual_col}`', f'`{actual_col}`'),
-                (f'"{actual_col}"', f'`{actual_col}`'),
-                (f"'{actual_col}'", f'`{actual_col}`'),
-                (f'\\b{re.escape(actual_col)}\\b', f'`{actual_col}`')
+            
+            # Remove various quote patterns and replace with single backticks
+            patterns_to_clean = [
+                (f'```{actual_col}```', f'`{actual_col}`'),  # Triple backticks
+                (f'``{actual_col}``', f'`{actual_col}`'),    # Double backticks
+                (f'"{actual_col}"', f'`{actual_col}`'),       # Double quotes
+                (f"'{actual_col}'", f'`{actual_col}`'),       # Single quotes
             ]
             
-            for pattern, replacement in patterns:
-                sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
+            for pattern, replacement in patterns_to_clean:
+                sql = sql.replace(pattern, replacement)
+            
+            # Handle unquoted column names (but be careful with SQL keywords)
+            # Use word boundaries to avoid partial matches
+            import re
+            sql = re.sub(f'\\b{re.escape(actual_col)}\\b(?![`"\'])', f'`{actual_col}`', sql, flags=re.IGNORECASE)
+        
+        # Clean up any remaining double backticks that might have been created
+        sql = re.sub(r'`{2,}', '`', sql)
         
         return sql
     
@@ -712,9 +721,11 @@ class TeamDetailsAssistant:
             return False
     
     def _init_database(self) -> bool:
-        """Initialize database connection"""
+        """Initialize database connection with enhanced debugging"""
         try:
             db_cfg = TEAM_DB_CONFIG['db_config']
+            print(f"DEBUG - Connecting to database: {db_cfg['host']}/{db_cfg['database']}")
+            
             self.db_connection = pymysql.connect(
                 host=db_cfg['host'],
                 user=db_cfg['user'],
@@ -729,14 +740,26 @@ class TeamDetailsAssistant:
             
             # Test connection
             with self.db_connection.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
+                cursor.execute("SELECT 1 as test")
+                test_result = cursor.fetchone()
+                print(f"DEBUG - Database connection test: {test_result}")
             
+            print("DEBUG - Database connection established successfully")
             logger.info("Database connection established")
             return True
             
         except Exception as e:
-            logger.error(f"Database connection failed: {e}")
+            error_msg = f"Database connection failed: {e}"
+            logger.error(error_msg)
+            print(f"DEBUG - {error_msg}")
+            
+            # Additional debugging info
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            print(f"DEBUG - Connection details:")
+            print(f"DEBUG -   Host: {db_cfg['host']}")
+            print(f"DEBUG -   User: {db_cfg['user']}")
+            print(f"DEBUG -   Database: {db_cfg['database']}")
+            
             return False
     
     def _init_llm(self) -> bool:
