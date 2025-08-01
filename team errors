@@ -1,35 +1,94 @@
-tell me details about aryan
+Team Info
+team info
+[01/Aug/2025 13:08:58] "POST /EIS-GINI/ HTTP/1.0" 200 389
+<class 'str'>
+give me details of aryan
+give me details of aryan
+DEBUG - Loading database schema...
+DEBUG - UserMaster table found, loading columns...
+DEBUG - Found 29 columns in UserMaster table
+DEBUG - Processing columns:
+DEBUG -   Column: Uid (int)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: EmpName (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Pwd (varchar)
+DEBUG -     -> Skipped (sensitive)
+DEBUG -   Column: SecQ (varchar)
+DEBUG -     -> Skipped (sensitive)
+DEBUG -   Column: SecA (varchar)
+DEBUG -     -> Skipped (sensitive)
+DEBUG -   Column: Project (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Team (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Rid (int)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Level (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Contact (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Mandatory (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: SuperLevel (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Tid (int)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Enable (int)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: TcsDoj (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: SbiDoj (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: TcsEmail (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: SbiEmail (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: AdId (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: IdCard (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: AccessCard (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Onboarding (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: OnboardedOn (date)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: PvcAppId (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: PvcStatus (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: PvcActionDate (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: BACompany (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Phone (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG -   Column: Position (varchar)
+DEBUG -     -> Added to safe columns
+DEBUG - Schema loaded with 26 safe columns: ['Uid', 'EmpName', 'Project', 'Team', 'Rid', 'Level', 'Contact', 'Mandatory', 'SuperLevel', 'Tid', 'Enable', 'TcsDoj', 'SbiDoj', 'TcsEmail', 'SbiEmail', 'AdId', 'IdCard', 'AccessCard', 'Onboarding', 'OnboardedOn', 'PvcAppId', 'PvcStatus', 'PvcActionDate', 'BACompany', 'Phone', 'Position']
+DEBUG - Field mappings created
+DEBUG - Processing question: give me details of aryan
+DEBUG - Mapped question: give me details of aryan
+DEBUG - Using LLM for SQL generation
+DEBUG - Raw SQL generated: Here is the SQL query to answer the question:
 
+Question: give me details of aryan
 
-❌ Database Error: (1054, "Unknown column 'Uid' in 'field list'")
-SQL Query: SELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level` LIMIT 50
-Original LLM output: "Question: tell me details about aryan\n\nSQLQuery:\nSELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%aryan%' AND `Enable` = 1\nLIMIT 5;"
-Please check the query syntax and try again.
+SQLQuery:
+```sql
+SELECT `EmpName`, `Project`, `Team`, `Level`, `Contact`
+FROM `UserMaster`
+WHERE `EmpName` LIKE '%aryan%'
+LIMIT 5;
+```
 
-details of abhishek
-
-
-❌ Database Error: (1054, "Unknown column 'Uid' in 'field list'")
-SQL Query: SELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level` LIMIT 50
-Original LLM output: "Question: details of abhishek\n\nSQLQuery:\nSELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%abhishek%';"
-Please check the query syntax and try again.
-
-
-
-phone number of aryan
-
-❌ Database Error: (1054, "Unknown column 'Contact' in 'field list'")
-SQL Query: SELECT `Contact` LIMIT 50
-Original LLM output: "Question: \nContact number of aryan\n\nSQLQuery:\nSELECT `Contact`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%aryan%';"
-Please check the query syntax and try again.
-
-
-details of 2798445
-
-❌ Database Error: (1054, "Unknown column 'Uid' in 'field list'")
-SQL Query: SELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level` LIMIT 50
-Original LLM output: 'Question: details of 2798445\n\nSQLQuery:\nSELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level`\nFROM `UserMaster`\nWHERE `Uid` = 2798445;\n\nNote: Since the Uid does not exist in the provided data, this query will return no results.'
-Please check the query syntax and try again.
-
-
-
+This query will return the details (EmpName, Project, Team, Level, and Contact) of all users whose EmpName contains 'aryan', up to a maximum of 5 results.
+DEBUG - Final SQL: SELECT ``EmpName``, ``Project``, ``Team``, ``Level``, ``Contact`` FROM `UserMaster` WHERE ``EmpName`` LIKE '%aryan%' LIMIT 5
+DEBUG - SQL is valid: True
+DEBUG - Executing SQL: SELECT ``EmpName``, ``Project``, ``Team``, ``Level``, ``Contact`` FROM `UserMaster` WHERE ``EmpName`` LIKE '%aryan%' LIMIT 5
+DEBUG - MySQL Error 1064: (1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '``, ``Project``, ``Team``, ``Level``, ``Contact`` FROM `UserMaster` WHERE ``EmpN' at line 1")
+DEBUG - Failed SQL: SELECT ``EmpName``, ``Project``, ``Team``, ``Level``, ``Contact`` FROM `UserMaster` WHERE ``EmpName`` LIKE '%aryan%' LIMIT 5
+---------
+❌ Query execution failed. Check the debug output above for details.
+after output
