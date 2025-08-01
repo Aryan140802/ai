@@ -1,0 +1,35 @@
+tell me details about aryan
+
+
+❌ Database Error: (1054, "Unknown column 'Uid' in 'field list'")
+SQL Query: SELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level` LIMIT 50
+Original LLM output: "Question: tell me details about aryan\n\nSQLQuery:\nSELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%aryan%' AND `Enable` = 1\nLIMIT 5;"
+Please check the query syntax and try again.
+
+details of abhishek
+
+
+❌ Database Error: (1054, "Unknown column 'Uid' in 'field list'")
+SQL Query: SELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level` LIMIT 50
+Original LLM output: "Question: details of abhishek\n\nSQLQuery:\nSELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%abhishek%';"
+Please check the query syntax and try again.
+
+
+
+phone number of aryan
+
+❌ Database Error: (1054, "Unknown column 'Contact' in 'field list'")
+SQL Query: SELECT `Contact` LIMIT 50
+Original LLM output: "Question: \nContact number of aryan\n\nSQLQuery:\nSELECT `Contact`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%aryan%';"
+Please check the query syntax and try again.
+
+
+details of 2798445
+
+❌ Database Error: (1054, "Unknown column 'Uid' in 'field list'")
+SQL Query: SELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level` LIMIT 50
+Original LLM output: 'Question: details of 2798445\n\nSQLQuery:\nSELECT `Uid`, `EmpName`, `Project`, `Team`, `Contact`, `TcsEmail`, `Position`, `Level`\nFROM `UserMaster`\nWHERE `Uid` = 2798445;\n\nNote: Since the Uid does not exist in the provided data, this query will return no results.'
+Please check the query syntax and try again.
+
+
+
