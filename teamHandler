@@ -82,9 +82,38 @@ class DatabaseSchemaManager:
         self.load_schema()
     
     def load_schema(self):
-        """Load and cache database schema"""
+        """Load and cache database schema with enhanced debugging"""
         try:
+            print("DEBUG - Loading database schema...")
+            
             with self.connection.cursor() as cursor:
+                # First, check if UserMaster table exists
+                cursor.execute("""
+                    SELECT TABLE_NAME 
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'UserMaster'
+                """, (TEAM_DB_CONFIG['db_config']['database'],))
+                
+                table_check = cursor.fetchone()
+                if not table_check:
+                    # Try to find similar tables
+                    cursor.execute("""
+                        SELECT TABLE_NAME 
+                        FROM INFORMATION_SCHEMA.TABLES 
+                        WHERE TABLE_SCHEMA = %s AND TABLE_NAME LIKE '%user%'
+                    """, (TEAM_DB_CONFIG['db_config']['database'],))
+                    similar_tables = cursor.fetchall()
+                    
+                    error_msg = "UserMaster table not found in database."
+                    if similar_tables:
+                        table_names = [t['TABLE_NAME'] for t in similar_tables]
+                        error_msg += f" Similar tables found: {', '.join(table_names)}"
+                    
+                    print(f"DEBUG - {error_msg}")
+                    raise Exception(error_msg)
+                
+                print("DEBUG - UserMaster table found, loading columns...")
+                
                 # Get all columns for UserMaster table
                 cursor.execute("""
                     SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT
@@ -94,22 +123,28 @@ class DatabaseSchemaManager:
                 """, (TEAM_DB_CONFIG['db_config']['database'],))
                 
                 columns = cursor.fetchall()
+                print(f"DEBUG - Found {len(columns)} columns in UserMaster table")
                 
                 if not columns:
-                    raise Exception("UserMaster table not found or no columns accessible")
+                    raise Exception("UserMaster table exists but no columns are accessible")
                 
                 self.schema_cache['UserMaster'] = {}
                 self.safe_columns = []
                 
+                print("DEBUG - Processing columns:")
                 for col in columns:
                     col_name = col['COLUMN_NAME']
                     col_type = col['DATA_TYPE']
                     
+                    print(f"DEBUG -   Column: {col_name} ({col_type})")
+                    
                     # Skip sensitive fields
                     if is_sensitive_field(col_name):
+                        print(f"DEBUG -     -> Skipped (sensitive)")
                         logger.info(f"Skipping sensitive field: {col_name}")
                         continue
                     
+                    print(f"DEBUG -     -> Added to safe columns")
                     self.safe_columns.append(col_name)
                     self.schema_cache['UserMaster'][col_name] = {
                         'type': col_type,
@@ -118,16 +153,36 @@ class DatabaseSchemaManager:
                         'comment': col['COLUMN_COMMENT'] or ''
                     }
                 
+                print(f"DEBUG - Schema loaded with {len(self.safe_columns)} safe columns: {self.safe_columns}")
                 logger.info(f"Loaded schema with {len(self.safe_columns)} safe columns: {self.safe_columns}")
                 
                 # Create intelligent field mappings based on actual columns
                 self._create_field_mappings()
+                print("DEBUG - Field mappings created")
                 
         except Exception as e:
             logger.error(f"Schema loading failed: {e}")
-            # Set default safe columns if schema loading fails
-            self.safe_columns = ['*']  # Will be handled by query processor
-            raise
+            print(f"DEBUG - Schema loading failed: {e}")
+            
+            # Set minimal fallback columns if schema loading fails
+            self.safe_columns = []
+            print("DEBUG - Using fallback: trying to get columns from table directly")
+            
+            try:
+                with self.connection.cursor() as cursor:
+                    cursor.execute("DESCRIBE UserMaster")
+                    desc_result = cursor.fetchall()
+                    for row in desc_result:
+                        col_name = row['Field']
+                        if not is_sensitive_field(col_name):
+                            self.safe_columns.append(col_name)
+                    print(f"DEBUG - Fallback found columns: {self.safe_columns}")
+            except Exception as fallback_error:
+                print(f"DEBUG - Fallback also failed: {fallback_error}")
+                self.safe_columns = ['*']  # Last resort
+            
+            if not self.safe_columns:
+                raise Exception(f"Could not load any safe columns from database: {e}")
     
     def _create_field_mappings(self):
         """Create intelligent field mappings based on actual column names"""
@@ -702,7 +757,7 @@ class TeamDetailsAssistant:
             return False
     
     def process_question(self, question: str) -> str:
-        """Process user question and return results"""
+        """Process user question and return results with enhanced debugging"""
         if not self.initialized and not self.initialize():
             return "❌ Team Details Assistant initialization failed. Please check database connection."
         
@@ -710,17 +765,26 @@ class TeamDetailsAssistant:
             return "❌ Question blocked for security reasons."
         
         try:
+            print(f"DEBUG - Processing question: {question}")
+            
             # Map user terms to database columns
             mapped_question = self.schema_manager.map_user_terms(question)
+            print(f"DEBUG - Mapped question: {mapped_question}")
             
             # Generate SQL
             if self.llm and LANGCHAIN_AVAILABLE:
+                print("DEBUG - Using LLM for SQL generation")
                 raw_sql = self._generate_sql_with_llm(mapped_question)
             else:
+                print("DEBUG - Using fallback SQL generation")
                 raw_sql = self.fallback_generator.generate_sql(question)
+            
+            print(f"DEBUG - Raw SQL generated: {raw_sql}")
             
             # Process and validate SQL
             final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
+            print(f"DEBUG - Final SQL: {final_sql}")
+            print(f"DEBUG - SQL is valid: {is_valid}")
             
             if not is_valid:
                 return f"❌ Could not generate valid SQL query. Please rephrase your question.\nDebug info: {raw_sql}"
@@ -729,14 +793,19 @@ class TeamDetailsAssistant:
             result = self._execute_query(final_sql)
             
             if result is None:
-                return "❌ Query execution failed. Please try again."
+                return "❌ Query execution failed. Check the debug output above for details."
+            
+            print(f"DEBUG - Query execution successful, formatting results...")
             
             # Format and return results
             formatted_result = ResultFormatter.format_natural(result, question)
             return formatted_result
             
         except Exception as e:
-            logger.error(f"Question processing error: {e}\n{traceback.format_exc()}")
+            error_trace = traceback.format_exc()
+            logger.error(f"Question processing error: {e}\n{error_trace}")
+            print(f"DEBUG - Question processing error: {e}")
+            print(f"DEBUG - Full traceback: {error_trace}")
             return f"❌ Error processing your question: {str(e)}"
     
     def _generate_sql_with_llm(self, question: str) -> str:
@@ -787,24 +856,52 @@ Generate a SQL query to answer the question.
             return self.fallback_generator.generate_sql(question)
     
     def _execute_query(self, sql: str) -> Optional[List[Dict]]:
-        """Execute SQL query safely"""
+        """Execute SQL query safely with enhanced error handling"""
         try:
+            # Check if connection is still alive
+            if not self.db_connection.open:
+                logger.error("Database connection is closed, attempting to reconnect...")
+                if not self._init_database():
+                    return None
+            
             with self.db_connection.cursor() as cursor:
-                logger.info(f"Executing: {sql}")
+                logger.info(f"Executing SQL: {sql}")
+                print(f"DEBUG - Executing SQL: {sql}")
+                
                 cursor.execute(sql)
                 result = cursor.fetchall()
+                
                 logger.info(f"Query returned {len(result)} rows")
+                print(f"DEBUG - Query returned {len(result)} rows")
+                
                 return result
                 
         except pymysql.Error as e:
-            logger.error(f"Database error: {e}")
-            error_msg = f"Database Error: {str(e)}"
-            if "Unknown column" in str(e):
-                available_cols = ', '.join(self.schema_manager.get_safe_columns())
-                error_msg += f"\nAvailable columns: {available_cols}"
+            error_code = getattr(e, 'args', [None])[0] if hasattr(e, 'args') and e.args else 'Unknown'
+            error_msg = str(e)
+            
+            logger.error(f"MySQL Error {error_code}: {error_msg}")
+            print(f"DEBUG - MySQL Error {error_code}: {error_msg}")
+            print(f"DEBUG - Failed SQL: {sql}")
+            
+            # Provide specific error information
+            if "Unknown column" in error_msg:
+                available_cols = self.schema_manager.get_safe_columns()
+                print(f"DEBUG - Available columns: {available_cols}")
+                logger.error(f"Available columns: {available_cols}")
+            elif "Table" in error_msg and "doesn't exist" in error_msg:
+                logger.error("UserMaster table doesn't exist")
+                print("DEBUG - UserMaster table doesn't exist")
+            elif "Access denied" in error_msg:
+                logger.error("Database access denied - check credentials")
+                print("DEBUG - Database access denied")
+            
             return None
+            
         except Exception as e:
-            logger.error(f"Query execution error: {e}")
+            logger.error(f"Unexpected query execution error: {e}\n{traceback.format_exc()}")
+            print(f"DEBUG - Unexpected error: {e}")
+            print(f"DEBUG - Failed SQL: {sql}")
             return None
     
     def cleanup(self):
