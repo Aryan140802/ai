@@ -1,14 +1,7 @@
-
-Team Info
-team info
-[01/Aug/2025 14:09:06] "POST /EIS-GINI/ HTTP/1.0" 200 389
-<class 'str'>
 aryan
 aryan
-DEBUG - Connecting to database: localhost/EIS_n
-DEBUG - Database connection test: {'test': 1}
-DEBUG - Database connection established successfully
 ---------
-❌ Team Details Assistant initialization failed. Please check database connection and LLM setup.
+Session ID: 3n8nupdxqmkdgn01ximp4nk9zgh4m294
+Context history length: 1
+❌ Error processing your question: Failed to generate SQL query using LLM
 after output
-[01/Aug/2025 14:09:09] "POST /EIS-GINI/ HTTP/1.0" 200 59
