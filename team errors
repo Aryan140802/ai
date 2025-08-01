@@ -1,7 +1,159 @@
-aryan
-aryan
----------
-Session ID: 3n8nupdxqmkdgn01ximp4nk9zgh4m294
-Context history length: 1
-❌ Error processing your question: Failed to generate SQL query using LLM
-after output
+class ContextManager:
+    """Manages conversation context and provides relevant information"""
+    
+    def __init__(self, context: Dict = None):
+        self.context = context or {}
+        self.conversation_history = self.context.get('conversation_history', [])
+        self.last_query_type = self.context.get('last_query_type')
+        self.last_results = self.context.get('last_results')
+        self.current_focus = None  # Track current focus (employee/team being discussed)
+    
+    def get_relevant_context(self, current_query: str) -> str:
+        """Extract relevant context for the current query with context change detection"""
+        if not self.conversation_history:
+            return ""
+        
+        context_info = []
+        current_lower = current_query.lower()
+        
+        # Check if context has changed significantly
+        context_changed = self._detect_context_change(current_query)
+        
+        # Reset focus if context has changed
+        if context_changed:
+            self.current_focus = None
+        
+        # Check for pronouns that might reference previous queries
+        pronouns = ['he', 'she', 'they', 'him', 'her', 'them', 'his', 'their']
+        has_pronouns = any(pronoun in current_lower.split() for pronoun in pronouns)
+        
+        # Check for continuation words
+        continuation_words = ['also', 'and', 'more', 'other', 'another', 'same', 'similar']
+        has_continuation = any(word in current_lower for word in continuation_words)
+        
+        # Check for incomplete references
+        incomplete_refs = ['phone', 'email', 'contact', 'details', 'info', 'information']
+        has_incomplete_ref = any(ref in current_lower for ref in incomplete_refs) and len(current_query.split()) <= 3
+        
+        # Only use context if we're clearly continuing the same topic
+        if (has_pronouns or has_continuation or has_incomplete_ref) and not context_changed:
+            # Get the last few relevant interactions
+            recent_context = self.conversation_history[-3:]  # Last 3 interactions
+            
+            for interaction in recent_context:
+                if interaction.get('query_type') == 'team':
+                    context_info.append(f"Previous query: {interaction['query']}")
+                    
+                    # Extract names or IDs from previous responses
+                    response = interaction.get('response', '')
+                    if response:
+                        # Look for employee names or IDs in previous responses
+                        name_matches = re.findall(r'Name[:\s]+([A-Za-z\s]+)', response, re.IGNORECASE)
+                        id_matches = re.findall(r'(?:ID|Employee ID)[:\s]+(\w+)', response, re.IGNORECASE)
+                        
+                        if name_matches:
+                            context_info.append(f"Previously mentioned employee: {name_matches[0].strip()}")
+                            self.current_focus = name_matches[0].strip()
+                        if id_matches:
+                            context_info.append(f"Previously mentioned ID: {id_matches[0].strip()}")
+                            self.current_focus = id_matches[0].strip()
+        
+        return " | ".join(context_info) if context_info else ""
+    
+    def _detect_context_change(self, current_query: str) -> bool:
+        """Detect if the context has significantly changed"""
+        if not self.conversation_history or not self.current_focus:
+            return True
+        
+        current_lower = current_query.lower()
+        last_query = self.conversation_history[-1]['query'].lower()
+        
+        # Check for new name or ID reference
+        name_pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b'
+        id_pattern = r'\b\d{5,}\b'
+        
+        current_names = set(re.findall(name_pattern, current_query))
+        last_names = set(re.findall(name_pattern, last_query))
+        
+        current_ids = set(re.findall(id_pattern, current_query))
+        last_ids = set(re.findall(id_pattern, last_query))
+        
+        # Context changed if we're referring to different names/IDs
+        if (current_names and last_names and not current_names.intersection(last_names)) or \
+           (current_ids and last_ids and not current_ids.intersection(last_ids)):
+            return True
+        
+        # Check for clear new topic indicators
+        new_topic_words = ['new', 'different', 'another', 'switch', 'change', 'now', 'currently']
+        if any(word in current_lower for word in new_topic_words):
+            return True
+        
+        return False
+    
+    # ... rest of the ContextManager class remains the same ...
+
+class TeamDetailsAssistant:
+    # ... existing code ...
+    
+    def process_question(self, question: str) -> str:
+        """Process user question with improved context handling"""
+        if not self.initialized and not self.initialize():
+            return "❌ Team Details Assistant initialization failed. Please check database connection and LLM setup."
+        
+        if is_dangerous(question):
+            return "❌ Question blocked for security reasons."
+        
+        try:
+            # Enhance query with context (if applicable)
+            enhanced_question = self.context_manager.enhance_query_with_context(question)
+            
+            # If we have no context match, process as a fresh query
+            if not self.context_manager.current_focus and "|" in enhanced_question:
+                enhanced_question = question  # Reset to original question
+                
+            # Map user terms to database columns
+            mapped_question = self.schema_manager.map_user_terms(enhanced_question)
+            
+            # Generate SQL using LLM
+            raw_sql = self._generate_sql_with_llm(mapped_question)
+            
+            # Process and validate SQL
+            final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
+            
+            if not is_valid:
+                # If we failed with context, try without context
+                if enhanced_question != question:
+                    logger.info("Retrying without context...")
+                    mapped_question = self.schema_manager.map_user_terms(question)
+                    raw_sql = self._generate_sql_with_llm(mapped_question)
+                    final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
+                
+                if not is_valid:
+                    return "I couldn't understand your question. Could you please rephrase it or provide more details?"
+            
+            # Execute query
+            result = self._execute_query(final_sql)
+            
+            if result is None:
+                return "I encountered an error while processing your request. Please try again."
+            
+            # Format and return results
+            formatted_result = self.result_formatter.format_natural(result, question)
+            
+            # If we got no results but used context, try without context
+            if not result and enhanced_question != question:
+                logger.info("No results with context, retrying without context...")
+                mapped_question = self.schema_manager.map_user_terms(question)
+                raw_sql = self._generate_sql_with_llm(mapped_question)
+                final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
+                
+                if is_valid:
+                    result = self._execute_query(final_sql)
+                    if result:
+                        return self.result_formatter.format_natural(result, question)
+            
+            return formatted_result if result else "I couldn't find any matching records. Please check your query and try again."
+            
+        except Exception as e:
+            logger.error(f"Question processing error: {e}\n{traceback.format_exc()}")
+            return "I'm having trouble understanding your request. Could you please rephrase it?"
