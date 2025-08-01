@@ -23,7 +23,7 @@ TEAM_DB_CONFIG = {
         "password": "root123",
         "database": "EIS_n"
     },
-    "include_tables": ["UserMaster", "tcsdoj", "sbidoj"],  # Added joining date tables
+    "include_tables": ["UserMaster"],
 }
 
 # Blocked patterns for security
@@ -82,6 +82,8 @@ class ContextManager:
             return ""
         
         context_info = []
+        
+        # Look for pronoun references and context clues
         current_lower = current_query.lower()
         
         # Check for pronouns that might reference previous queries
@@ -149,8 +151,6 @@ class ContextManager:
             return "detailed_info"
         elif any(word in query_lower for word in ['he', 'she', 'him', 'her', 'they', 'them']):
             return "pronoun_reference"
-        elif any(word in query_lower for word in ['join', 'joining', 'doj', 'date of joining']):
-            return "joining_date_info"
         
         return "general"
 
@@ -167,7 +167,7 @@ class DatabaseSchemaManager:
     def load_schema(self):
         """Load and cache database schema with enhanced debugging"""
         try:
-            logger.info("Loading database schema...")
+            print("DEBUG - Loading database schema...")
             
             with self.connection.cursor() as cursor:
                 # First, check if UserMaster table exists
@@ -179,7 +179,23 @@ class DatabaseSchemaManager:
                 
                 table_check = cursor.fetchone()
                 if not table_check:
-                    raise Exception("UserMaster table not found in database")
+                    # Try to find similar tables
+                    cursor.execute("""
+                        SELECT TABLE_NAME 
+                        FROM INFORMATION_SCHEMA.TABLES 
+                        WHERE TABLE_SCHEMA = %s AND TABLE_NAME LIKE '%user%'
+                    """, (TEAM_DB_CONFIG['db_config']['database'],))
+                    similar_tables = cursor.fetchall()
+                    
+                    error_msg = "UserMaster table not found in database."
+                    if similar_tables:
+                        table_names = [t['TABLE_NAME'] for t in similar_tables]
+                        error_msg += f" Similar tables found: {', '.join(table_names)}"
+                    
+                    print(f"DEBUG - {error_msg}")
+                    raise Exception(error_msg)
+                
+                print("DEBUG - UserMaster table found, loading columns...")
                 
                 # Get all columns for UserMaster table
                 cursor.execute("""
@@ -190,6 +206,7 @@ class DatabaseSchemaManager:
                 """, (TEAM_DB_CONFIG['db_config']['database'],))
                 
                 columns = cursor.fetchall()
+                print(f"DEBUG - Found {len(columns)} columns in UserMaster table")
                 
                 if not columns:
                     raise Exception("UserMaster table exists but no columns are accessible")
@@ -197,15 +214,20 @@ class DatabaseSchemaManager:
                 self.schema_cache['UserMaster'] = {}
                 self.safe_columns = []
                 
+                print("DEBUG - Processing columns:")
                 for col in columns:
                     col_name = col['COLUMN_NAME']
                     col_type = col['DATA_TYPE']
                     
+                    print(f"DEBUG -   Column: {col_name} ({col_type})")
+                    
                     # Skip sensitive fields
                     if is_sensitive_field(col_name):
+                        print(f"DEBUG -     -> Skipped (sensitive)")
                         logger.info(f"Skipping sensitive field: {col_name}")
                         continue
                     
+                    print(f"DEBUG -     -> Added to safe columns")
                     self.safe_columns.append(col_name)
                     self.schema_cache['UserMaster'][col_name] = {
                         'type': col_type,
@@ -214,43 +236,36 @@ class DatabaseSchemaManager:
                         'comment': col['COLUMN_COMMENT'] or ''
                     }
                 
-                logger.info(f"Loaded schema with {len(self.safe_columns)} safe columns")
-                
-                # Check for joining date tables
-                self._check_joining_date_tables()
+                print(f"DEBUG - Schema loaded with {len(self.safe_columns)} safe columns: {self.safe_columns}")
+                logger.info(f"Loaded schema with {len(self.safe_columns)} safe columns: {self.safe_columns}")
                 
                 # Create intelligent field mappings based on actual columns
                 self._create_field_mappings()
+                print("DEBUG - Field mappings created")
                 
         except Exception as e:
             logger.error(f"Schema loading failed: {e}")
-            raise Exception(f"Could not load database schema: {e}")
-    
-    def _check_joining_date_tables(self):
-        """Check for existence of joining date tables"""
-        try:
-            with self.connection.cursor() as cursor:
-                for table in ['tcsdoj', 'sbidoj']:
-                    cursor.execute("""
-                        SELECT TABLE_NAME 
-                        FROM INFORMATION_SCHEMA.TABLES 
-                        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-                    """, (TEAM_DB_CONFIG['db_config']['database'], table))
-                    
-                    if cursor.fetchone():
-                        # Get columns for the table
-                        cursor.execute("""
-                            SELECT COLUMN_NAME, DATA_TYPE 
-                            FROM INFORMATION_SCHEMA.COLUMNS 
-                            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-                        """, (TEAM_DB_CONFIG['db_config']['database'], table))
-                        
-                        columns = cursor.fetchall()
-                        if columns:
-                            self.schema_cache[table] = {col['COLUMN_NAME']: {'type': col['DATA_TYPE']} for col in columns}
-                            logger.info(f"Found joining date table: {table}")
-        except Exception as e:
-            logger.warning(f"Could not check joining date tables: {e}")
+            print(f"DEBUG - Schema loading failed: {e}")
+            
+            # Set minimal fallback columns if schema loading fails
+            self.safe_columns = []
+            print("DEBUG - Using fallback: trying to get columns from table directly")
+            
+            try:
+                with self.connection.cursor() as cursor:
+                    cursor.execute("DESCRIBE UserMaster")
+                    desc_result = cursor.fetchall()
+                    for row in desc_result:
+                        col_name = row['Field']
+                        if not is_sensitive_field(col_name):
+                            self.safe_columns.append(col_name)
+                    print(f"DEBUG - Fallback found columns: {self.safe_columns}")
+            except Exception as fallback_error:
+                print(f"DEBUG - Fallback also failed: {fallback_error}")
+                self.safe_columns = ['*']  # Last resort
+            
+            if not self.safe_columns:
+                raise Exception(f"Could not load any safe columns from database: {e}")
     
     def _create_field_mappings(self):
         """Create intelligent field mappings based on actual column names"""
@@ -346,12 +361,6 @@ class DatabaseSchemaManager:
             
             info_parts.append(f"{col_name}: {usage}")
         
-        # Add info about joining date tables if they exist
-        if 'tcsdoj' in self.schema_cache:
-            info_parts.append("\nTCS Date of Joining table available (tcsdoj)")
-        if 'sbidoj' in self.schema_cache:
-            info_parts.append("\nSBI Date of Joining table available (sbidoj)")
-        
         return "\n".join(info_parts)
 
 class SQLQueryProcessor:
@@ -386,10 +395,6 @@ class SQLQueryProcessor:
             # Fix column references
             sql = self._fix_column_references(sql)
             
-            # Special handling for joining date queries
-            if self._is_joining_date_query(question):
-                sql = self._handle_joining_date_query(sql, question)
-            
             # Apply context-based optimizations
             if self.context_manager:
                 sql = self._apply_context_optimizations(sql, question)
@@ -397,9 +402,8 @@ class SQLQueryProcessor:
             # Optimize for text searches
             sql = self._optimize_text_searches(sql)
             
-            # Add limits (except for joining date queries)
-            if not self._is_joining_date_query(question):
-                sql = self._finalize_sql(sql)
+            # Add limits and final cleanup
+            sql = self._finalize_sql(sql)
             
             logger.info(f"Final processed SQL: {sql}")
             return sql, True
@@ -407,59 +411,6 @@ class SQLQueryProcessor:
         except Exception as e:
             logger.error(f"SQL processing error: {e}")
             return "", False
-    
-    def _is_joining_date_query(self, question: str) -> bool:
-        """Check if this is a joining date query"""
-        if not question:
-            return False
-        return any(word in question.lower() for word in ['join', 'joining', 'doj', 'date of joining'])
-    
-    def _handle_joining_date_query(self, sql: str, question: str) -> str:
-        """Modify SQL to handle joining date queries"""
-        # Check if we have joining date tables
-        has_tcs_doj = 'tcsdoj' in self.schema_manager.schema_cache
-        has_sbi_doj = 'sbidoj' in self.schema_manager.schema_cache
-        
-        if not has_tcs_doj and not has_sbi_doj:
-            return sql
-        
-        # Extract the base query conditions
-        where_clause = ""
-        if "WHERE" in sql.upper():
-            where_start = sql.upper().index("WHERE")
-            where_clause = sql[where_start:]
-            sql = sql[:where_start]
-        
-        # Remove any existing LIMIT clause
-        sql = re.sub(r"\s+LIMIT\s+\d+", "", sql, flags=re.IGNORECASE)
-        
-        # Create separate queries for each joining date table
-        queries = []
-        
-        if has_tcs_doj:
-            tcs_query = f"""
-            SELECT u.*, t.doj AS tcs_doj
-            FROM UserMaster u
-            JOIN tcsdoj t ON u.emp_id = t.emp_id
-            {where_clause}
-            """
-            queries.append(("TCS", tcs_query))
-        
-        if has_sbi_doj:
-            sbi_query = f"""
-            SELECT u.*, s.doj AS sbi_doj
-            FROM UserMaster u
-            JOIN sbidoj s ON u.emp_id = s.emp_id
-            {where_clause}
-            """
-            queries.append(("SBI", sbi_query))
-        
-        # If we have both tables, we'll execute both queries separately
-        if len(queries) > 1:
-            return json.dumps({"multi_query": queries})
-        
-        # If only one table, return that query
-        return queries[0][1]
     
     def _apply_context_optimizations(self, sql: str, question: str) -> str:
         """Apply context-based optimizations to SQL"""
@@ -637,10 +588,6 @@ class ResultFormatter:
         if not result:
             return self._no_results_message(question)
         
-        # Check if this is a joining date query
-        if self._is_joining_date_query(question):
-            return self._format_joining_date_results(result, question)
-        
         # Check if this is a follow-up query
         follow_up_type = "initial"
         if self.context_manager:
@@ -659,32 +606,6 @@ class ResultFormatter:
         
         # Handle multiple records
         return self._format_multiple_records(result, question, follow_up_type)
-    
-    def _is_joining_date_query(self, question: str) -> bool:
-        """Check if this is a joining date query"""
-        if not question:
-            return False
-        return any(word in question.lower() for word in ['join', 'joining', 'doj', 'date of joining'])
-    
-    def _format_joining_date_results(self, result: List[Dict], question: str) -> str:
-        """Format joining date results specially"""
-        if not result:
-            return self._no_results_message(question)
-        
-        response = "📅 Joining Date Information:\n\n"
-        
-        # Check if we have results from multiple tables
-        if isinstance(result, dict) and 'multi_query' in result:
-            for source, data in result['multi_query']:
-                response += f"🔹 {source} Joining Dates:\n"
-                if not data:
-                    response += "  No records found\n\n"
-                else:
-                    response += self._format_tabular(data) + "\n\n"
-            return response
-        
-        # Single result set
-        return response + self._format_tabular(result)
     
     def _no_results_message(self, question: str) -> str:
         """Generate helpful no results message with context awareness"""
@@ -738,15 +659,6 @@ class ResultFormatter:
             if team_info:
                 return "👥 Team Information:\n" + "\n".join(team_info)
         
-        elif follow_up_type == "joining_date_info":
-            # Focus on joining date information
-            doj_info = []
-            for key, value in record.items():
-                if any(term in key.lower() for term in ['doj', 'date of joining', 'joining']):
-                    doj_info.append(f"📅 {key}: {value}")
-            if doj_info:
-                return "📅 Joining Date Information:\n" + "\n".join(doj_info)
-        
         # Default comprehensive format
         response = "I found 1 employee record:\n\n"
         
@@ -760,9 +672,7 @@ class ResultFormatter:
             ('💼 Position', ['position', 'role', 'designation', 'title', 'job']),
             ('📊 Level', ['level', 'grade', 'band']),
             ('👥 Team', ['team', 'department', 'group', 'dept']),
-            ('📂 Project', ['project', 'proj']),
-            ('📅 TCS DOJ', ['tcs_doj', 'tcs_date_of_joining']),
-            ('📅 SBI DOJ', ['sbi_doj', 'sbi_date_of_joining'])
+            ('📂 Project', ['project', 'proj'])
         ]
         
         displayed_fields = set()
@@ -913,6 +823,7 @@ class TeamDetailsAssistant:
         """Initialize database connection with enhanced debugging"""
         try:
             db_cfg = TEAM_DB_CONFIG['db_config']
+            print(f"DEBUG - Connecting to database: {db_cfg['host']}/{db_cfg['database']}")
             
             self.db_connection = pymysql.connect(
                 host=db_cfg['host'],
@@ -922,27 +833,40 @@ class TeamDetailsAssistant:
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True,
-                connect_timeout=5,  # Reduced timeout for faster failure
-                read_timeout=15     # Reduced read timeout
+                connect_timeout=10,
+                read_timeout=30
             )
             
-            # Quick connection test
+            # Test connection
             with self.db_connection.cursor() as cursor:
                 cursor.execute("SELECT 1 as test")
+                test_result = cursor.fetchone()
+                print(f"DEBUG - Database connection test: {test_result}")
             
+            print("DEBUG - Database connection established successfully")
             logger.info("Database connection established")
             return True
             
         except Exception as e:
-            logger.error(f"Database connection failed: {e}")
+            error_msg = f"Database connection failed: {e}"
+            logger.error(error_msg)
+            print(f"DEBUG - {error_msg}")
+            
+            # Additional debugging info
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            print(f"DEBUG - Connection details:")
+            print(f"DEBUG -   Host: {db_cfg['host']}")
+            print(f"DEBUG -   User: {db_cfg['user']}")
+            print(f"DEBUG -   Database: {db_cfg['database']}")
+            
             return False
     
     def _init_llm(self) -> bool:
         """Initialize LLM (required)"""
         try:
             self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-            # Quick test
-            self.llm.invoke("SELECT 1")
+            # Test LLM
+            test_response = self.llm.invoke("SELECT 1")
             logger.info("LLM initialized successfully")
             return True
         except Exception as e:
@@ -958,43 +882,50 @@ class TeamDetailsAssistant:
             return "❌ Question blocked for security reasons."
         
         try:
-            start_time = time.time()
+            print(f"DEBUG - Processing question: {question}")
             
             # Enhance query with context
             enhanced_question = self.context_manager.enhance_query_with_context(question)
+            print(f"DEBUG - Enhanced question: {enhanced_question}")
             
             # Map user terms to database columns
             mapped_question = self.schema_manager.map_user_terms(enhanced_question)
+            print(f"DEBUG - Mapped question: {mapped_question}")
             
             # Generate SQL using LLM
+            print("DEBUG - Using LLM for SQL generation")
             raw_sql = self._generate_sql_with_llm(mapped_question)
+            
+            print(f"DEBUG - Raw SQL generated: {raw_sql}")
             
             # Process and validate SQL
             final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
+            print(f"DEBUG - Final SQL: {final_sql}")
+            print(f"DEBUG - SQL is valid: {is_valid}")
             
             if not is_valid:
-                return f"❌ Could not generate valid SQL query. Please rephrase your question."
+                return f"❌ Could not generate valid SQL query. Please rephrase your question.\nDebug info: {raw_sql}"
             
-            # Execute query
-            query_start = time.time()
+            # Execute query with performance optimization
+            start_time = time.time()
             result = self._execute_query(final_sql)
-            query_time = time.time() - query_start
-            
-            logger.info(f"Query executed in {query_time:.2f} seconds")
+            query_time = time.time() - start_time
+            print(f"DEBUG - Query executed in {query_time:.2f} seconds")
             
             if result is None:
-                return "❌ Query execution failed."
+                return "❌ Query execution failed. Check the debug output above for details."
             
-            # Format and return results
+            print(f"DEBUG - Query execution successful, formatting results...")
+            
+            # Format and return results with context awareness
             formatted_result = self.result_formatter.format_natural(result, question)
-            
-            total_time = time.time() - start_time
-            logger.info(f"Total processing time: {total_time:.2f} seconds")
-            
             return formatted_result
             
         except Exception as e:
-            logger.error(f"Question processing error: {e}\n{traceback.format_exc()}")
+            error_trace = traceback.format_exc()
+            logger.error(f"Question processing error: {e}\n{error_trace}")
+            print(f"DEBUG - Question processing error: {e}")
+            print(f"DEBUG - Full traceback: {error_trace}")
             return f"❌ Error processing your question: {str(e)}"
     
     def _generate_sql_with_llm(self, question: str) -> str:
@@ -1024,7 +955,7 @@ IMPORTANT RULES:
 4. For numeric IDs, use exact equals (=)
 5. Always include proper table name: UserMaster
 6. Do not include sensitive fields in any query
-7. For joining date queries, don't apply LIMIT and include both tcsdoj and sbidoj if available
+7. Limit results appropriately (minimum LIMIT 20)
 8. If the question refers to previous context, use the context information provided
 
 Generate a SQL query to answer the question.
@@ -1036,7 +967,7 @@ Generate a SQL query to answer the question.
             
             db_for_llm = SQLDatabase.from_uri(
                 uri,
-                include_tables=TEAM_DB_CONFIG.get("include_tables", ["UserMaster", "tcsdoj", "sbidoj"])
+                include_tables=TEAM_DB_CONFIG.get("include_tables", ["UserMaster"])
             )
             
             chain = create_sql_query_chain(self.llm, db_for_llm)
@@ -1058,22 +989,25 @@ Generate a SQL query to answer the question.
                 if not self._init_database():
                     return None
             
-            # Handle multi-query for joining dates
-            if sql.startswith('{"multi_query"'):
-                queries = json.loads(sql)['multi_query']
-                results = {}
-                
-                with self.db_connection.cursor() as cursor:
-                    for source, query in queries:
-                        cursor.execute(query)
-                        results[source] = cursor.fetchall()
-                
-                return results
-            
-            # Normal single query execution
             with self.db_connection.cursor() as cursor:
+                # Set faster fetch size
+                cursor.arraysize = 100  # Fetch more rows at once
+                
+                # Execute with timeout
+                start_time = time.time()
                 cursor.execute(sql)
-                return cursor.fetchall()
+                
+                # Stream results for large datasets
+                result = []
+                batch = cursor.fetchmany(100)  # Fetch in batches
+                while batch:
+                    result.extend(batch)
+                    if len(result) >= 1000:  # Safety limit
+                        break
+                    batch = cursor.fetchmany(100)
+                
+                logger.info(f"Query executed in {time.time() - start_time:.2f}s, returned {len(result)} rows")
+                return result
                 
         except Exception as e:
             logger.error(f"Query execution error: {e}")
@@ -1094,6 +1028,8 @@ def Teammain(query: str, context: Dict = None) -> str:
         return "❌ Please provide a valid query."
     
     logger.info(f"Processing query: {query}")
+    if context:
+        logger.info(f"Context history length: {len(context.get('conversation_history', []))}")
     
     assistant = TeamDetailsAssistant(context)
     
@@ -1128,9 +1064,7 @@ if __name__ == "__main__":
         ("his phone number", test_context),  # Context-dependent query
         ("what is his email?", test_context),  # Context-dependent query
         ("List all employees in team ABC", None),
-        ("Count employees by team", None),
-        ("Show joining dates for employee 12345", None),  # Joining date query
-        ("List all employees with their TCS and SBI joining dates", None)  # Multi-table joining date query
+        ("Count employees by team", None)
     ]
     
     print("🚀 Starting Team Details Assistant Tests with Context...")
@@ -1142,10 +1076,8 @@ if __name__ == "__main__":
             print(f"📋 Context: Previous query about {context['conversation_history'][-1]['query']}")
         print("-" * 40)
         try:
-            start_time = time.time()
             result = Teammain(query, context)
             print(result)
-            print(f"⏱️ Response time: {time.time() - start_time:.2f} seconds")
         except Exception as e:
             print(f"❌ Error in test {i}: {e}")
         print("-" * 40)
