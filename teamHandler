@@ -7,9 +7,16 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import json
 import sqlparse
-from langchain_community.utilities import SQLDatabase
-from langchain_ollama import OllamaLLM
-from langchain.chains import create_sql_query_chain
+
+# Try to import langchain components, but continue if not available
+try:
+    from langchain_community.utilities import SQLDatabase
+    from langchain_ollama import OllamaLLM
+    from langchain.chains import create_sql_query_chain
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    print("Warning: LangChain not available. Using fallback SQL generation.")
 
 # --- TEAM DETAILS CONFIGURATION ---
 TEAM_DB_CONFIG = {
@@ -39,19 +46,29 @@ SENSITIVE_PATTERNS = [
 ]
 
 # Setup logging
+log_dir = os.path.expanduser("~")
+log_file = os.path.join(log_dir, ".team_details_ai.log")
+
 logging.basicConfig(
-    filename=os.path.expanduser("~/.team_details_ai.log"),
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
 def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
+    if not text:
+        return False
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
 def is_sensitive_field(field_name: str) -> bool:
     """Check if field name contains sensitive information"""
+    if not field_name:
+        return False
     return any(re.search(pattern, field_name.lower()) for pattern in SENSITIVE_PATTERNS)
 
 class DatabaseSchemaManager:
@@ -61,6 +78,7 @@ class DatabaseSchemaManager:
         self.connection = connection
         self.schema_cache = {}
         self.field_mappings = {}
+        self.safe_columns = []
         self.load_schema()
     
     def load_schema(self):
@@ -81,7 +99,7 @@ class DatabaseSchemaManager:
                     raise Exception("UserMaster table not found or no columns accessible")
                 
                 self.schema_cache['UserMaster'] = {}
-                safe_columns = []
+                self.safe_columns = []
                 
                 for col in columns:
                     col_name = col['COLUMN_NAME']
@@ -92,7 +110,7 @@ class DatabaseSchemaManager:
                         logger.info(f"Skipping sensitive field: {col_name}")
                         continue
                     
-                    safe_columns.append(col_name)
+                    self.safe_columns.append(col_name)
                     self.schema_cache['UserMaster'][col_name] = {
                         'type': col_type,
                         'nullable': col['IS_NULLABLE'] == 'YES',
@@ -100,92 +118,88 @@ class DatabaseSchemaManager:
                         'comment': col['COLUMN_COMMENT'] or ''
                     }
                 
-                logger.info(f"Loaded schema with {len(safe_columns)} safe columns: {safe_columns}")
+                logger.info(f"Loaded schema with {len(self.safe_columns)} safe columns: {self.safe_columns}")
                 
                 # Create intelligent field mappings based on actual columns
-                self._create_field_mappings(safe_columns)
+                self._create_field_mappings()
                 
         except Exception as e:
             logger.error(f"Schema loading failed: {e}")
+            # Set default safe columns if schema loading fails
+            self.safe_columns = ['*']  # Will be handled by query processor
             raise
     
-    def _create_field_mappings(self, columns: List[str]):
+    def _create_field_mappings(self):
         """Create intelligent field mappings based on actual column names"""
         self.field_mappings = {}
         
-        # Common search terms to actual column mappings
-        mapping_patterns = {
-            # ID related
-            r"(employee_?id|emp_?id|user_?id|id)\b": self._find_id_column(columns),
-            # Name related  
-            r"(name|employee_?name|emp_?name|full_?name)\b": self._find_name_column(columns),
-            # Contact related
-            r"(phone|mobile|contact|phone_?number|cell)\b": self._find_contact_column(columns),
-            # Email related
-            r"(email|mail|e_?mail)\b": self._find_email_column(columns),
-            # Position related
-            r"(position|role|job|designation|title)\b": self._find_position_column(columns),
-            # Team related
-            r"(team|group|department|dept)\b": self._find_team_column(columns),
-            # Project related
-            r"(project|proj)\b": self._find_project_column(columns),
-            # Level related
-            r"(level|grade|band)\b": self._find_level_column(columns),
-        }
+        # Find actual columns for common terms
+        id_col = self._find_column_by_patterns(['uid', 'user_?id', 'emp_?id', 'employee_?id', '^id$'])
+        name_col = self._find_column_by_patterns(['name', 'emp_?name', 'employee_?name', 'full_?name'])
+        contact_col = self._find_column_by_patterns(['contact', 'phone', 'mobile', 'cell'])
+        email_col = self._find_column_by_patterns(['email', 'mail', 'e_?mail'])
+        position_col = self._find_column_by_patterns(['position', 'role', 'designation', 'title'])
+        team_col = self._find_column_by_patterns(['team', 'group', 'department', 'dept'])
+        project_col = self._find_column_by_patterns(['project', 'proj'])
+        level_col = self._find_column_by_patterns(['level', 'grade', 'band'])
         
-        for pattern, actual_column in mapping_patterns.items():
-            if actual_column:
-                self.field_mappings[pattern] = actual_column
+        # Create mappings
+        if id_col:
+            self.field_mappings['id'] = id_col
+            self.field_mappings['employee_id'] = id_col
+            self.field_mappings['emp_id'] = id_col
+            self.field_mappings['user_id'] = id_col
+        
+        if name_col:
+            self.field_mappings['name'] = name_col
+            self.field_mappings['employee_name'] = name_col
+            self.field_mappings['emp_name'] = name_col
+        
+        if contact_col:
+            self.field_mappings['phone'] = contact_col
+            self.field_mappings['mobile'] = contact_col
+            self.field_mappings['contact'] = contact_col
+            self.field_mappings['phone_number'] = contact_col
+        
+        if email_col:
+            self.field_mappings['email'] = email_col
+            self.field_mappings['mail'] = email_col
+        
+        if position_col:
+            self.field_mappings['position'] = position_col
+            self.field_mappings['role'] = position_col
+            self.field_mappings['designation'] = position_col
+        
+        if team_col:
+            self.field_mappings['team'] = team_col
+            self.field_mappings['department'] = team_col
+            self.field_mappings['group'] = team_col
+        
+        if project_col:
+            self.field_mappings['project'] = project_col
+        
+        if level_col:
+            self.field_mappings['level'] = level_col
+            self.field_mappings['grade'] = level_col
     
-    def _find_column_by_patterns(self, columns: List[str], patterns: List[str]) -> Optional[str]:
+    def _find_column_by_patterns(self, patterns: List[str]) -> Optional[str]:
         """Find column by matching patterns"""
         for pattern in patterns:
-            for col in columns:
+            for col in self.safe_columns:
                 if re.search(pattern, col.lower()):
                     return col
         return None
     
-    def _find_id_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"uid", r"user_?id", r"emp_?id", r"employee_?id", r"^id$"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_name_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"name", r"emp_?name", r"employee_?name", r"full_?name", r"display_?name"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_contact_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"contact", r"phone", r"mobile", r"cell", r"telephone"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_email_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"email", r"mail", r"e_?mail"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_position_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"position", r"role", r"designation", r"title", r"job"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_team_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"team", r"group", r"department", r"dept"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_project_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"project", r"proj"]
-        return self._find_column_by_patterns(columns, patterns)
-    
-    def _find_level_column(self, columns: List[str]) -> Optional[str]:
-        patterns = [r"level", r"grade", r"band"]
-        return self._find_column_by_patterns(columns, patterns)
-    
     def get_safe_columns(self) -> List[str]:
         """Get list of safe (non-sensitive) columns"""
-        return list(self.schema_cache.get('UserMaster', {}).keys())
+        return self.safe_columns.copy()
     
     def map_user_terms(self, question: str) -> str:
         """Map user terms to actual database columns"""
         mapped_question = question.lower()
         
-        for pattern, actual_column in self.field_mappings.items():
+        for term, actual_column in self.field_mappings.items():
+            pattern = rf'\b{re.escape(term)}\b'
             mapped_question = re.sub(pattern, actual_column, mapped_question, flags=re.IGNORECASE)
         
         return mapped_question
@@ -193,7 +207,7 @@ class DatabaseSchemaManager:
     def get_column_info_string(self) -> str:
         """Get formatted column information for LLM context"""
         if 'UserMaster' not in self.schema_cache:
-            return "No schema information available"
+            return f"Available columns: {', '.join(self.safe_columns)}"
         
         info_parts = []
         for col_name, col_info in self.schema_cache['UserMaster'].items():
@@ -261,12 +275,17 @@ class SQLQueryProcessor:
     
     def _contains_sql(self, text: str) -> bool:
         """Check if text contains SQL"""
+        if not text:
+            return False
         sql_indicators = ['select', 'from', 'where', 'join']
         text_lower = text.lower()
         return any(indicator in text_lower for indicator in sql_indicators)
     
     def _extract_sql(self, raw_sql: str) -> str:
         """Extract SQL from various formats"""
+        if not raw_sql:
+            return ""
+            
         # Try code block first
         code_block_match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
         if code_block_match:
@@ -292,25 +311,28 @@ class SQLQueryProcessor:
         
         # Look for ID-based queries
         id_match = re.search(r'\b(\d+)\b', question)
-        id_column = self.schema_manager._find_id_column(safe_columns)
+        id_column = self.schema_manager._find_column_by_patterns(['uid', 'id', 'user_id', 'emp_id'])
         
         if id_match and id_column:
-            return f"SELECT * FROM UserMaster WHERE {id_column} = {id_match.group(1)}"
+            return f"SELECT * FROM UserMaster WHERE `{id_column}` = {id_match.group(1)}"
         
         # Look for name-based queries
-        name_column = self.schema_manager._find_name_column(safe_columns)
+        name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
         if name_column:
             # Extract potential name
             name_match = re.search(r'(?:details?|info|about|of)\s+(\w+)', question_lower)
             if name_match:
                 name = name_match.group(1)
-                return f"SELECT * FROM UserMaster WHERE {name_column} LIKE '%{name}%'"
+                return f"SELECT * FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
         
         # Default: select all with limit
-        return f"SELECT * FROM UserMaster LIMIT 10"
+        return "SELECT * FROM UserMaster LIMIT 10"
     
     def _is_safe_select(self, sql: str) -> bool:
         """Validate SQL is safe SELECT only"""
+        if not sql:
+            return False
+            
         sql_clean = sql.strip().lower()
         
         if not sql_clean.startswith('select'):
@@ -327,10 +349,14 @@ class SQLQueryProcessor:
         """Remove references to sensitive fields"""
         safe_columns = self.schema_manager.get_safe_columns()
         
+        if not safe_columns:
+            return sql
+        
         # If SELECT *, replace with safe columns
         if re.search(r'SELECT\s+\*', sql, re.IGNORECASE):
-            safe_cols_str = ', '.join(f"`{col}`" for col in safe_columns)
-            sql = re.sub(r'SELECT\s+\*', f'SELECT {safe_cols_str}', sql, flags=re.IGNORECASE)
+            safe_cols_str = ', '.join(f"`{col}`" for col in safe_columns if col != '*')
+            if safe_cols_str:
+                sql = re.sub(r'SELECT\s+\*', f'SELECT {safe_cols_str}', sql, flags=re.IGNORECASE)
         
         return sql
     
@@ -340,41 +366,45 @@ class SQLQueryProcessor:
         
         # Create a mapping of quoted and unquoted column references
         for actual_col in safe_columns:
-            # Replace various quote styles
+            if actual_col == '*':
+                continue
+                
+            # Replace various quote styles with backticks
             patterns = [
-                f'`{actual_col}`',
-                f'"{actual_col}"',
-                f"'{actual_col}'",
-                f'\\b{actual_col}\\b'
+                (f'`{actual_col}`', f'`{actual_col}`'),
+                (f'"{actual_col}"', f'`{actual_col}`'),
+                (f"'{actual_col}'", f'`{actual_col}`'),
+                (f'\\b{re.escape(actual_col)}\\b', f'`{actual_col}`')
             ]
             
-            for pattern in patterns:
-                sql = re.sub(pattern, f'`{actual_col}`', sql, flags=re.IGNORECASE)
+            for pattern, replacement in patterns:
+                sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
         
         return sql
     
     def _optimize_text_searches(self, sql: str) -> str:
         """Optimize text field searches"""
-        safe_columns = self.schema_manager.get_safe_columns()
-        
-        for col in safe_columns:
-            col_info = self.schema_manager.schema_cache['UserMaster'].get(col, {})
+        if 'UserMaster' not in self.schema_manager.schema_cache:
+            return sql
+            
+        for col_name, col_info in self.schema_manager.schema_cache['UserMaster'].items():
             if col_info.get('type') in ['varchar', 'text', 'char']:
-                # Convert = to LIKE for text fields
-                pattern = f"(`{col}`|{col})\\s*=\\s*(['\"][^'\"]*['\"])"
-                replacement = f"`{col}` LIKE '%' + \\2 + '%'"
-                sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
+                # Convert = to LIKE for text fields - handle various quote patterns
+                patterns = [
+                    (f"`{col_name}`\\s*=\\s*'([^']*)'", f"`{col_name}` LIKE '%\\1%'"),
+                    (f"`{col_name}`\\s*=\\s*\"([^\"]*)\"", f"`{col_name}` LIKE '%\\1%'"),
+                ]
                 
-                # Fix the LIKE pattern for MySQL
-                sql = re.sub(r"LIKE '%' \+ (['\"][^'\"]*['\""]) \+ '%'", r"LIKE CONCAT('%', \1, '%')", sql)
-                # Simpler approach for MySQL
-                sql = re.sub(r"LIKE '%' \+ (['\"][^'\"]*['\""]) \+ '%'", r"LIKE '%\1%'", sql)
-                sql = re.sub(r"LIKE '%'(['\"][^'\"]*['\"""])'%'", r"LIKE '%\1%'", sql)
+                for pattern, replacement in patterns:
+                    sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
         
         return sql
     
     def _finalize_sql(self, sql: str) -> str:
         """Final SQL cleanup and optimization"""
+        if not sql:
+            return sql
+            
         # Remove trailing semicolons
         sql = sql.strip().rstrip(';')
         
@@ -432,37 +462,38 @@ class ResultFormatter:
         """Format single record nicely"""
         response = "I found 1 employee record:\n\n"
         
-        # Define display order and icons
-        field_display = {
-            'id': ('🆔 Employee ID', 'Uid'),
-            'name': ('👤 Name', ['EmpName', 'Name', 'EmployeeName']),
-            'contact': ('📞 Contact', ['Contact', 'Phone', 'Mobile']),
-            'email': ('📧 Email', ['TcsEmail', 'Email', 'SbiEmail']),
-            'position': ('💼 Position', ['Position', 'Role', 'Designation']),
-            'level': ('📊 Level', ['Level', 'Grade', 'Band']),
-            'team': ('👥 Team', ['Team', 'Department', 'Group']),
-            'project': ('📂 Project', ['Project', 'Proj'])
-        }
+        # Define display order and icons with flexible field matching
+        field_patterns = [
+            ('🆔 Employee ID', ['uid', 'id', 'emp_id', 'employee_id', 'user_id']),
+            ('👤 Name', ['empname', 'name', 'employee_name', 'full_name', 'emp_name']),
+            ('📞 Contact', ['contact', 'phone', 'mobile', 'cell', 'telephone']),
+            ('📧 Email', ['email', 'mail', 'tcsemail', 'sbiemail', 'e_mail']),
+            ('🔑 AD ID', ['adid', 'ad_id', 'active_directory_id']),
+            ('💼 Position', ['position', 'role', 'designation', 'title', 'job']),
+            ('📊 Level', ['level', 'grade', 'band']),
+            ('👥 Team', ['team', 'department', 'group', 'dept']),
+            ('📂 Project', ['project', 'proj'])
+        ]
         
-        for display_key, (icon_label, possible_fields) in field_display.items():
-            if isinstance(possible_fields, str):
-                possible_fields = [possible_fields]
-            
+        displayed_fields = set()
+        
+        for icon_label, possible_fields in field_patterns:
             for field in possible_fields:
-                if field in record and record[field] is not None:
-                    response += f"{icon_label}: {record[field]}\n"
+                # Find matching field (case-insensitive)
+                actual_field = None
+                for record_key in record.keys():
+                    if record_key.lower() == field.lower():
+                        actual_field = record_key
+                        break
+                
+                if actual_field and record[actual_field] is not None and str(record[actual_field]).strip():
+                    response += f"{icon_label}: {record[actual_field]}\n"
+                    displayed_fields.add(actual_field)
                     break
         
         # Add any remaining fields not in the standard display
-        displayed_fields = set()
-        for _, (_, fields) in field_display.items():
-            if isinstance(fields, str):
-                displayed_fields.add(fields)
-            else:
-                displayed_fields.update(fields)
-        
         for key, value in record.items():
-            if key not in displayed_fields and value is not None:
+            if key not in displayed_fields and value is not None and str(value).strip():
                 response += f"📋 {key}: {value}\n"
         
         return response.strip()
@@ -473,11 +504,18 @@ class ResultFormatter:
         response = f"I found {len(result)} employee records matching your criteria:\n\n"
         
         # Add summary if we have team information
-        if result and 'Team' in result[0]:
+        team_field = None
+        for field in ['Team', 'team', 'Department', 'department', 'Group', 'group']:
+            if field in result[0]:
+                team_field = field
+                break
+        
+        if team_field:
             team_counts = {}
             for record in result:
-                team = record.get('Team', 'Unknown')
-                team_counts[team] = team_counts.get(team, 0) + 1
+                team = record.get(team_field, 'Unknown')
+                if team:
+                    team_counts[team] = team_counts.get(team, 0) + 1
             
             if len(team_counts) > 1:
                 response += "📊 Team Summary:\n"
@@ -504,7 +542,7 @@ class ResultFormatter:
         for col in columns:
             max_width = max(
                 len(str(col)),
-                max(len(str(row.get(col, ''))) for row in result)
+                max(len(str(row.get(col, ''))) for row in result) if result else 0
             )
             col_widths.append(min(max_width, 30))  # Cap at 30 chars
         
@@ -529,12 +567,68 @@ class ResultFormatter:
         output.append(f"\nTotal records: {len(result)}")
         return "\n".join(output)
 
+class FallbackSQLGenerator:
+    """Fallback SQL generator when LangChain is not available"""
+    
+    def __init__(self, schema_manager: DatabaseSchemaManager):
+        self.schema_manager = schema_manager
+    
+    def generate_sql(self, question: str) -> str:
+        """Generate SQL using pattern matching"""
+        question_lower = question.lower()
+        safe_columns = self.schema_manager.get_safe_columns()
+        
+        if not safe_columns:
+            return "SELECT * FROM UserMaster LIMIT 10"
+        
+        # Pattern-based SQL generation
+        if re.search(r'\b(\d+)\b', question):
+            # ID-based query
+            id_match = re.search(r'\b(\d+)\b', question)
+            id_column = self.schema_manager._find_column_by_patterns(['uid', 'id', 'user_id', 'emp_id'])
+            if id_match and id_column:
+                return f"SELECT * FROM UserMaster WHERE `{id_column}` = {id_match.group(1)}"
+        
+        # Name-based query
+        name_patterns = [r'details?\s+(?:about|of)\s+(\w+)', r'(?:info|information)\s+(?:about|of)\s+(\w+)', r'find\s+(\w+)']
+        for pattern in name_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                name = match.group(1)
+                name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
+                if name_column:
+                    return f"SELECT * FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
+        
+        # Phone/contact query
+        if any(term in question_lower for term in ['phone', 'contact', 'mobile', 'number']):
+            contact_column = self.schema_manager._find_column_by_patterns(['contact', 'phone', 'mobile'])
+            name_match = re.search(r'(?:phone|contact|mobile|number)\s+(?:of|for)\s+(\w+)', question_lower)
+            if contact_column and name_match:
+                name = name_match.group(1)
+                name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
+                if name_column:
+                    return f"SELECT `{contact_column}` FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
+        
+        # Count queries
+        if 'count' in question_lower:
+            return "SELECT COUNT(*) as total_employees FROM UserMaster"
+        
+        # Team queries
+        if any(term in question_lower for term in ['team', 'department', 'group']):
+            team_column = self.schema_manager._find_column_by_patterns(['team', 'department', 'group'])
+            if team_column:
+                return f"SELECT `{team_column}`, COUNT(*) as count FROM UserMaster GROUP BY `{team_column}`"
+        
+        # Default query
+        return "SELECT * FROM UserMaster LIMIT 10"
+
 class TeamDetailsAssistant:
     def __init__(self):
         self.llm = None
         self.db_connection = None
         self.schema_manager = None
         self.sql_processor = None
+        self.fallback_generator = None
         self.initialized = False
     
     def initialize(self) -> bool:
@@ -546,13 +640,13 @@ class TeamDetailsAssistant:
             if not self._init_database():
                 return False
             
-            # Initialize LLM
-            if not self._init_llm():
-                return False
+            # Initialize LLM (optional)
+            self._init_llm()
             
             # Initialize schema manager
             self.schema_manager = DatabaseSchemaManager(self.db_connection)
             self.sql_processor = SQLQueryProcessor(self.schema_manager)
+            self.fallback_generator = FallbackSQLGenerator(self.schema_manager)
             
             self.initialized = True
             logger.info("Team Details Assistant initialized successfully")
@@ -591,17 +685,20 @@ class TeamDetailsAssistant:
             return False
     
     def _init_llm(self) -> bool:
-        """Initialize LLM"""
+        """Initialize LLM (optional)"""
         try:
-            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-            
-            # Test LLM
-            test_response = self.llm.invoke("SELECT 1")
-            logger.info("LLM initialized successfully")
-            return True
-            
+            if LANGCHAIN_AVAILABLE:
+                self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
+                # Test LLM
+                test_response = self.llm.invoke("SELECT 1")
+                logger.info("LLM initialized successfully")
+                return True
+            else:
+                logger.info("LangChain not available, using fallback SQL generation")
+                return False
+                
         except Exception as e:
-            logger.error(f"LLM initialization failed: {e}")
+            logger.warning(f"LLM initialization failed, using fallback: {e}")
             return False
     
     def process_question(self, question: str) -> str:
@@ -616,17 +713,17 @@ class TeamDetailsAssistant:
             # Map user terms to database columns
             mapped_question = self.schema_manager.map_user_terms(question)
             
-            # Create enhanced context for LLM
-            context = self._create_llm_context(mapped_question)
-            
-            # Generate SQL using LLM
-            raw_sql = self._generate_sql(context)
+            # Generate SQL
+            if self.llm and LANGCHAIN_AVAILABLE:
+                raw_sql = self._generate_sql_with_llm(mapped_question)
+            else:
+                raw_sql = self.fallback_generator.generate_sql(question)
             
             # Process and validate SQL
             final_sql, is_valid = self.sql_processor.clean_and_validate_sql(raw_sql, question)
             
             if not is_valid:
-                return f"❌ Could not generate valid SQL query. Please rephrase your question.\nOriginal LLM output: {raw_sql}"
+                return f"❌ Could not generate valid SQL query. Please rephrase your question.\nDebug info: {raw_sql}"
             
             # Execute query
             result = self._execute_query(final_sql)
@@ -635,18 +732,21 @@ class TeamDetailsAssistant:
                 return "❌ Query execution failed. Please try again."
             
             # Format and return results
-            return ResultFormatter.format_natural(result, question)
+            formatted_result = ResultFormatter.format_natural(result, question)
+            return formatted_result
             
         except Exception as e:
             logger.error(f"Question processing error: {e}\n{traceback.format_exc()}")
             return f"❌ Error processing your question: {str(e)}"
     
-    def _create_llm_context(self, question: str) -> str:
-        """Create comprehensive context for LLM"""
-        schema_info = self.schema_manager.get_column_info_string()
-        safe_columns = self.schema_manager.get_safe_columns()
-        
-        context = f"""
+    def _generate_sql_with_llm(self, question: str) -> str:
+        """Generate SQL using LLM"""
+        try:
+            # Create context for LLM
+            schema_info = self.schema_manager.get_column_info_string()
+            safe_columns = self.schema_manager.get_safe_columns()
+            
+            context = f"""
 Question: {question}
 
 Database: UserMaster table with the following columns:
@@ -663,29 +763,28 @@ IMPORTANT RULES:
 
 Generate a SQL query to answer the question.
 """
-        return context
-    
-    def _generate_sql(self, context: str) -> str:
-        """Generate SQL using LLM"""
-        try:
-            # Create a simple query chain
-            db_cfg = TEAM_DB_CONFIG['db_config']
-            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
             
-            db_for_llm = SQLDatabase.from_uri(
-                uri,
-                include_tables=TEAM_DB_CONFIG.get("include_tables", ["UserMaster"])
-            )
-            
-            chain = create_sql_query_chain(self.llm, db_for_llm)
-            raw_sql = chain.invoke({"question": context})
-            
-            logger.info(f"Generated SQL: {raw_sql}")
-            return raw_sql
-            
+            # Create a simple query chain if possible
+            if LANGCHAIN_AVAILABLE:
+                db_cfg = TEAM_DB_CONFIG['db_config']
+                uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+                
+                db_for_llm = SQLDatabase.from_uri(
+                    uri,
+                    include_tables=TEAM_DB_CONFIG.get("include_tables", ["UserMaster"])
+                )
+                
+                chain = create_sql_query_chain(self.llm, db_for_llm)
+                raw_sql = chain.invoke({"question": context})
+                
+                logger.info(f"Generated SQL with LLM: {raw_sql}")
+                return raw_sql
+            else:
+                return self.fallback_generator.generate_sql(question)
+                
         except Exception as e:
-            logger.error(f"SQL generation failed: {e}")
-            return ""
+            logger.error(f"SQL generation with LLM failed: {e}")
+            return self.fallback_generator.generate_sql(question)
     
     def _execute_query(self, sql: str) -> Optional[List[Dict]]:
         """Execute SQL query safely"""
@@ -699,6 +798,10 @@ Generate a SQL query to answer the question.
                 
         except pymysql.Error as e:
             logger.error(f"Database error: {e}")
+            error_msg = f"Database Error: {str(e)}"
+            if "Unknown column" in str(e):
+                available_cols = ', '.join(self.schema_manager.get_safe_columns())
+                error_msg += f"\nAvailable columns: {available_cols}"
             return None
         except Exception as e:
             logger.error(f"Query execution error: {e}")
@@ -710,17 +813,23 @@ Generate a SQL query to answer the question.
             if self.db_connection and self.db_connection.open:
                 self.db_connection.close()
                 logger.info("Database connection closed")
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
 
 def Teammain(query: str) -> str:
     """Main function to process team queries"""
+    if not query or not query.strip():
+        return "❌ Please provide a valid query."
+    
     logger.info(f"Processing query: {query}")
     assistant = TeamDetailsAssistant()
     
     try:
-        result = assistant.process_question(query)
+        result = assistant.process_question(query.strip())
         return result
+    except Exception as e:
+        logger.error(f"Main function error: {e}")
+        return f"❌ An unexpected error occurred: {str(e)}"
     finally:
         assistant.cleanup()
 
@@ -737,12 +846,17 @@ if __name__ == "__main__":
         "Count employees by team"
     ]
     
-    for query in test_queries:
-        print(f"\n{'='*60}")
-        print(f"Testing: {query}")
-        print('='*60)
+    print("🚀 Starting Team Details Assistant Tests...")
+    print("=" * 60)
+    
+    for i, query in enumerate(test_queries, 1):
+        print(f"\n🔍 Test {i}: {query}")
+        print("-" * 40)
         try:
             result = Teammain(query)
             print(result)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error in test {i}: {e}")
+        print("-" * 40)
+    
+    print("\n✅ All tests completed!")
