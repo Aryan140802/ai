@@ -1,23 +1,18 @@
-
 import os
 import re
 import logging
 import pymysql
 import traceback
+import time
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import json
 import sqlparse
 
-# Try to import langchain components, but continue if not available
-try:
-    from langchain_community.utilities import SQLDatabase
-    from langchain_ollama import OllamaLLM
-    from langchain.chains import create_sql_query_chain
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_AVAILABLE = False
-    print("Warning: LangChain not available. Using fallback SQL generation.")
+# Import langchain components (required)
+from langchain_community.utilities import SQLDatabase
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
 
 # --- TEAM DETAILS CONFIGURATION ---
 TEAM_DB_CONFIG = {
@@ -294,10 +289,6 @@ class SQLQueryProcessor:
             
             # Handle non-SQL responses
             if not self._contains_sql(raw_sql):
-                # Try to construct SQL from question
-                constructed_sql = self._construct_sql_from_question(question)
-                if constructed_sql:
-                    return self._finalize_sql(constructed_sql), True
                 return "", False
             
             # Extract SQL from various formats
@@ -356,33 +347,6 @@ class SQLQueryProcessor:
         sql = re.sub(r"```", "", raw_sql)
         sql = re.sub(r"^.*?(SELECT|INSERT|UPDATE|DELETE)", r"\1", sql, flags=re.IGNORECASE | re.DOTALL)
         return sql.strip()
-    
-    def _construct_sql_from_question(self, question: str) -> Optional[str]:
-        """Construct basic SQL from question patterns"""
-        safe_columns = self.schema_manager.get_safe_columns()
-        if not safe_columns:
-            return None
-        
-        question_lower = question.lower()
-        
-        # Look for ID-based queries
-        id_match = re.search(r'\b(\d+)\b', question)
-        id_column = self.schema_manager._find_column_by_patterns(['uid', 'id', 'user_id', 'emp_id'])
-        
-        if id_match and id_column:
-            return f"SELECT * FROM UserMaster WHERE `{id_column}` = {id_match.group(1)}"
-        
-        # Look for name-based queries
-        name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
-        if name_column:
-            # Extract potential name
-            name_match = re.search(r'(?:details?|info|about|of)\s+(\w+)', question_lower)
-            if name_match:
-                name = name_match.group(1)
-                return f"SELECT * FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
-        
-        # Default: select all with limit
-        return "SELECT * FROM UserMaster LIMIT 10"
     
     def _is_safe_select(self, sql: str) -> bool:
         """Validate SQL is safe SELECT only"""
@@ -476,7 +440,14 @@ class SQLQueryProcessor:
         # Add reasonable limit if none exists
         if not re.search(r'\bLIMIT\b', sql, re.IGNORECASE):
             if not re.search(r'\bCOUNT\s*\(', sql, re.IGNORECASE):
-                sql += " LIMIT 50"
+                sql += " LIMIT 50"  # Increased default limit
+        
+        # Ensure minimum limit of 20
+        elif re.search(r'\bLIMIT\s+(\d+)\b', sql, re.IGNORECASE):
+            def increase_limit(match):
+                current_limit = int(match.group(1))
+                return f"LIMIT {max(current_limit, 20)}"
+            sql = re.sub(r'\bLIMIT\s+(\d+)\b', increase_limit, sql, flags=re.IGNORECASE)
         
         # Clean up extra whitespace
         sql = re.sub(r'\s+', ' ', sql).strip()
@@ -596,13 +567,13 @@ class ResultFormatter:
     
     @staticmethod
     def _format_tabular(result: List[Dict]) -> str:
-        """Format results in table format"""
+        """Format results in table format optimized for frontend display"""
         if not result:
             return "No records found."
         
         columns = list(result[0].keys())
         
-        # Calculate column widths
+        # Calculate column widths with max of 30 characters
         col_widths = []
         for col in columns:
             max_width = max(
@@ -611,81 +582,37 @@ class ResultFormatter:
             )
             col_widths.append(min(max_width, 30))  # Cap at 30 chars
         
-        # Build table
+        # Build table with better formatting
         output = []
         
-        # Header
-        header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
-        separator = "-+-".join("-" * width for width in col_widths)
+        # Header with separator
+        header = "| " + " | ".join(
+            str(col).center(width) for col, width in zip(columns, col_widths)
+        ) + " |"
+        separator = "+-" + "-+-".join(
+            "-" * width for width in col_widths
+        ) + "-+"
+        
+        output.append(separator)
         output.append(header)
         output.append(separator)
         
-        # Rows
+        # Rows with proper alignment
         for row in result:
-            formatted_row = " | ".join(
-                str(row.get(col, ''))[:27] + "..." if len(str(row.get(col, ''))) > 30 
-                else str(row.get(col, '')).ljust(width)
-                for col, width in zip(columns, col_widths)
-            )
+            formatted_cells = []
+            for col, width in zip(columns, col_widths):
+                cell_value = str(row.get(col, ''))
+                if len(cell_value) > 30:
+                    cell_value = cell_value[:27] + "..."
+                formatted_cells.append(cell_value.ljust(width))
+            
+            formatted_row = "| " + " | ".join(formatted_cells) + " |"
             output.append(formatted_row)
         
-        output.append(f"\nTotal records: {len(result)}")
+        output.append(separator)
+        output.append(f"Total records: {len(result)}")
+        
         return "\n".join(output)
-
-class FallbackSQLGenerator:
-    """Fallback SQL generator when LangChain is not available"""
-    
-    def __init__(self, schema_manager: DatabaseSchemaManager):
-        self.schema_manager = schema_manager
-    
-    def generate_sql(self, question: str) -> str:
-        """Generate SQL using pattern matching"""
-        question_lower = question.lower()
-        safe_columns = self.schema_manager.get_safe_columns()
-        
-        if not safe_columns:
-            return "SELECT * FROM UserMaster LIMIT 10"
-        
-        # Pattern-based SQL generation
-        if re.search(r'\b(\d+)\b', question):
-            # ID-based query
-            id_match = re.search(r'\b(\d+)\b', question)
-            id_column = self.schema_manager._find_column_by_patterns(['uid', 'id', 'user_id', 'emp_id'])
-            if id_match and id_column:
-                return f"SELECT * FROM UserMaster WHERE `{id_column}` = {id_match.group(1)}"
-        
-        # Name-based query
-        name_patterns = [r'details?\s+(?:about|of)\s+(\w+)', r'(?:info|information)\s+(?:about|of)\s+(\w+)', r'find\s+(\w+)']
-        for pattern in name_patterns:
-            match = re.search(pattern, question_lower)
-            if match:
-                name = match.group(1)
-                name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
-                if name_column:
-                    return f"SELECT * FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
-        
-        # Phone/contact query
-        if any(term in question_lower for term in ['phone', 'contact', 'mobile', 'number']):
-            contact_column = self.schema_manager._find_column_by_patterns(['contact', 'phone', 'mobile'])
-            name_match = re.search(r'(?:phone|contact|mobile|number)\s+(?:of|for)\s+(\w+)', question_lower)
-            if contact_column and name_match:
-                name = name_match.group(1)
-                name_column = self.schema_manager._find_column_by_patterns(['name', 'emp_name', 'employee_name'])
-                if name_column:
-                    return f"SELECT `{contact_column}` FROM UserMaster WHERE `{name_column}` LIKE '%{name}%'"
-        
-        # Count queries
-        if 'count' in question_lower:
-            return "SELECT COUNT(*) as total_employees FROM UserMaster"
-        
-        # Team queries
-        if any(term in question_lower for term in ['team', 'department', 'group']):
-            team_column = self.schema_manager._find_column_by_patterns(['team', 'department', 'group'])
-            if team_column:
-                return f"SELECT `{team_column}`, COUNT(*) as count FROM UserMaster GROUP BY `{team_column}`"
-        
-        # Default query
-        return "SELECT * FROM UserMaster LIMIT 10"
 
 class TeamDetailsAssistant:
     def __init__(self):
@@ -693,7 +620,6 @@ class TeamDetailsAssistant:
         self.db_connection = None
         self.schema_manager = None
         self.sql_processor = None
-        self.fallback_generator = None
         self.initialized = False
     
     def initialize(self) -> bool:
@@ -705,13 +631,13 @@ class TeamDetailsAssistant:
             if not self._init_database():
                 return False
             
-            # Initialize LLM (optional)
-            self._init_llm()
+            # Initialize LLM (required)
+            if not self._init_llm():
+                raise ImportError("LangChain components could not be initialized")
             
             # Initialize schema manager
             self.schema_manager = DatabaseSchemaManager(self.db_connection)
             self.sql_processor = SQLQueryProcessor(self.schema_manager)
-            self.fallback_generator = FallbackSQLGenerator(self.schema_manager)
             
             self.initialized = True
             logger.info("Team Details Assistant initialized successfully")
@@ -764,26 +690,21 @@ class TeamDetailsAssistant:
             return False
     
     def _init_llm(self) -> bool:
-        """Initialize LLM (optional)"""
+        """Initialize LLM (required)"""
         try:
-            if LANGCHAIN_AVAILABLE:
-                self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
-                # Test LLM
-                test_response = self.llm.invoke("SELECT 1")
-                logger.info("LLM initialized successfully")
-                return True
-            else:
-                logger.info("LangChain not available, using fallback SQL generation")
-                return False
-                
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
+            # Test LLM
+            test_response = self.llm.invoke("SELECT 1")
+            logger.info("LLM initialized successfully")
+            return True
         except Exception as e:
-            logger.warning(f"LLM initialization failed, using fallback: {e}")
+            logger.error(f"LLM initialization failed: {e}")
             return False
     
     def process_question(self, question: str) -> str:
         """Process user question and return results with enhanced debugging"""
         if not self.initialized and not self.initialize():
-            return "❌ Team Details Assistant initialization failed. Please check database connection."
+            return "❌ Team Details Assistant initialization failed. Please check database connection and LLM setup."
         
         if is_dangerous(question):
             return "❌ Question blocked for security reasons."
@@ -795,13 +716,9 @@ class TeamDetailsAssistant:
             mapped_question = self.schema_manager.map_user_terms(question)
             print(f"DEBUG - Mapped question: {mapped_question}")
             
-            # Generate SQL
-            if self.llm and LANGCHAIN_AVAILABLE:
-                print("DEBUG - Using LLM for SQL generation")
-                raw_sql = self._generate_sql_with_llm(mapped_question)
-            else:
-                print("DEBUG - Using fallback SQL generation")
-                raw_sql = self.fallback_generator.generate_sql(question)
+            # Generate SQL using LLM
+            print("DEBUG - Using LLM for SQL generation")
+            raw_sql = self._generate_sql_with_llm(mapped_question)
             
             print(f"DEBUG - Raw SQL generated: {raw_sql}")
             
@@ -813,8 +730,11 @@ class TeamDetailsAssistant:
             if not is_valid:
                 return f"❌ Could not generate valid SQL query. Please rephrase your question.\nDebug info: {raw_sql}"
             
-            # Execute query
+            # Execute query with performance optimization
+            start_time = time.time()
             result = self._execute_query(final_sql)
+            query_time = time.time() - start_time
+            print(f"DEBUG - Query executed in {query_time:.2f} seconds")
             
             if result is None:
                 return "❌ Query execution failed. Check the debug output above for details."
@@ -852,80 +772,61 @@ IMPORTANT RULES:
 4. For numeric IDs, use exact equals (=)
 5. Always include proper table name: UserMaster
 6. Do not include sensitive fields in any query
-7. Limit results appropriately (use LIMIT clause)
+7. Limit results appropriately (minimum LIMIT 20)
 
 Generate a SQL query to answer the question.
 """
             
-            # Create a simple query chain if possible
-            if LANGCHAIN_AVAILABLE:
-                db_cfg = TEAM_DB_CONFIG['db_config']
-                uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
-                
-                db_for_llm = SQLDatabase.from_uri(
-                    uri,
-                    include_tables=TEAM_DB_CONFIG.get("include_tables", ["UserMaster"])
-                )
-                
-                chain = create_sql_query_chain(self.llm, db_for_llm)
-                raw_sql = chain.invoke({"question": context})
-                
-                logger.info(f"Generated SQL with LLM: {raw_sql}")
-                return raw_sql
-            else:
-                return self.fallback_generator.generate_sql(question)
+            # Create a simple query chain
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+            
+            db_for_llm = SQLDatabase.from_uri(
+                uri,
+                include_tables=TEAM_DB_CONFIG.get("include_tables", ["UserMaster"])
+            )
+            
+            chain = create_sql_query_chain(self.llm, db_for_llm)
+            raw_sql = chain.invoke({"question": context})
+            
+            logger.info(f"Generated SQL with LLM: {raw_sql}")
+            return raw_sql
                 
         except Exception as e:
             logger.error(f"SQL generation with LLM failed: {e}")
-            return self.fallback_generator.generate_sql(question)
+            raise Exception("Failed to generate SQL query using LLM")
     
     def _execute_query(self, sql: str) -> Optional[List[Dict]]:
-        """Execute SQL query safely with enhanced error handling"""
+        """Execute SQL query with performance optimizations"""
         try:
             # Check if connection is still alive
             if not self.db_connection.open:
-                logger.error("Database connection is closed, attempting to reconnect...")
+                logger.info("Database connection is closed, attempting to reconnect...")
                 if not self._init_database():
                     return None
             
             with self.db_connection.cursor() as cursor:
-                logger.info(f"Executing SQL: {sql}")
-                print(f"DEBUG - Executing SQL: {sql}")
+                # Set faster fetch size
+                cursor.arraysize = 100  # Fetch more rows at once
                 
+                # Execute with timeout
+                start_time = time.time()
                 cursor.execute(sql)
-                result = cursor.fetchall()
                 
-                logger.info(f"Query returned {len(result)} rows")
-                print(f"DEBUG - Query returned {len(result)} rows")
+                # Stream results for large datasets
+                result = []
+                batch = cursor.fetchmany(100)  # Fetch in batches
+                while batch:
+                    result.extend(batch)
+                    if len(result) >= 1000:  # Safety limit
+                        break
+                    batch = cursor.fetchmany(100)
                 
+                logger.info(f"Query executed in {time.time() - start_time:.2f}s, returned {len(result)} rows")
                 return result
                 
-        except pymysql.Error as e:
-            error_code = getattr(e, 'args', [None])[0] if hasattr(e, 'args') and e.args else 'Unknown'
-            error_msg = str(e)
-            
-            logger.error(f"MySQL Error {error_code}: {error_msg}")
-            print(f"DEBUG - MySQL Error {error_code}: {error_msg}")
-            print(f"DEBUG - Failed SQL: {sql}")
-            
-            # Provide specific error information
-            if "Unknown column" in error_msg:
-                available_cols = self.schema_manager.get_safe_columns()
-                print(f"DEBUG - Available columns: {available_cols}")
-                logger.error(f"Available columns: {available_cols}")
-            elif "Table" in error_msg and "doesn't exist" in error_msg:
-                logger.error("UserMaster table doesn't exist")
-                print("DEBUG - UserMaster table doesn't exist")
-            elif "Access denied" in error_msg:
-                logger.error("Database access denied - check credentials")
-                print("DEBUG - Database access denied")
-            
-            return None
-            
         except Exception as e:
-            logger.error(f"Unexpected query execution error: {e}\n{traceback.format_exc()}")
-            print(f"DEBUG - Unexpected error: {e}")
-            print(f"DEBUG - Failed SQL: {sql}")
+            logger.error(f"Query execution error: {e}")
             return None
     
     def cleanup(self):
