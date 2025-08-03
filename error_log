@@ -1,3 +1,4 @@
+CODE FOR Team Info:
 import os
 import re
 import logging
@@ -506,4 +507,736 @@ if __name__ == "__main__":
         print(f"Testing: {query}")
         print('='*60)
         result = Teammain(query)
+        print(result)
+
+Output from ai:
+who is Aryan ?
+ Database Error: (1054, "Unknown column 'EmpName' in 'field list'")
+SQL Query: SELECT `EmpName`, `Project`, `Team`, `Contact` LIMIT 50
+Original LLM output: "Question: who is aryan ?\n\nSQLQuery:\nSELECT `EmpName`, `Project`, `Team`, `Contact`\nFROM `UserMaster`\nWHERE `EmpName` LIKE '%aryan%';"
+Please check the query syntax and try again.
+
+Output from mysql:
+SELECT `EmpName`, `Project`, `Team`, `Contact` from UserMaster where EmpName like '%aryan%';
++---------------+---------+------+------------+
+| EmpName       | Project | Team | Contact    |
++---------------+---------+------+------------+
+| Aryan purohit | EIS     | IIB  | 8356067527 |
++---------------+---------+------+------------+
+1 row in set (0.00 sec)
+
+Output from ai:
+how many employees joined tcs in october ?
+The result is: 0
+
+Output from mysql:
+mysql> SELECT COUNT(DISTINCT Uid) FROM UserMaster WHERE TcsDoj LIKE '%-10-%';
++---------------------+
+| COUNT(DISTINCT Uid) |
++---------------------+
+|                  26 |
++---------------------+
+1 row in set (0.00 sec)
+
+make the above code similar to this:
+
+CODE FOR FAR Info:
+import os
+import re
+import logging
+import pymysql
+import traceback
+from typing import List, Optional, Dict, Any
+from datetime import datetime, date, timedelta
+import json
+import calendar
+import sqlparse
+from langchain_community.utilities import SQLDatabase
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
+
+today_date = date.today()
+
+# --- FAR DETAILS CONFIGURATION ---
+FAR_DB_CONFIG = {
+    "name": "FAR Details",
+    "db_config": {
+        "host": "localhost",
+        "user": "root",
+        "password": "root123",
+        "database": "EIS_n"
+    },
+    "include_tables": ["FarDetailsAll"],
+}
+
+# Blocked patterns for security
+BLOCKED_PATTERNS = [
+    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+    r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
+    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
+    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
+]
+
+def get_comprehensive_date_context():
+    """Generate extremely comprehensive date context for robust LLM understanding"""
+    current_date = date.today()
+    current_year = current_date.year
+    current_month = current_date.month
+
+    # Create month name mappings (case insensitive)
+    month_names = {
+        'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+        'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
+        'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9,
+        'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+    }
+
+    month_numbers = {v: k.title() for k, v in month_names.items() if len(k) > 3}  # Full names only
+
+    return {
+        'current_date': current_date.strftime('%Y-%m-%d'),
+        'current_year': current_year,
+        'current_month': current_month,
+        'current_month_name': month_numbers[current_month],
+        'next_year': current_year + 1,
+        'prev_year': current_year - 1,
+        'month_names': month_names,
+        'month_numbers': month_numbers,
+        'years_range': list(range(current_year - 5, current_year + 10))  # Support wide range
+    }
+
+def preprocess_question(question: str) -> str:
+    """Preprocess the question to handle common patterns and extract explicit date info"""
+    question_lower = question.lower().strip()
+
+    # Extract explicit month-year patterns
+    month_year_patterns = [
+        r'\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{4})\b',
+        r'\b(\d{4})\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\b',
+        r'\b(\d{1,2})/(\d{4})\b',  # MM/YYYY
+        r'\b(\d{4})/(\d{1,2})\b'   # YYYY/MM
+    ]
+
+    date_ctx = get_comprehensive_date_context()
+    extracted_info = {}
+
+    # Check for relative date terms first
+    if re.search(r'\bthis\s+(month|year)\b', question_lower):
+        if 'this month' in question_lower:
+            extracted_info['month'] = date_ctx['current_month']
+            extracted_info['year'] = date_ctx['current_year']
+            extracted_info['context'] = 'this_month'
+        elif 'this year' in question_lower:
+            extracted_info['year'] = date_ctx['current_year']
+            extracted_info['context'] = 'this_year'
+    elif re.search(r'\bnext\s+(month|year)\b', question_lower):
+        if 'next month' in question_lower:
+            next_month = date_ctx['current_month'] + 1
+            next_year = date_ctx['current_year']
+            if next_month > 12:
+                next_month = 1
+                next_year += 1
+            extracted_info['month'] = next_month
+            extracted_info['year'] = next_year
+            extracted_info['context'] = 'next_month'
+        elif 'next year' in question_lower:
+            extracted_info['year'] = date_ctx['next_year']
+            extracted_info['context'] = 'next_year'
+    else:
+        # Extract explicit month-year patterns
+        for pattern in month_year_patterns:
+            match = re.search(pattern, question_lower)
+            if match:
+                groups = match.groups()
+                if len(groups) == 2:
+                    # Determine which is month and which is year
+                    for group in groups:
+                        if group.isdigit():
+                            num = int(group)
+                            if 1900 <= num <= 2100:  # Year
+                                extracted_info['year'] = num
+                            elif 1 <= num <= 12:  # Month number
+                                extracted_info['month'] = num
+                        else:
+                            # Month name
+                            if group in date_ctx['month_names']:
+                                extracted_info['month'] = date_ctx['month_names'][group]
+                    extracted_info['context'] = 'specific_month_year'
+                break
+
+    # Add extracted information to question for LLM
+    if extracted_info:
+        addition = f" [EXTRACTED: "
+        if 'month' in extracted_info:
+            addition += f"month={extracted_info['month']} "
+        if 'year' in extracted_info:
+            addition += f"year={extracted_info['year']} "
+        if 'context' in extracted_info:
+            addition += f"context={extracted_info['context']} "
+        addition += "]"
+        question += addition
+
+        print(f"DEBUG - Extracted date info: {extracted_info}")
+        print(f"DEBUG - Enhanced question: {question}")
+
+    return question
+
+def get_sql_generation_prompt():
+    """Generate comprehensive SQL prompt with extensive date handling examples"""
+    date_ctx = get_comprehensive_date_context()
+
+    # Generate examples for each month of current and next year
+    month_examples = []
+    for month_num, month_name in date_ctx['month_numbers'].items():
+        current_year = date_ctx['current_year']
+        next_year = date_ctx['next_year']
+        month_examples.extend([
+            f'"FARs created in {month_name} {current_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Created, \'%Y-%m-%d %H:%i:%s\')) = {current_year}',
+            f'"FARs expiring in {month_name.lower()} {next_year}" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, \'%Y-%m-%d %H:%i:%s\')) = {month_num} AND YEAR(STR_TO_DATE(Expires, \'%Y-%m-%d %H:%i:%s\')) = {next_year}'
+        ])
+
+    return f"""You are an expert SQL query generator for a FAR (Firewall Access Request) database.
+
+**CURRENT DATE CONTEXT:**
+- Today's date: {date_ctx['current_date']}
+- Current year: {date_ctx['current_year']}
+- Current month: {date_ctx['current_month']} ({date_ctx['current_month_name']})
+- Next year: {date_ctx['next_year']}
+- Previous year: {date_ctx['prev_year']}
+
+**MONTH NAME TO NUMBER MAPPING:**
+{chr(10).join([f"- {name.title()}: {num}" for name, num in date_ctx['month_names'].items() if len(name) > 3])}
+
+**DATABASE SCHEMA:**
+Table: FarDetailsAll
+- Far_Id (INT): Unique identifier
+- Subject (TEXT): Request title
+- Status (TEXT): Current status
+- Created (TEXT): Creation timestamp in 'YYYY-MM-DD HH:MM:SS' format
+- Expires (TEXT): Expiry timestamp in 'YYYY-MM-DD HH:MM:SS' format
+- Requested_Source (TEXT): Source IPs
+- Requested_Destination (TEXT): Destination IPs
+- Requested_Service (TEXT): Services/ports
+- Dependent_application (TEXT): Applications
+- ZONE (TEXT): Environment zone
+- Permanent_Rule (TEXT): Permanent status
+- Other fields: Various NAT and change fields
+
+**CRITICAL SQL GENERATION RULES:**
+1. ONLY generate SELECT statements
+2. Always use exact table name: FarDetailsAll
+3. For date columns (Created, Expires), ALWAYS use: STR_TO_DATE(column_name, '%Y-%m-%d %H:%i:%s')
+4. For text fields, use LIKE with % wildcards: column_name LIKE '%search_term%'
+5. For Far_Id, use exact equality: Far_Id = number
+6. NEVER add LIMIT unless specifically requested
+7. Return ONLY the SQL query - no explanations or markdown
+8. **CRITICAL**: When a specific month and year are mentioned (like "July 2026"), do NOT include current date comparisons
+9. **CRITICAL**: For "this month" queries, ALWAYS include both month AND year filters
+
+**DATE QUERY PATTERNS:**
+
+**Relative Date Queries (MUST include current year):**
+- "this month" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_month']} AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+- "this year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+- "next year" → YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = {date_ctx['next_year']}
+
+**Specific Month-Year Queries (NO current date filters):**
+- "July 2026" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 7 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2026
+- "March 2025" → MONTH(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 3 AND YEAR(STR_TO_DATE(column, '%Y-%m-%d %H:%i:%s')) = 2025
+
+**EXTRACTED DATE INFO HANDLING:**
+If question contains [EXTRACTED: month=X year=Y context=Z], use these rules:
+- context=this_month → Use month AND current year, no current date filter
+- context=specific_month_year → Use ONLY the specified month and year, NO current date filter
+- context=this_year → Use only current year
+- month=6 year=2026 context=specific_month_year → MONTH(...) = 6 AND YEAR(...) = 2026
+
+**ROBUST QUERY EXAMPLES:**
+- "FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123
+- "active status" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%'
+- "this month expiring" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_month']} AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = {date_ctx['current_year']}
+- "July 2026 expiring" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = 7 AND YEAR(STR_TO_DATE(Expires, '%Y-%m-%d %H:%i:%s')) = 2026
+- "created in march 2025" → SELECT * FROM FarDetailsAll WHERE MONTH(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 3 AND YEAR(STR_TO_DATE(Created, '%Y-%m-%d %H:%i:%s')) = 2025
+
+**EXAMPLES WITH EXTRACTED INFO:**
+- [EXTRACTED: month=7 year=2025 context=this_month] → MONTH(...) = 7 AND YEAR(...) = 2025
+- [EXTRACTED: month=6 year=2026 context=specific_month_year] → MONTH(...) = 6 AND YEAR(...) = 2026
+- [EXTRACTED: year=2025 context=this_year] → YEAR(...) = 2025
+
+**ERROR PREVENTION:**
+- Always use proper STR_TO_DATE syntax
+- **NEVER use CURDATE() when specific month-year is mentioned**
+- Use CURDATE() ONLY for queries like "today", "from today", "current date"
+- For "this month" queries, include both MONTH() = current_month AND YEAR() = current_year
+- Check column names match exactly: Created, Expires (not Create, Expire)
+- Use proper quotes: single quotes for strings, no quotes for numbers
+- Ensure proper AND/OR logic for multiple conditions
+
+**USER QUESTION:** {{question}}
+"""
+
+# Setup logging
+logging.basicConfig(
+    filename=os.path.expanduser("~/.far_details_ai.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def is_dangerous(text: str) -> bool:
+    """Check if text contains dangerous patterns"""
+    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
+
+def clean_and_fix_sql(raw_sql: str) -> str:
+    """Enhanced SQL cleaning with better error handling"""
+    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
+    raw_sql=sqlparse.format(raw_sql,strip_comments=True).strip()
+    print(f"DEBUG - Validating SQL: {raw_sql}")
+    # Handle common LLM response patterns
+    if "i cannot" in raw_sql.lower() or "i can't" in raw_sql.lower():
+        print("DEBUG - LLM refused to generate SQL")
+        return "ERROR: LLM refused to generate SQL"
+
+    # Extract from code blocks
+    code_block_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
+    if code_block_match:
+        sql = code_block_match.group(1).strip()
+        print(f"DEBUG - Extracted from code block: {sql}")
+    else:
+        sql = raw_sql.strip()
+
+    # Remove common prefixes/suffixes
+    sql = re.sub(r'^(here is|here\'s|sql query|query|the query is)?\s*:?\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\s*;?\s*$', '', sql)
+
+    # Find SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+        print(f"DEBUG - Extracted SELECT statement: {sql}")
+
+    # Handle specific FAR ID queries
+    if not sql.upper().startswith('SELECT') and re.search(r'\bfar\b.*\b\d+\b', raw_sql.lower()):
+        far_id_match = re.search(r'\b(\d+)\b', raw_sql)
+        if far_id_match:
+            far_id = far_id_match.group(1)
+            sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
+            print(f"DEBUG - Generated FAR ID query: {sql}")
+
+    # Fix common column name issues
+    sql = re.sub(r'\bCreate\b', 'Created', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bExpire\b', 'Expires', sql, flags=re.IGNORECASE)
+
+    # Fix text field searches (convert = to LIKE for text fields)
+    text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination',
+                   'Requested_Service', 'Dependent_application', 'ZONE', 'Permanent_Rule']
+
+    for field in text_fields:
+        # Convert = to LIKE for text fields
+        sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
+        sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
+
+    # Remove unwanted LIMIT clauses
+    sql = re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE)
+
+    # Final cleanup
+    sql = sql.strip()
+
+    print(f"DEBUG - Final cleaned SQL: {sql}")
+    return sql
+
+def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
+    """Validate SQL and attempt to fix common issues"""
+    fixed_sql=sqlparse.format(sql,strip_comments=True).strip()
+    print(f"DEBUG - Validating SQL: {fixed_sql}")
+    return fixed_sql,True
+    # Check if it's a valid SELECT query
+    if not sql.upper().strip().startswith('SELECT'):
+        print("DEBUG - Not a SELECT query")
+        return sql, False
+
+    # Check for dangerous operations
+    dangerous_ops = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']
+    if any(op in sql.lower() for op in dangerous_ops):
+        print("DEBUG - Contains dangerous operations")
+        return sql, False
+
+    # Try to fix common syntax issues
+    fixed_sql = sql
+
+    # Fix missing table name
+    if 'from fardetailsall' in fixed_sql.lower():
+        fixed_sql = re.sub(r'from\s+fardetailsall', 'FROM FarDetailsAll', fixed_sql, flags=re.IGNORECASE)
+
+    # Fix date function syntax issues
+    fixed_sql = re.sub(r'STR_TO_DATE\s*\(\s*([^,]+),\s*["\']%Y-%m-%d %H:%i:%s["\']\s*\)',
+                      r"STR_TO_DATE(\1, '%Y-%m-%d %H:%i:%s')", fixed_sql)
+
+    print(f"DEBUG - Fixed SQL: {fixed_sql}")
+    if (fixed_sql[-1]!=";"):
+        fixed_sql+=";"
+    return fixed_sql, True
+
+def format_query_results_natural(result: List[Dict], question: str) -> str:
+    """Enhanced result formatting with better handling of large datasets"""
+    if not result:
+        return "I couldn't find any FAR records matching your criteria."
+
+    # Handle single value results (like COUNT)
+    if len(result) == 1 and len(result[0]) == 1:
+        value = list(result[0].values())[0]
+        if "count" in question.lower():
+            return f"There are {value} FAR records matching your criteria."
+        else:
+            return f"The result is: {value}"
+
+    # Handle single record
+    if len(result) == 1:
+        record = result[0]
+        response = f"I found 1 FAR record:\n\n"
+
+        # Format key information
+        key_fields = ['Far_Id', 'Subject', 'Status', 'Created', 'Expires', 'ZONE',
+                     'Requested_Source', 'Requested_Destination', 'Requested_Service',
+                     'Dependent_application', 'Permanent_Rule']
+
+        icons = {'Far_Id': '📋', 'Subject': '📝', 'Status': '🔄', 'Created': '📅',
+                'Expires': '⏰', 'ZONE': '🌐', 'Requested_Source': '🔗',
+                'Requested_Destination': '🎯', 'Requested_Service': '⚙️',
+                'Dependent_application': '📱', 'Permanent_Rule': '🔒'}
+
+        for field in key_fields:
+            if field in record and record[field] is not None:
+                icon = icons.get(field, '•')
+                response += f"{icon} {field.replace('_', ' ')}: {record[field]}\n"
+
+        return response.strip()
+
+    # Handle multiple records
+    response = f"I found {len(result)} FAR records matching your criteria:\n\n"
+
+    # Add status summary if available
+    if 'Status' in result[0]:
+        status_counts = {}
+        for record in result:
+            status = record.get('Status', 'Unknown')
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+        response += "📊 Status Summary:\n"
+        for status, count in status_counts.items():
+            response += f"   • {status}: {count} records\n"
+        response += "\n"
+
+    # Show detailed results based on count
+    if len(result) <= 10:
+        response += "📋 Detailed Results:\n"
+        response += format_query_results_tabular(result)
+    elif len(result) <= 50:
+        response += f"📋 First 10 Results (of {len(result)} total):\n"
+        response += format_query_results_tabular(result[:10])
+        response += f"\n... and {len(result) - 10} more records."
+    else:
+        response += f"📋 Sample Results (showing 5 of {len(result)} total):\n"
+        response += format_query_results_tabular(result[:5])
+        response += f"\n... and {len(result) - 5} more records."
+
+    return response
+
+def format_query_results_tabular(result: List[Dict]) -> str:
+    """Format results in a clean table"""
+    if not result:
+        return "No records found."
+
+    # Select most important columns for display
+    important_cols = ['Far_Id', 'Subject', 'Status', 'Created', 'Expires', 'ZONE']
+    available_cols = [col for col in important_cols if col in result[0]]
+
+    if not available_cols:
+        available_cols = list(result[0].keys())[:6]  # First 6 columns
+
+    output = []
+
+    # Calculate column widths
+    col_widths = {}
+    for col in available_cols:
+        max_width = len(col)
+        for row in result:
+            if row.get(col):
+                max_width = max(max_width, len(str(row[col])))
+        col_widths[col] = min(max_width, 50)  # Max 50 chars per column
+
+    # Header
+    header = " | ".join(col.ljust(col_widths[col]) for col in available_cols)
+    separator = "-+-".join("-" * col_widths[col] for col in available_cols)
+    output.append(header)
+    output.append(separator)
+
+    # Rows
+    for row in result:
+        formatted_row = " | ".join(
+            str(row.get(col, 'NULL'))[:col_widths[col]-3] + "..."
+            if len(str(row.get(col, 'NULL'))) > col_widths[col]
+            else str(row.get(col, 'NULL')).ljust(col_widths[col])
+            for col in available_cols
+        )
+        output.append(formatted_row)
+
+    return "\n".join(output)
+
+class FarDetailsAssistant:
+    def __init__(self):
+        self.llm = None
+        self.db_handler = None
+        self.initialized = False
+        self.chat_history = []
+
+    def initialize(self):
+        """Initialize the FAR Details Assistant"""
+        try:
+            # Initialize LLM with better parameters
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.0)  # Lower temperature for consistency
+
+            # Set up database connection
+            db_cfg = FAR_DB_CONFIG['db_config']
+            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+
+            # Connect to database
+            db_for_llm = SQLDatabase.from_uri(
+                uri,
+                include_tables=FAR_DB_CONFIG.get("include_tables"),
+                engine_args={
+                    "pool_pre_ping": True,
+                    "pool_recycle": 3600,
+                    "connect_args": {
+                        "connect_timeout": 30,
+                        "read_timeout": 30,
+                        "charset": "utf8mb4"
+                    }
+                }
+            )
+
+            # Create query chain
+            chain = create_sql_query_chain(self.llm, db_for_llm)
+
+            # Create direct connection for executing queries
+            db_conn = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+                connect_timeout=30,
+                read_timeout=30
+            )
+
+            self.db_handler = {
+                'chain': chain,
+                'connection': db_conn,
+                'config': FAR_DB_CONFIG
+            }
+
+            self.initialized = True
+            return True
+
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
+            return False
+
+    def query_far_details(self, question: str) -> str:
+        """Enhanced query processing with better error handling"""
+        if not self.db_handler:
+            return "❌ FAR Details database not available."
+
+        try:
+            print(f"DEBUG - Original question: {question}")
+
+            # Preprocess question to extract date information
+            enhanced_question = preprocess_question(question)
+
+            # Get date context
+            date_ctx = get_comprehensive_date_context()
+
+            # Create comprehensive context for the LLM
+            context_info = f"""
+CURRENT DATE CONTEXT:
+- Today: {date_ctx['current_date']}
+- Current Year: {date_ctx['current_year']}
+- Current Month: {date_ctx['current_month']} ({date_ctx['current_month_name']})
+- Next Year: {date_ctx['next_year']}
+
+IMPORTANT INSTRUCTIONS:
+- For month names like 'June', 'March', etc., use the corresponding month number
+- June = 6, March = 3, January = 1, December = 12, etc.
+- Always use STR_TO_DATE function for date columns
+- For 'June 2026' queries, use: MONTH(...) = 6 AND YEAR(...) = 2026
+- For 'this month' queries, use: MONTH(...) = current_month AND YEAR(...) = current_year
+- For 'created' or 'creation' use the Created column
+- For 'expire' or 'expiry' use the Expires column
+- NEVER use CURDATE() when specific month-year is mentioned
+- For "this month" always include both month and year filters
+
+QUESTION: {enhanced_question}
+"""
+
+            # Generate SQL using the chain
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    print(f"DEBUG - Attempt {attempt + 1} generating SQL")
+                    raw_sql = self.db_handler['chain'].invoke({"question": context_info})
+                    print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
+                    break
+                except Exception as e:
+                    print(f"DEBUG - SQL generation failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_retries - 1:
+                        return f"❌ Failed to generate SQL query after {max_retries} attempts: {str(e)}"
+                    continue
+
+            # Clean and validate SQL
+            sql = clean_and_fix_sql(raw_sql)
+            sql, is_valid = validate_and_fix_sql(sql)
+
+            if not is_valid:
+                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"
+
+            print(f"DEBUG - Final SQL: {sql}")
+            logger.info(f"Executing SQL: {sql}")
+
+            # Execute query with error handling
+            try:
+                with self.db_handler['connection'].cursor() as cursor:
+                    cursor.execute(sql)
+                    result = cursor.fetchall()
+                    print(f"DEBUG - Query returned {len(result)} rows")
+
+                    if not result:
+                        suggestions = self._generate_suggestions(question, sql)
+                        return f"I couldn't find any FAR records matching your criteria.\n\n{suggestions}"
+
+                    # Format and return results
+                    return format_query_results_natural(result, question)
+
+            except pymysql.Error as db_error:
+                error_code = getattr(db_error, 'args', [None])[0] if hasattr(db_error, 'args') else None
+                error_msg = f"❌ Database Error (Code: {error_code}): {str(db_error)}\n"
+                error_msg += f"SQL: {sql}\n"
+
+                # Try to provide helpful suggestions based on error type
+                if "syntax error" in str(db_error).lower():
+                    error_msg += "This appears to be a SQL syntax error. "
+                elif "unknown column" in str(db_error).lower():
+                    error_msg += "This appears to be a column name error. "
+                elif "table" in str(db_error).lower():
+                    error_msg += "This appears to be a table name error. "
+
+                error_msg += "Please try rephrasing your question."
+                logger.error(f"Database error: {db_error}\nSQL: {sql}")
+                return error_msg
+
+        except Exception as e:
+            error_msg = f"❌ Error processing request: {str(e)}\n"
+            error_msg += "Please try rephrasing your question."
+            logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
+            return error_msg
+
+    def _generate_suggestions(self, question: str, sql: str) -> str:
+        """Generate helpful suggestions when no results are found"""
+        suggestions = "💡 Suggestions:\n"
+        suggestions += "• Try using broader search terms\n"
+        suggestions += "• Check if the date range contains data\n"
+        suggestions += "• Verify status values (active, resolved, etc.)\n"
+
+        if "june" in question.lower() or "2026" in question:
+            suggestions += "• For future dates like 'June 2026', ensure data exists for that period\n"
+
+        suggestions += f"\n🔍 Query executed: {sql}"
+        return suggestions
+
+    def process_question(self, question: str) -> str:
+        """Process questions with enhanced error handling"""
+        if not self.initialized and not self.initialize():
+            return "❌ FAR Details Assistant initialization failed. Please check database connection."
+
+        if is_dangerous(question):
+            return "❌ Question blocked for security reasons."
+
+        # Add to chat history
+        self.chat_history.append(f"User: {question}")
+
+        # Get response
+        response = self.query_far_details(question)
+
+        # Add response to history
+        self.chat_history.append(f"Assistant: {response}")
+
+        return response
+
+    def start_interactive_session(self, query):
+        """Process single query with comprehensive error handling"""
+        if not self.initialize():
+            return "❌ Failed to initialize FAR Details Assistant. Check database connection."
+
+        try:
+            if query.lower() in ['exit', 'quit', 'q']:
+                return "👋 Session ended."
+
+            print("🔍 Processing your query...")
+            response = self.process_question(query)
+            return response
+
+        except KeyboardInterrupt:
+            return "👋 Session interrupted."
+        except Exception as e:
+            error_msg = f"❌ Session error: {str(e)}"
+            logger.error(f"Session error: {e}\n{traceback.format_exc()}")
+            return error_msg
+        finally:
+            # Clean up database connection
+            try:
+                if (self.db_handler and
+                    self.db_handler.get('connection') and
+                    hasattr(self.db_handler['connection'], 'open') and
+                    self.db_handler['connection'].open):
+                    self.db_handler['connection'].close()
+            except Exception as cleanup_error:
+                print(f"DEBUG - Cleanup error: {cleanup_error}")
+                pass
+
+def Farmain(query):
+    """Main function to process FAR queries with enhanced robustness"""
+    print("🚀 Starting FAR Details Assistant...")
+    assistant = FarDetailsAssistant()
+    result = assistant.start_interactive_session(query)
+    print("✅ Query processing complete.")
+    return result
+
+# Test the function with enhanced date handling
+if __name__ == "__main__":
+    # Test with comprehensive date queries including next year scenarios
+    test_queries = [
+        "Show me FAR with ID 175",
+        "List all FARs created in 2020",
+        "Show me all FARs that expire in March 2020",
+        "Count FARs created today",
+        "FARs expiring this month",  # Should now include current year
+        "All FARs with status resolved",
+        "FARs created next year",
+        "Count FARs expiring next year",
+        "FARs created this year",
+        "Show FARs created last year",
+        "FARs expiring next month",
+        "Count all active FARs created in the previous year",
+        "List FARs that will expire in January 2026",  # Should work without CURDATE()
+        "Show me FARs created between 2020 and 2023",
+        "How many FARs are expiring in July 2026"  # Specific test case
+    ]
+
+    for query in test_queries:
+        print(f"\n{'='*60}")
+        print(f"Testing: {query}")
+        print('='*60)
+        result = Farmain(query)
         print(result)
