@@ -5,295 +5,324 @@ import json
 from django.views.decorators.csrf import csrf_exempt
 import requests
 import os
+import logging
+from datetime import datetime
 from .aiFar_v10 import *
-from .aiTeam_v3 import *
+from .aiTeam_v3 import *  # This should be replaced with the enhanced version
 from .aiSys_v1 import *
 from .aiWork_v11 import *
 
-# In-memory context storage (for production, consider using Redis or database)
-USER_CONTEXTS = {}
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def get_or_create_session_id(request):
-    """Get or create a session ID for context management"""
-    # Try to get session ID from request data or headers
-    session_id = None
-    
-    if hasattr(request, 'session') and request.session.session_key:
-        session_id = request.session.session_key
-    elif request.META.get('HTTP_X_SESSION_ID'):
-        session_id = request.META.get('HTTP_X_SESSION_ID')
-    else:
-        # Generate a simple session ID based on IP and timestamp
-        import time
-        import hashlib
-        ip = request.META.get('REMOTE_ADDR', 'unknown')
-        timestamp = str(time.time())
-        session_id = hashlib.md5(f"{ip}_{timestamp}".encode()).hexdigest()[:16]
-    
-    return session_id
+# Global dictionary to store assistant instances per session
+# In production, consider using Redis or database for session management
+ASSISTANT_SESSIONS = {}
+SESSION_TIMEOUT_MINUTES = 30
 
-def get_user_context(session_id):
-    """Get user context for a session"""
-    if session_id not in USER_CONTEXTS:
-        USER_CONTEXTS[session_id] = {
-            'conversation_history': [],
-            'last_query_type': None,
-            'last_results': None,
-            'created_at': time.time()
+def get_or_create_assistant_session(session_key: str):
+    """Get or create assistant session for context management"""
+    from .aiTeam_v3 import EnhancedTeamDetailsAssistant  # Import the enhanced version
+    
+    current_time = datetime.now()
+    
+    # Clean up expired sessions
+    expired_sessions = []
+    for key, session_data in ASSISTANT_SESSIONS.items():
+        if (current_time - session_data['last_activity']).total_seconds() > (SESSION_TIMEOUT_MINUTES * 60):
+            expired_sessions.append(key)
+    
+    for key in expired_sessions:
+        # Cleanup database connections
+        try:
+            if ASSISTANT_SESSIONS[key]['assistant'].db_handler and ASSISTANT_SESSIONS[key]['assistant'].db_handler['connection']:
+                ASSISTANT_SESSIONS[key]['assistant'].db_handler['connection'].close()
+        except:
+            pass
+        del ASSISTANT_SESSIONS[key]
+        logger.info(f"Cleaned up expired session: {key}")
+    
+    # Get or create session
+    if session_key not in ASSISTANT_SESSIONS:
+        assistant = EnhancedTeamDetailsAssistant()
+        ASSISTANT_SESSIONS[session_key] = {
+            'assistant': assistant,
+            'created_at': current_time,
+            'last_activity': current_time
         }
-    return USER_CONTEXTS[session_id]
+        logger.info(f"Created new assistant session: {session_key}")
+    else:
+        # Update last activity
+        ASSISTANT_SESSIONS[session_key]['last_activity'] = current_time
+    
+    return ASSISTANT_SESSIONS[session_key]['assistant']
 
-def update_user_context(session_id, query, response, query_type='general'):
-    """Update user context with new query and response"""
-    context = get_user_context(session_id)
-    
-    # Add to conversation history (keep last 10 exchanges)
-    context['conversation_history'].append({
-        'query': query,
-        'response': response,
-        'timestamp': time.time(),
-        'query_type': query_type
-    })
-    
-    # Keep only last 10 exchanges to prevent memory bloat
-    if len(context['conversation_history']) > 10:
-        context['conversation_history'] = context['conversation_history'][-10:]
-    
-    context['last_query_type'] = query_type
-    context['last_results'] = response
-    
-    return context
-
-def clean_old_contexts():
-    """Clean contexts older than 1 hour"""
-    import time
-    current_time = time.time()
-    sessions_to_remove = []
-    
-    for session_id, context in USER_CONTEXTS.items():
-        if current_time - context.get('created_at', 0) > 3600:  # 1 hour
-            sessions_to_remove.append(session_id)
-    
-    for session_id in sessions_to_remove:
-        del USER_CONTEXTS[session_id]
+def get_session_key(request):
+    """Generate session key from request"""
+    # Use Django session key if available, otherwise use IP + User-Agent
+    if hasattr(request, 'session') and request.session.session_key:
+        return request.session.session_key
+    else:
+        # Fallback to IP-based session (not recommended for production)
+        ip = request.META.get('REMOTE_ADDR', 'unknown')
+        user_agent = request.META.get('HTTP_USER_AGENT', 'unknown')[:50]
+        return f"{ip}_{hash(user_agent) % 10000}"
 
 # Create your views here.
 @csrf_exempt
 def chat(request):
-    if request.method == 'POST':
-       #return JsonResponse({'response':"hello bro"})
-       data = json.loads(request.body)
-       model = data.get('model')
-       p = data.get('message')
-       #p="hello how are you"
-       #return JsonResponse({'response':"hello bro"})
-       print(repr(p))
-       #p=str(p.strip())
-       '''if not model or not p:
-           return JsonResponse({"error":"Model and prompt are required"},status=500,safe=False)'''
-
-       try:
-          response = requests.post(
-                  'http://localhost:11434/api/generate/',
-                  json={
-                      "model":"myllm:latest",
-                   "prompt":str(p),
-                   "stream":False
-
-                      }
-          )
-          '''result=subprocess.run(
-                  ['ollama','ge','model'],
-                  input=prompt.encode(),
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE,
-                  timeout=60
-                  )
-          #print(response.json())
-          if result.returncode == 0:
-              return JsonResponse({'response': result.stdout.decode()})
-          else :
-              return JsonResponse({'error':result.stderr.decode},status=500)'''
-          if response.status_code == 200:
-             result=response.json()
-             return JsonResponse({'response': result.get('response','').strip()})
-          else:
-             return JsonResponse({'error': response.txt}, status=500,safe=False)
-       except Exception as e:
-             return JsonResponse({'error': str(e)},status=500)
-
-@csrf_exempt
-def chatFarNew(request):
-    if request.method == 'POST':
-       try:
-           data = json.loads(request.body)
-           model = data.get('model')
-           p = data.get('message')
-           
-           # Get session context
-           session_id = get_or_create_session_id(request)
-           context = get_user_context(session_id)
-           
-           # Clean old contexts periodically
-           clean_old_contexts()
-           
-           # Pass context to the main function
-           output = Farmain(p, context)
-           
-           # Update context with new query and response
-           update_user_context(session_id, p, output, 'farming')
-           
-           print("---------")
-           print(output)
-           print("after output")
-           
-           return JsonResponse({
-               'response': output,
-               'session_id': session_id
-           }, status=200, safe=False)
-       except Exception as e:
-           return JsonResponse({'error': str(e)}, status=500, safe=False)
-    else:
-       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
-
-@csrf_exempt
-def chatTeamNew(request):
-    if request.method == 'POST':
-       try:
-           data = json.loads(request.body)
-           model = data.get('model')
-           p = data.get('message')
-           
-           # Get session context
-           session_id = get_or_create_session_id(request)
-           context = get_user_context(session_id)
-           
-           # Clean old contexts periodically
-           clean_old_contexts()
-           
-           # Pass context to the main function
-           output = Teammain(p, context)
-           
-           # Update context with new query and response
-           update_user_context(session_id, p, output, 'team')
-           
-           print("---------")
-           print(f"Session ID: {session_id}")
-           print(f"Context history length: {len(context['conversation_history'])}")
-           print(output)
-           print("after output")
-           
-           return JsonResponse({
-               'response': output,
-               'session_id': session_id,
-               'context_length': len(context['conversation_history'])
-           }, status=200, safe=False)
-       except Exception as e:
-           return JsonResponse({'error': str(e)}, status=500, safe=False)
-    else:
-       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
-
-@csrf_exempt
-def chatSystemNew(request):
-    if request.method == 'POST':
-       try:
-           data = json.loads(request.body)
-           model = data.get('model')
-           p = data.get('message')
-           
-           # Get session context
-           session_id = get_or_create_session_id(request)
-           context = get_user_context(session_id)
-           
-           # Clean old contexts periodically
-           clean_old_contexts()
-           
-           # Pass context to the main function
-           output = ComplianceMain(p, context)
-           
-           # Update context with new query and response
-           update_user_context(session_id, p, output, 'system')
-           
-           print("---------")
-           print(output)
-           print("after output")
-           
-           return JsonResponse({
-               'response': output,
-               'session_id': session_id
-           }, status=200, safe=False)
-       except Exception as e:
-           return JsonResponse({'error': str(e)}, status=500, safe=False)
-    else:
-       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
-
-@csrf_exempt
-def chatWorkloadNew(request):
-    if request.method == 'POST':
-       try:
-           data = json.loads(request.body)
-           model = data.get('model')
-           p = data.get('message')
-           
-           # Get session context
-           session_id = get_or_create_session_id(request)
-           context = get_user_context(session_id)
-           
-           # Clean old contexts periodically
-           clean_old_contexts()
-           
-           # Pass context to the main function
-           output = OpTestMain(p, context)
-           
-           # Update context with new query and response
-           update_user_context(session_id, p, output, 'workload')
-           
-           print("---------")
-           print(output)
-           print("after output")
-           
-           return JsonResponse({
-               'response': output,
-               'session_id': session_id
-           }, status=200, safe=False)
-       except Exception as e:
-           return JsonResponse({'error': str(e)}, status=500, safe=False)
-    else:
-       return JsonResponse({'error': 'Method not allowed'}, status=405, safe=False)
-
-@csrf_exempt
-def clear_context(request):
-    """Clear user context for a session"""
+    """Original chat endpoint for basic LLM interaction"""
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            session_id = data.get('session_id') or get_or_create_session_id(request)
+            model = data.get('model')
+            p = data.get('message')
             
-            if session_id in USER_CONTEXTS:
-                del USER_CONTEXTS[session_id]
-                return JsonResponse({'message': 'Context cleared successfully'})
+            if not p:
+                return JsonResponse({'error': 'Message is required'}, status=400)
+            
+            logger.info(f"Basic chat request: {p[:100]}...")
+
+            response = requests.post(
+                'http://localhost:11434/api/generate/',
+                json={
+                    "model": "myllm:latest",
+                    "prompt": str(p),
+                    "stream": False
+                },
+                timeout=30  # Add timeout
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return JsonResponse({'response': result.get('response', '').strip()})
             else:
-                return JsonResponse({'message': 'No context found for this session'})
+                return JsonResponse({'error': f'LLM service error: {response.status_code}'}, status=500)
+                
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON'}, status=400)
+        except requests.RequestException as e:
+            logger.error(f"Request error: {e}")
+            return JsonResponse({'error': 'Service temporarily unavailable'}, status=503)
         except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    else:
-        return JsonResponse({'error': 'Method not allowed'}, status=405)
+            logger.error(f"Unexpected error: {e}")
+            return JsonResponse({'error': 'Internal server error'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @csrf_exempt
-def get_context_info(request):
-    """Get context information for debugging"""
+def chatFarNew(request):
+    """Farming-related queries"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            p = data.get('message')
+            
+            if not p:
+                return JsonResponse({'error': 'Message is required'}, status=400)
+            
+            logger.info(f"Farm query: {p[:100]}...")
+            output = Farmain(p)
+            
+            return JsonResponse({'response': output}, status=200)
+            
+        except Exception as e:
+            logger.error(f"Farm query error: {e}")
+            return JsonResponse({'error': 'Error processing farm query'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def chatTeamNew(request):
+    """Enhanced team queries with context awareness"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            p = data.get('message')
+            
+            if not p:
+                return JsonResponse({'error': 'Message is required'}, status=400)
+            
+            # Get session key for context management
+            session_key = get_session_key(request)
+            
+            logger.info(f"Team query (session: {session_key}): {p[:100]}...")
+            
+            # Get or create assistant session
+            assistant = get_or_create_assistant_session(session_key)
+            
+            # Process query with context awareness
+            start_time = datetime.now()
+            output = assistant.start_interactive_session(p)
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            logger.info(f"Team query processed in {processing_time:.2f} seconds")
+            
+            # Prepare response with additional metadata
+            response_data = {
+                'response': output,
+                'processing_time': round(processing_time, 2),
+                'session_id': session_key,
+                'context_used': assistant.context.should_use_context(p) if hasattr(assistant, 'context') else False
+            }
+            
+            # Add context summary for debugging (optional)
+            if data.get('debug', False):
+                response_data['context_summary'] = assistant.get_context_summary() if hasattr(assistant, 'get_context_summary') else "Context not available"
+            
+            return JsonResponse(response_data, status=200)
+            
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON'}, status=400)
+        except Exception as e:
+            logger.error(f"Team query error: {e}")
+            return JsonResponse({'error': 'Error processing team query'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def chatSystemNew(request):
+    """System compliance queries"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            p = data.get('message')
+            
+            if not p:
+                return JsonResponse({'error': 'Message is required'}, status=400)
+            
+            logger.info(f"System query: {p[:100]}...")
+            output = ComplianceMain(p)
+            
+            return JsonResponse({'response': output}, status=200)
+            
+        except Exception as e:
+            logger.error(f"System query error: {e}")
+            return JsonResponse({'error': 'Error processing system query'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def chatWorkloadNew(request):
+    """Workload-related queries"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            p = data.get('message')
+            
+            if not p:
+                return JsonResponse({'error': 'Message is required'}, status=400)
+            
+            logger.info(f"Workload query: {p[:100]}...")
+            output = OpTestMain(p)
+            
+            return JsonResponse({'response': output}, status=200)
+            
+        except Exception as e:
+            logger.error(f"Workload query error: {e}")
+            return JsonResponse({'error': 'Error processing workload query'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def clearTeamContext(request):
+    """Clear conversation context for team assistant"""
+    if request.method == 'POST':
+        try:
+            session_key = get_session_key(request)
+            
+            if session_key in ASSISTANT_SESSIONS:
+                # Clear context but keep the assistant instance
+                assistant = ASSISTANT_SESSIONS[session_key]['assistant']
+                if hasattr(assistant, 'context'):
+                    assistant.context.history.clear()
+                    assistant.context.last_query_entities.clear()
+                    logger.info(f"Cleared context for session: {session_key}")
+                    return JsonResponse({'message': 'Context cleared successfully'})
+            
+            return JsonResponse({'message': 'No active session found'})
+            
+        except Exception as e:
+            logger.error(f"Error clearing context: {e}")
+            return JsonResponse({'error': 'Error clearing context'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def getTeamContext(request):
+    """Get current conversation context for debugging"""
     if request.method == 'GET':
         try:
-            session_id = request.GET.get('session_id') or get_or_create_session_id(request)
-            context = get_user_context(session_id)
+            session_key = get_session_key(request)
+            
+            if session_key in ASSISTANT_SESSIONS:
+                assistant = ASSISTANT_SESSIONS[session_key]['assistant']
+                if hasattr(assistant, 'get_context_summary'):
+                    context_summary = assistant.get_context_summary()
+                    return JsonResponse({
+                        'session_id': session_key,
+                        'context_summary': context_summary,
+                        'history_count': len(assistant.context.history) if hasattr(assistant, 'context') else 0
+                    })
             
             return JsonResponse({
-                'session_id': session_id,
-                'conversation_count': len(context['conversation_history']),
-                'last_query_type': context.get('last_query_type'),
-                'created_at': context.get('created_at')
+                'session_id': session_key,
+                'context_summary': 'No active session',
+                'history_count': 0
             })
+            
         except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    else:
-        return JsonResponse({'error': 'Method not allowed'}, status=405)
+            logger.error(f"Error getting context: {e}")
+            return JsonResponse({'error': 'Error retrieving context'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def getSessionStats(request):
+    """Get session statistics for monitoring"""
+    if request.method == 'GET':
+        try:
+            active_sessions = len(ASSISTANT_SESSIONS)
+            session_info = []
+            
+            for session_key, session_data in ASSISTANT_SESSIONS.items():
+                session_info.append({
+                    'session_id': session_key,
+                    'created_at': session_data['created_at'].isoformat(),
+                    'last_activity': session_data['last_activity'].isoformat(),
+                    'history_count': len(session_data['assistant'].context.history) if hasattr(session_data['assistant'], 'context') else 0
+                })
+            
+            return JsonResponse({
+                'active_sessions': active_sessions,
+                'session_timeout_minutes': SESSION_TIMEOUT_MINUTES,
+                'sessions': session_info
+            })
+            
+        except Exception as e:
+            logger.error(f"Error getting session stats: {e}")
+            return JsonResponse({'error': 'Error retrieving session stats'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+# Cleanup function that can be called periodically
+def cleanup_expired_sessions():
+    """Clean up expired sessions - can be called by a periodic task"""
+    current_time = datetime.now()
+    expired_sessions = []
+    
+    for key, session_data in ASSISTANT_SESSIONS.items():
+        if (current_time - session_data['last_activity']).total_seconds() > (SESSION_TIMEOUT_MINUTES * 60):
+            expired_sessions.append(key)
+    
+    for key in expired_sessions:
+        try:
+            if ASSISTANT_SESSIONS[key]['assistant'].db_handler and ASSISTANT_SESSIONS[key]['assistant'].db_handler['connection']:
+                ASSISTANT_SESSIONS[key]['assistant'].db_handler['connection'].close()
+        except:
+            pass
+        del ASSISTANT_SESSIONS[key]
+    
+    logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
+    return len(expired_sessions)
