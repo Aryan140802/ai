@@ -1,0 +1,18 @@
+# urls.py - Add these to your Django app's URL configuration
+
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    # Original endpoints
+    path('chat/', views.chat, name='chat'),
+    path('chat/farm/', views.chatFarNew, name='chat_farm'),
+    path('chat/team/', views.chatTeamNew, name='chat_team'),
+    path('chat/system/', views.chatSystemNew, name='chat_system'),
+    path('chat/workload/', views.chatWorkloadNew, name='chat_workload'),
+    
+    # New context management endpoints
+    path('chat/team/clear-context/', views.clearTeamContext, name='clear_team_context'),
+    path('chat/team/get-context/', views.getTeamContext, name='get_team_context'),
+    path('admin/session-stats/', views.getSessionStats, name='session_stats'),
+]
