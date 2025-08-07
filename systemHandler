@@ -3,7 +3,7 @@ import re
 import logging
 import pymysql
 import traceback
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
 import json
 import calendar
@@ -35,13 +35,68 @@ BLOCKED_PATTERNS = [
     r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
 
+# Fast query patterns - these don't need AI
+FAST_QUERY_PATTERNS = {
+    # Simple server lookups
+    r"server\s+(\d+)": "SELECT * FROM EISHome_compliance WHERE id = {0}",
+    r"server\s+with\s+id\s+(\d+)": "SELECT * FROM EISHome_compliance WHERE id = {0}",
+    r"ip\s+([0-9.]+)": "SELECT * FROM EISHome_compliance WHERE ip_address = '{0}'",
+    r"server\s+([0-9.]+)": "SELECT * FROM EISHome_compliance WHERE ip_address = '{0}'",
+    
+    # Count queries
+    r"^(?:how\s+many|count|total)\s+servers?$": "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
+    r"^(?:how\s+many|count|total)\s+(.+?)\s+servers?$": "SELECT COUNT(*) as total FROM EISHome_compliance WHERE server_role LIKE '%{0}%'",
+    
+    # Simple status queries
+    r"^(?:show\s+)?all\s+servers?$": "SELECT * FROM EISHome_compliance",
+    r"^(?:list\s+)?all\s+servers?$": "SELECT * FROM EISHome_compliance",
+    r"^(?:show\s+|list\s+)?(.+?)\s+servers?$": "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%{0}%'",
+    
+    # Security status
+    r"firewall\s+(?:disabled|inactive|off)": "SELECT * FROM EISHome_compliance WHERE firewall NOT LIKE '%active%' AND firewall NOT LIKE '%enabled%'",
+    r"firewall\s+(?:enabled|active|on)": "SELECT * FROM EISHome_compliance WHERE firewall LIKE '%active%' OR firewall LIKE '%enabled%'",
+    
+    # Performance queries
+    r"high\s+cpu": "SELECT * FROM EISHome_compliance WHERE cpu > 80",
+    r"high\s+memory": "SELECT * FROM EISHome_compliance WHERE memory > 90",
+    r"low\s+(?:ram|memory)": "SELECT * FROM EISHome_compliance WHERE ram < 8",
+}
+
+# Queries that need natural language analysis
+ANALYTICAL_KEYWORDS = [
+    "same", "different", "compare", "analyze", "summary", "overview",
+    "do all", "are all", "which ones", "what percentage", "how many have",
+    "group by", "breakdown", "distribution", "average", "median",
+    "compliance status", "security summary", "performance summary"
+]
+
+def is_analytical_query(question: str) -> bool:
+    """Check if query needs natural language analysis"""
+    question_lower = question.lower()
+    return any(keyword in question_lower for keyword in ANALYTICAL_KEYWORDS)
+
+def try_fast_query(question: str) -> Optional[str]:
+    """Try to match question to fast SQL patterns"""
+    question_clean = re.sub(r'[^\w\s.]', '', question.lower()).strip()
+    
+    for pattern, sql_template in FAST_QUERY_PATTERNS.items():
+        match = re.search(pattern, question_clean, re.IGNORECASE)
+        if match:
+            try:
+                if match.groups():
+                    return sql_template.format(*match.groups())
+                else:
+                    return sql_template
+            except:
+                continue
+    return None
+
 def get_comprehensive_date_context():
-    """Generate extremely comprehensive date context for robust LLM understanding"""
+    """Generate comprehensive date context for LLM understanding"""
     current_date = date.today()
     current_year = current_date.year
     current_month = current_date.month
 
-    # Create month name mappings (case insensitive)
     month_names = {
         'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
         'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
@@ -49,7 +104,7 @@ def get_comprehensive_date_context():
         'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12
     }
 
-    month_numbers = {v: k.title() for k, v in month_names.items() if len(k) > 3}  # Full names only
+    month_numbers = {v: k.title() for k, v in month_names.items() if len(k) > 3}
 
     return {
         'current_date': current_date.strftime('%Y-%m-%d'),
@@ -60,163 +115,60 @@ def get_comprehensive_date_context():
         'prev_year': current_year - 1,
         'month_names': month_names,
         'month_numbers': month_numbers,
-        'years_range': list(range(current_year - 5, current_year + 10))  # Support wide range
+        'years_range': list(range(current_year - 5, current_year + 10))
     }
 
-def preprocess_question(question: str) -> str:
-    """Preprocess the question to handle common patterns and extract explicit date info"""
-    question_lower = question.lower().strip()
+def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
+    """Use AI to analyze results and provide natural language insights"""
+    if not results:
+        return "No data found to analyze."
+    
+    # Prepare data summary for AI
+    total_count = len(results)
+    sample_data = results[:5] if len(results) > 5 else results
+    
+    # Extract key fields for analysis
+    analysis_data = {
+        'total_servers': total_count,
+        'sample_records': sample_data,
+        'unique_values': {}
+    }
+    
+    # Get unique values for key fields
+    key_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 'aceVersion']
+    for field in key_fields:
+        if field in results[0]:
+            unique_vals = list(set(str(r.get(field, 'NULL')) for r in results))
+            analysis_data['unique_values'][field] = unique_vals[:10]  # Limit to 10 unique values
+    
+    analysis_prompt = f"""
+You are analyzing system compliance data. The user asked: "{question}"
 
-    # Extract explicit month-year patterns
-    month_year_patterns = [
-        r'\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{4})\b',
-        r'\b(\d{4})\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\b',
-        r'\b(\d{1,2})/(\d{4})\b',  # MM/YYYY
-        r'\b(\d{4})/(\d{1,2})\b'   # YYYY/MM
-    ]
+Data Summary:
+- Total servers found: {total_count}
+- Unique values in key fields: {json.dumps(analysis_data['unique_values'], indent=2)}
+- Sample records: {json.dumps(sample_data, indent=2)}
 
-    date_ctx = get_comprehensive_date_context()
-    extracted_info = {}
+Please provide a natural language analysis that directly answers the user's question. Be specific about:
+1. Direct answer (Yes/No if applicable)
+2. Key findings
+3. Specific details about differences or compliance issues
+4. Actionable insights
 
-    for pattern in month_year_patterns:
-        match = re.search(pattern, question_lower)
-        if match:
-            groups = match.groups()
-            if len(groups) == 2:
-                # Determine which is month and which is year
-                for group in groups:
-                    if group.isdigit():
-                        num = int(group)
-                        if 1900 <= num <= 2100:  # Year
-                            extracted_info['year'] = num
-                        elif 1 <= num <= 12:  # Month number
-                            extracted_info['month'] = num
-                    else:
-                        # Month name
-                        if group in date_ctx['month_names']:
-                            extracted_info['month'] = date_ctx['month_names'][group]
-            break
-
-    # Add extracted information to question for LLM
-    if extracted_info:
-        addition = f" [EXTRACTED: "
-        if 'month' in extracted_info:
-            addition += f"month={extracted_info['month']} "
-        if 'year' in extracted_info:
-            addition += f"year={extracted_info['year']} "
-        addition += "]"
-        question += addition
-
-        print(f"DEBUG - Extracted date info: {extracted_info}")
-        print(f"DEBUG - Enhanced question: {question}")
-
-    return question
-
-def get_sql_generation_prompt():
-    """Generate comprehensive SQL prompt for system compliance queries"""
-    date_ctx = get_comprehensive_date_context()
-
-    return f"""You are an expert SQL query generator for a System Compliance database.
-
-**CURRENT DATE CONTEXT:**
-- Today's date: {date_ctx['current_date']}
-- Current year: {date_ctx['current_year']}
-- Current month: {date_ctx['current_month']} ({date_ctx['current_month_name']})
-- Next year: {date_ctx['next_year']}
-- Previous year: {date_ctx['prev_year']}
-
-**DATABASE SCHEMA:**
-Table: EISHome_compliance
-- id (BIGINT): Unique identifier
-- ip_address (VARCHAR): Server IP address
-- last_update (VARCHAR): Last update timestamp
-- upTime (VARCHAR): System uptime
-- server_role (VARCHAR): Server role/function
-- ram (INT): RAM in GB
-- cpuCore (INT): Number of CPU cores
-- osVersion (VARCHAR): Operating system version
-- kernelUdate (VARCHAR): Kernel update info
-- aceVersion (VARCHAR): ACE version
-- mqVersion (VARCHAR): MQ version
-- firewall (VARCHAR): Firewall status
-- rpmCount (INT): Number of RPM packages
-- dsAgent (VARCHAR): Deep Security agent status
-- splunk (VARCHAR): Splunk agent status
-- ragent (VARCHAR): R agent status
-- eisuserExpi (VARCHAR): EIS user expiry date
-- rootExpi (VARCHAR): Root user expiry date
-- socvaExpi (VARCHAR): Socva user expiry date
-- addmitamExpi (VARCHAR): Addmitam user expiry date
-- systemTime (VARCHAR): System time
-- fileSystem (VARCHAR): File system info
-- kernelVersion (VARCHAR): Kernel version
-- cpu (INT): CPU usage/utilization  percentage
-- mem_cp_update (VARCHAR): Memory/CP update info
-- memory (INT): Memory usage percentage
-
-**CRITICAL SQL GENERATION RULES:**
-1. ONLY generate SELECT statements
-2. Always use exact table name: EISHome_compliance
-3. For text fields, use LIKE with % wildcards: column_name LIKE '%search_term%'
-4. For numeric comparisons use =, >, <, >=, <= operators
-5. For IP addresses, use exact match or LIKE for partial matches
-6. NEVER add LIMIT unless specifically requested
-7. Return ONLY the SQL query - no explanations or markdown
-
-**COMMON QUERY PATTERNS:**
-
-**Server Information:**
-- "server with IP 192.168.1.100" → SELECT * FROM EISHome_compliance WHERE ip_address = '192.168.1.100'
-- "web servers" → SELECT * FROM EISHome_compliance WHERE server_role LIKE '%web%'
-- "database servers" → SELECT * FROM EISHome_compliance WHERE server_role LIKE '%database%' OR server_role LIKE '%db%'
-
-**Performance Queries:**
-- "high CPU usage" → SELECT * FROM EISHome_compliance WHERE cpu > 80
-- "low memory servers" → SELECT * FROM EISHome_compliance WHERE memory > 90
-- "servers with more than 16GB RAM" → SELECT * FROM EISHome_compliance WHERE ram > 16
-- "servers with 8+ CPU cores" → SELECT * FROM EISHome_compliance WHERE cpuCore >= 8
-
-**Security Compliance:**
-- "firewall disabled" → SELECT * FROM EISHome_compliance WHERE firewall LIKE '%disabled%' OR firewall LIKE '%inactive%'
-- "Deep Security agent not running" → SELECT * FROM EISHome_compliance WHERE dsAgent NOT LIKE '%running%' AND dsAgent NOT LIKE '%active%'
-- "expired users" → SELECT * FROM EISHome_compliance WHERE eisuserExpi LIKE '%expired%' OR rootExpi LIKE '%expired%'
-- "Splunk agent issues" → SELECT * FROM EISHome_compliance WHERE splunk NOT LIKE '%running%'
-
-**System Versions:**
-- "CentOS servers" → SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%CentOS%'
-- "old kernel versions" → SELECT * FROM EISHome_compliance WHERE kernelVersion LIKE '%3.%' OR kernelVersion LIKE '%2.%'
-- "ACE version 8" → SELECT * FROM EISHome_compliance WHERE aceVersion LIKE '%8.%'
-
-**Aggregation Queries:**
-- "count servers by role" → SELECT server_role, COUNT(*) as count FROM EISHome_compliance GROUP BY server_role
-- "average RAM per server role" → SELECT server_role, AVG(ram) as avg_ram FROM EISHome_compliance GROUP BY server_role
-- "total servers" → SELECT COUNT(*) as total_servers FROM EISHome_compliance
-
-**Compliance Status:**
-- "non-compliant servers" → SELECT * FROM EISHome_compliance WHERE firewall NOT LIKE '%active%' OR dsAgent NOT LIKE '%running%'
-- "servers needing updates" → SELECT * FROM EISHome_compliance WHERE kernelUdate LIKE '%available%' OR kernelUdate LIKE '%pending%'
-
-**USER QUESTION:** {{question}}
+Keep the response concise but informative. Focus on answering the specific question asked.
 """
 
-# Setup logging
-logging.basicConfig(
-    filename=os.path.expanduser("~/.system_compliance_ai.log"),
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-def is_dangerous(text: str) -> bool:
-    """Check if text contains dangerous patterns"""
-    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
+    try:
+        response = llm.invoke(analysis_prompt)
+        return response.strip()
+    except Exception as e:
+        return f"Analysis completed but couldn't generate insights: {str(e)}"
 
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Enhanced SQL cleaning with better error handling"""
     print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
     raw_sql = sqlparse.format(raw_sql, strip_comments=True).strip()
-    print(f"DEBUG - Validating SQL: {raw_sql}")
-
+    
     # Handle common LLM response patterns
     if "i cannot" in raw_sql.lower() or "i can't" in raw_sql.lower():
         print("DEBUG - LLM refused to generate SQL")
@@ -226,7 +178,6 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     code_block_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if code_block_match:
         sql = code_block_match.group(1).strip()
-        print(f"DEBUG - Extracted from code block: {sql}")
     else:
         sql = raw_sql.strip()
 
@@ -238,69 +189,35 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     select_match = re.search(r'(SELECT\s+.*?)(?:\n\s*$|$)', sql, re.IGNORECASE | re.DOTALL)
     if select_match:
         sql = select_match.group(1).strip()
-        print(f"DEBUG - Extracted SELECT statement: {sql}")
 
-    # Handle specific server ID queries
-    if not sql.upper().startswith('SELECT') and re.search(r'\bserver\b.*\b\d+\b', raw_sql.lower()):
-        server_id_match = re.search(r'\b(\d+)\b', raw_sql)
-        if server_id_match:
-            server_id = server_id_match.group(1)
-            sql = f"SELECT * FROM EISHome_compliance WHERE id = {server_id}"
-            print(f"DEBUG - Generated server ID query: {sql}")
-
-    # Handle IP address queries
-    ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    ip_match = re.search(ip_pattern, raw_sql)
-    if ip_match and not sql.upper().startswith('SELECT'):
-        ip_address = ip_match.group(0)
-        sql = f"SELECT * FROM EISHome_compliance WHERE ip_address = '{ip_address}'"
-        print(f"DEBUG - Generated IP address query: {sql}")
-
-    # Fix text field searches (convert = to LIKE for text fields)
+    # Fix text field searches
     text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion',
                    'firewall', 'dsAgent', 'splunk', 'ragent', 'kernelVersion', 'fileSystem']
 
     for field in text_fields:
-        # Convert = to LIKE for text fields (except for exact IP matches)
-        if field != 'ip_address' or not re.search(ip_pattern, sql):
+        if field != 'ip_address' or not re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', sql):
             sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-            sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
 
-    # Remove unwanted LIMIT clauses
-    sql = re.sub(r'\s+LIMIT\s+\d+\s*$', '', sql, flags=re.IGNORECASE)
-
-    # Final cleanup
     sql = sql.strip()
-
     print(f"DEBUG - Final cleaned SQL: {sql}")
     return sql
 
 def validate_and_fix_sql(sql: str) -> tuple[str, bool]:
     """Validate SQL and attempt to fix common issues"""
-    fixed_sql = sqlparse.format(sql, strip_comments=True).strip()
-    print(f"DEBUG - Validating SQL: {fixed_sql}")
-    return fixed_sql,True
-    # Check if it's a valid SELECT query
     if not sql.upper().strip().startswith('SELECT'):
-        print("DEBUG - Not a SELECT query")
         return sql, False
 
-    # Check for dangerous operations
     dangerous_ops = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate']
     if any(op in sql.lower() for op in dangerous_ops):
-        print("DEBUG - Contains dangerous operations")
         return sql, False
 
-    # Try to fix common syntax issues
     fixed_sql = sql
-
-    # Fix missing table name
     if 'from eishome_compliance' in fixed_sql.lower():
         fixed_sql = re.sub(r'from\s+eishome_compliance', 'FROM EISHome_compliance', fixed_sql, flags=re.IGNORECASE)
 
-    print(f"DEBUG - Fixed SQL: {fixed_sql}")
-    if (fixed_sql[-1] != ";"):
-        fixed_sql += ";"
+    if not fixed_sql.endswith(';'):
+        fixed_sql += ';'
+    
     return fixed_sql, True
 
 def format_query_results_natural(result: List[Dict], question: str) -> str:
@@ -321,7 +238,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
         record = result[0]
         response = f"I found 1 server:\n\n"
 
-        # Format key information with icons
         key_fields = ['id', 'ip_address', 'server_role', 'osVersion', 'upTime', 'ram', 'cpuCore',
                      'firewall', 'dsAgent', 'splunk', 'cpu', 'memory', 'kernelVersion']
 
@@ -338,7 +254,6 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
                 field_name = field.replace('_', ' ').title()
                 value = record[field]
 
-                # Add units for specific fields
                 if field == 'ram':
                     value = f"{value} GB"
                 elif field == 'cpu' and isinstance(value, int):
@@ -350,60 +265,43 @@ def format_query_results_natural(result: List[Dict], question: str) -> str:
 
         return response.strip()
 
-    # Handle multiple records
+    # Handle multiple records - show summary
     response = f"I found {len(result)} servers matching your criteria:\n\n"
 
-    # Add summary statistics if available
-    if any(field in result[0] for field in ['server_role', 'osVersion', 'firewall']):
-        # Server role summary
-        if 'server_role' in result[0]:
-            role_counts = {}
-            for record in result:
-                role = record.get('server_role', 'Unknown')
-                role_counts[role] = role_counts.get(role, 0) + 1
+    # Add summary statistics
+    if 'server_role' in result[0]:
+        role_counts = {}
+        for record in result:
+            role = record.get('server_role', 'Unknown')
+            role_counts[role] = role_counts.get(role, 0) + 1
 
-            if len(role_counts) > 1:
-                response += "🏷️ Server Role Summary:\n"
-                for role, count in sorted(role_counts.items()):
-                    response += f"   • {role}: {count} servers\n"
-                response += "\n"
-
-        # Security status summary
-        if 'firewall' in result[0] and 'dsAgent' in result[0]:
-            firewall_active = sum(1 for r in result if r.get('firewall', '').lower() in ['active', 'enabled', 'running'])
-            ds_active = sum(1 for r in result if r.get('dsAgent', '').lower() in ['active', 'running'])
-
-            response += "🔒 Security Summary:\n"
-            response += f"   • Firewall Active: {firewall_active}/{len(result)} servers\n"
-            response += f"   • Deep Security Active: {ds_active}/{len(result)} servers\n"
+        if len(role_counts) > 1:
+            response += "🏷️ Server Role Summary:\n"
+            for role, count in sorted(role_counts.items()):
+                response += f"   • {role}: {count} servers\n"
             response += "\n"
 
-    # Show detailed results based on count
+    # Show limited detailed results
     if len(result) <= 10:
         response += "📋 Detailed Results:\n"
         response += format_query_results_tabular(result)
-    elif len(result) <= 50:
-        response += f"📋 First 10 Results (of {len(result)} total):\n"
-        response += format_query_results_tabular(result[:10])
-        response += f"\n... and {len(result) - 10} more servers."
     else:
-        response += f"📋 Sample Results (showing 5 of {len(result)} total):\n"
+        response += f"📋 First 5 Results (of {len(result)} total):\n"
         response += format_query_results_tabular(result[:5])
         response += f"\n... and {len(result) - 5} more servers."
 
     return response
 
 def format_query_results_tabular(result: List[Dict]) -> str:
-    """Format results in a clean table for system compliance"""
+    """Format results in a clean table"""
     if not result:
         return "No records found."
 
-    # Select most important columns for display
     important_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 'firewall', 'dsAgent']
     available_cols = [col for col in important_cols if col in result[0]]
 
     if not available_cols:
-        available_cols = list(result[0].keys())[:8]  # First 8 columns
+        available_cols = list(result[0].keys())[:8]
 
     output = []
 
@@ -414,7 +312,7 @@ def format_query_results_tabular(result: List[Dict]) -> str:
         for row in result:
             if row.get(col):
                 max_width = max(max_width, len(str(row[col])))
-        col_widths[col] = min(max_width, 30)  # Max 30 chars per column
+        col_widths[col] = min(max_width, 30)
 
     # Header
     header = " | ".join(col.ljust(col_widths[col]) for col in available_cols)
@@ -434,6 +332,45 @@ def format_query_results_tabular(result: List[Dict]) -> str:
 
     return "\n".join(output)
 
+def get_sql_generation_prompt():
+    """Generate SQL prompt for complex queries"""
+    date_ctx = get_comprehensive_date_context()
+    
+    return f"""You are an expert SQL query generator for a System Compliance database.
+
+**CURRENT DATE CONTEXT:**
+- Today's date: {date_ctx['current_date']}
+- Current year: {date_ctx['current_year']}
+
+**DATABASE SCHEMA:**
+Table: EISHome_compliance
+- id (BIGINT), ip_address (VARCHAR), server_role (VARCHAR), osVersion (VARCHAR)
+- ram (INT), cpuCore (INT), cpu (INT), memory (INT)
+- firewall (VARCHAR), dsAgent (VARCHAR), splunk (VARCHAR)
+- kernelVersion (VARCHAR), aceVersion (VARCHAR), mqVersion (VARCHAR)
+- eisuserExpi (VARCHAR), rootExpi (VARCHAR), last_update (VARCHAR)
+
+**RULES:**
+1. ONLY generate SELECT statements
+2. Use exact table name: EISHome_compliance
+3. For text searches use LIKE with %wildcards%
+4. Return ONLY the SQL query - no explanations
+
+QUESTION: {{question}}
+"""
+
+# Setup logging
+logging.basicConfig(
+    filename=os.path.expanduser("~/.system_compliance_ai.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def is_dangerous(text: str) -> bool:
+    """Check if text contains dangerous patterns"""
+    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
+
 class SystemComplianceAssistant:
     def __init__(self):
         self.llm = None
@@ -451,7 +388,7 @@ class SystemComplianceAssistant:
             db_cfg = COMPLIANCE_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
 
-            # Connect to database
+            # Connect to database for LLM chain
             db_for_llm = SQLDatabase.from_uri(
                 uri,
                 include_tables=COMPLIANCE_DB_CONFIG.get("include_tables"),
@@ -495,118 +432,93 @@ class SystemComplianceAssistant:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
+    def execute_sql_query(self, sql: str) -> List[Dict]:
+        """Execute SQL query and return results"""
+        try:
+            with self.db_handler['connection'].cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                return result
+        except Exception as e:
+            logger.error(f"SQL execution error: {e}\nSQL: {sql}")
+            raise
+
     def query_system_compliance(self, question: str) -> str:
-        """Enhanced query processing with better error handling"""
+        """Enhanced query processing with fast path and AI analysis"""
         if not self.db_handler:
             return "❌ System Compliance database not available."
 
+        start_time = datetime.now()
+        print(f"DEBUG - Processing question: {question}")
+
         try:
-            print(f"DEBUG - Original question: {question}")
+            # Step 1: Try fast query patterns first
+            fast_sql = try_fast_query(question)
+            if fast_sql:
+                print(f"DEBUG - Using fast query: {fast_sql}")
+                try:
+                    result = self.execute_sql_query(fast_sql)
+                    processing_time = (datetime.now() - start_time).total_seconds()
+                    print(f"DEBUG - Fast query completed in {processing_time:.2f}s")
+                    
+                    # For analytical queries, add AI analysis
+                    if is_analytical_query(question) and result:
+                        print("DEBUG - Adding AI analysis for fast query")
+                        ai_analysis = analyze_results_with_ai(question, result, self.llm)
+                        return f"{ai_analysis}\n\n📊 Data Details:\n{format_query_results_natural(result, question)}"
+                    else:
+                        return format_query_results_natural(result, question)
+                        
+                except Exception as e:
+                    print(f"DEBUG - Fast query failed: {e}")
+                    # Fall back to AI generation
 
-            # Preprocess question to extract date information
-            enhanced_question = preprocess_question(question)
+            # Step 2: Check if this needs analytical processing
+            needs_analysis = is_analytical_query(question)
+            print(f"DEBUG - Needs analysis: {needs_analysis}")
 
-            # Get date context
-            date_ctx = get_comprehensive_date_context()
-
-            # Create comprehensive context for the LLM
+            # Step 3: Generate SQL using AI
+            print("DEBUG - Generating SQL with AI")
             context_info = f"""
-CURRENT DATE CONTEXT:
-- Today: {date_ctx['current_date']}
-- Current Year: {date_ctx['current_year']}
-- Next Year: {date_ctx['next_year']}
-
 IMPORTANT INSTRUCTIONS:
 - For server searches, use ip_address, server_role, or id fields
-- For performance queries, use ram, cpuCore, cpu, memory fields
+- For performance queries, use ram, cpuCore, cpu, memory fields  
 - For security compliance, use firewall, dsAgent, splunk fields
-- For version info, use osVersion, kernelVersion, aceVersion, mqVersion
 - Use LIKE for text searches and exact matches for numbers/IPs
-- For expired users, check eisuserExpi, rootExpi, socvaExpi, addmitamExpi fields
-- Every time see the question and generate a answer to the question like wise
-QUESTION: {enhanced_question}
+
+QUESTION: {question}
 """
 
-            # Generate SQL using the chain
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    print(f"DEBUG - Attempt {attempt + 1} generating SQL")
-                    raw_sql = self.db_handler['chain'].invoke({"question": context_info})
-                    print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
-                    break
-                except Exception as e:
-                    print(f"DEBUG - SQL generation failed on attempt {attempt + 1}: {e}")
-                    if attempt == max_retries - 1:
-                        return f"❌ Failed to generate SQL query after {max_retries} attempts: {str(e)}"
-                    continue
-
-            # Clean and validate SQL
+            raw_sql = self.db_handler['chain'].invoke({"question": context_info})
             sql = clean_and_fix_sql(raw_sql)
             sql, is_valid = validate_and_fix_sql(sql)
-            if (sql[-1]!=";"):
-                sql+=";"
-
 
             if not is_valid:
-                return f"❌ Invalid SQL query generated. Raw: {repr(raw_sql)}\nCleaned: {sql}"
+                return f"❌ Invalid SQL query generated: {sql}"
 
-            print(f"DEBUG - Final SQL: {sql}")
-            logger.info(f"Executing SQL: {sql}")
+            print(f"DEBUG - Generated SQL: {sql}")
 
-            # Execute query with error handling
-            try:
-                with self.db_handler['connection'].cursor() as cursor:
-                    cursor.execute(sql)
-                    result = cursor.fetchall()
-                    print(f"DEBUG - Query returned {len(result)} rows")
+            # Step 4: Execute query
+            result = self.execute_sql_query(sql)
+            processing_time = (datetime.now() - start_time).total_seconds()
+            print(f"DEBUG - Query completed in {processing_time:.2f}s, found {len(result)} records")
 
-                    if not result:
-                        suggestions = self._generate_suggestions(question, sql)
-                        return f"I couldn't find any system compliance records matching your criteria.\n\n{suggestions}"
+            if not result:
+                return "I couldn't find any system compliance records matching your criteria."
 
-                    # Format and return results
-                    return format_query_results_natural(result, question)
-
-            except pymysql.Error as db_error:
-                error_code = getattr(db_error, 'args', [None])[0] if hasattr(db_error, 'args') else None
-                error_msg = f"❌ Database Error (Code: {error_code}): {str(db_error)}\n"
-                error_msg += f"SQL: {sql}\n"
-
-                # Try to provide helpful suggestions based on error type
-                if "syntax error" in str(db_error).lower():
-                    error_msg += "This appears to be a SQL syntax error. "
-                elif "unknown column" in str(db_error).lower():
-                    error_msg += "This appears to be a column name error. "
-                elif "table" in str(db_error).lower():
-                    error_msg += "This appears to be a table name error. "
-
-                error_msg += "Please try rephrasing your question."
-                logger.error(f"Database error: {db_error}\nSQL: {sql}")
-                return error_msg
+            # Step 5: Add AI analysis if needed
+            if needs_analysis and len(result) > 1:
+                print("DEBUG - Adding AI analysis")
+                ai_analysis = analyze_results_with_ai(question, result, self.llm)
+                return f"{ai_analysis}\n\n📊 Supporting Data:\n{format_query_results_natural(result, question)}"
+            else:
+                return format_query_results_natural(result, question)
 
         except Exception as e:
-            error_msg = f"❌ Error processing request: {str(e)}\n"
-            error_msg += "Please try rephrasing your question."
+            processing_time = (datetime.now() - start_time).total_seconds()
+            error_msg = f"❌ Error processing request in {processing_time:.2f}s: {str(e)}"
             logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
             return error_msg
-
-    def _generate_suggestions(self, question: str, sql: str) -> str:
-        """Generate helpful suggestions when no results are found"""
-        suggestions = "💡 Suggestions:\n"
-        suggestions += "• Try using broader search terms\n"
-        suggestions += "• Check server roles (web, database, application, etc.)\n"
-        suggestions += "• Verify IP address format (e.g., 192.168.1.100)\n"
-        suggestions += "• Check security status terms (active, running, disabled)\n"
-
-        if "firewall" in question.lower():
-            suggestions += "• Try terms like 'active', 'disabled', 'inactive' for firewall status\n"
-
-        if "memory" in question.lower() or "cpu" in question.lower():
-            suggestions += "• Use percentage values (e.g., >80 for high usage)\n"
-
-        suggestions += f"\n🔍 Query executed: {sql}"
-        return suggestions
 
     def process_question(self, question: str) -> str:
         """Process questions with enhanced error handling"""
@@ -616,15 +528,7 @@ QUESTION: {enhanced_question}
         if is_dangerous(question):
             return "❌ Question blocked for security reasons."
 
-        # Add to chat history
-        self.chat_history.append(f"User: {question}")
-
-        # Get response
         response = self.query_system_compliance(question)
-
-        # Add response to history
-        self.chat_history.append(f"Assistant: {response}")
-
         return response
 
     def start_interactive_session(self, query):
@@ -636,7 +540,6 @@ QUESTION: {enhanced_question}
             if query.lower() in ['exit', 'quit', 'q']:
                 return "👋 Session ended."
 
-            print("🔍 Processing your query...")
             response = self.process_question(query)
             return response
 
@@ -659,7 +562,7 @@ QUESTION: {enhanced_question}
                 pass
 
 def ComplianceMain(query):
-    """Main function to process System Compliance queries with enhanced robustness"""
+    """Main function to process System Compliance queries with enhanced performance"""
     print("🚀 Starting System Compliance Assistant...")
     assistant = SystemComplianceAssistant()
     result = assistant.start_interactive_session(query)
@@ -668,14 +571,14 @@ def ComplianceMain(query):
 
 # Interactive usage
 if __name__ == "__main__":
-    print("🚀 System Compliance Assistant")
-    print("=" * 50)
+    print("🚀 System Compliance Assistant - Optimized Version")
+    print("=" * 60)
     print("Ask questions about your system compliance database in natural language.")
-    print("Examples:")
-    print("  • 'Show servers with high CPU usage'")
-    print("  • 'List all database servers'")
-    print("  • 'Servers with firewall disabled'")
-    print("  • 'Count servers by role'")
+    print("✨ Fast queries (simple lookups) execute instantly")
+    print("🧠 Complex analytical queries use AI for insights")
+    print("\nExamples:")
+    print("  Fast: 'server 123', 'show all servers', 'count servers'")
+    print("  Analytical: 'do all servers have same kernel?', 'compliance summary'")
     print("\nType 'exit' to quit.\n")
 
     while True:
@@ -689,10 +592,10 @@ if __name__ == "__main__":
                 print("👋 Goodbye!")
                 break
 
-            print("\n🔄 Processing your query...")
+            print(f"\n⚡ Processing: {user_query}")
             result = ComplianceMain(user_query)
             print(f"\n📊 Results:\n{result}\n")
-            print("-" * 50)
+            print("-" * 60)
 
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
