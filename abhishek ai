@@ -1,0 +1,216 @@
+import os
+import re
+import traceback
+import pymysql
+import sqlparse
+from sqlalchemy import create_engine, text
+from langchain_community.utilities import SQLDatabase
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# --- Configuration ---
+
+# Database connection details
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "root123",
+    "database": "EIS_n"
+}
+
+# LLM model to use
+LLM_MODEL = "mistral:7b-instruct-q4_K_M"
+
+# --- Database Setup ---
+
+def get_db_connection():
+    """Establishes and returns a SQLAlchemy engine for the database."""
+    uri = f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}/{DB_CONFIG['database']}"
+    return create_engine(uri)
+
+# Instantiate the database engine
+try:
+    db_engine = get_db_connection()
+    # Test connection
+    with db_engine.connect() as connection:
+        print("✅ Database connection successful.")
+    db = SQLDatabase(engine=db_engine)
+except Exception as e:
+    print(f"❌ Database connection failed. Please check your credentials and ensure the MySQL server is running.")
+    print(f"Error: {e}")
+    exit()
+
+# --- LLM and Prompt Setup ---
+
+# Initialize the Ollama LLM
+llm = OllamaLLM(model=LLM_MODEL)
+
+# Detailed prompt template for generating SQL queries
+# This prompt includes schema details, rules, and examples to guide the LLM.
+sql_prompt_template = """### Instructions
+You are an AI assistant that generates read-only MySQL queries for a database with the following schema.
+Your ONLY output should be the MySQL query. Do not add any explanation, commentary, or markdown formatting like ```sql.
+
+### Rules
+1.   **IMPORTANT**: You MUST only generate read-only `SELECT` queries. Never generate `UPDATE`, `DELETE`, `INSERT`, `DROP`, or any other write-modifying queries.
+2.  The table name is `FarDetailsAll`.
+3.  Use `LIKE` for string comparisons to allow for partial matches.
+4.  Analyze the user's question to infer the correct column and values for the `WHERE` clause.
+
+### Table Schema: `FarDetailsAll`
+- Far_Id (int): far id (e.g., 186).
+- Subject (longtext): subject (e.g., 'For Communication between EIS and DCMS servers for IVR').
+- Status (longtext): status (e.g., 'rejected').
+- Created (longtext): created (e.g., '2020-03-02 18:57:19').
+- Expires (longtext): expires (e.g., '2020-03-11').
+- Requested_Source (longtext): requested source ip (e.g., '10.191.172.41,10.191.172.44-10.191.172.45').
+- Requested_Destination (longtext): requested destination ip (e.g., '10.191.172.38, 10.191.172.35').
+- Requested_Service (longtext): requested service (e.g., 'tcp/7029, tcp/7030,tcp/7030, tcp/7029').
+- Requested_Source_NAT (longtext): requested source nat ip (e.g., '103.209.96.209').
+- Requested_Destination_NAT (longtext): requested destination nat ip (e.g., '103.209.96.208').
+- Requested_Port_Translation (longtext): requested port translation (e.g., 'tcp/2443,tcp/443, tcp/80').
+- Change_Source (longtext): change source ip (e.g., '10.191.172.41,10.191.172.44, 10.191.172.45').
+- Change_Destination (longtext): change destination ip (e.g., '10.189.192.52, 10.209.160.180').
+- Change_Service (longtext): change service (e.g., 'tcp/7029, tcp/7030').
+- Change_Source_NAT (longtext): change source nat ip (e.g., '103.209.96.209').
+- Change_Destination_NAT (longtext): change destination nat ip (e.g., '103.209.96.208').
+- Translated_Destination (longtext): translated destination (e.g., '10.189.40.5-10.189.40.6').
+- Translated_Service (longtext): translated service ip (e.g., 'tcp/7029,tcp/7030').
+- Dependent_application (longtext): dependent applications (e.g., 'CRM').
+- Permanent_Rule (longtext): permanent rule (e.g., 'No').
+- ZONE (longtext): zone (e.g., 'UAT').
+
+### Query Examples
+- Question: "what is the subject of far id 186 ?"
+  Query: SELECT Subject FROM FarDetailsAll WHERE Far_Id=186;
+- Question: "which far are expiring in march 2020 ?"
+  Query: SELECT Far_Id FROM FarDetailsAll WHERE Expires LIKE '%2020-03-%';
+- Question: "how many far are expiring in march ?"
+  Query: SELECT COUNT(*) FROM FarDetailsAll WHERE Expires LIKE '%-03-%';
+
+### User Question
+{question}
+
+### Your MySQL Query
+"""
+
+SQL_PROMPT = PromptTemplate.from_template(sql_prompt_template)
+
+# Prompt template for explaining the results to the user
+explanation_prompt_template = """### Instructions
+You are an AI assistant. A user asked a question, a database query was run, and you have the results.
+Your task is to provide a clear, human-like explanation of the data as an answer to the user's question.
+If the result is empty, inform the user that no matching records were found. Do not mention the database or the query.
+
+### User's Question
+{question}
+
+### Database Result
+{result}
+
+### Your Answer
+"""
+
+EXPLANATION_PROMPT = PromptTemplate.from_template(explanation_prompt_template)
+
+
+# --- Core Functions ---
+
+def is_readonly_query(sql_query: str) -> bool:
+    """
+    Checks if the generated SQL query is a read-only SELECT statement.
+    """
+    parsed = sqlparse.parse(sql_query)
+    if not parsed:
+        return False
+    # Check the first statement's type
+    return parsed[0].get_type() == 'SELECT'
+
+def get_yes_no_answer(db_result: list) -> str:
+    """
+    Determines the 'Yes' or 'No' answer based on whether the query returned any data.
+    An empty result (e.g., []) means 'No', otherwise 'Yes'.
+    """
+    # The db.run() method returns a string representation of a list of tuples.
+    # An empty result looks like '[]' or an empty string.
+    if db_result and db_result != '[]':
+        return "Yes"
+    else:
+        return "No"
+
+# --- LangChain Chains ---
+
+# Chain to generate the SQL query
+sql_generation_chain = (
+    RunnablePassthrough.assign(schema=lambda _: db.get_table_info())
+    | SQL_PROMPT
+    | llm
+    | StrOutputParser()
+)
+
+# Chain to explain the results
+explanation_chain = EXPLANATION_PROMPT | llm | StrOutputParser()
+
+
+# --- Main Application Logic ---
+
+def main():
+    """Main function to run the chatbot terminal interface."""
+    print("\n---EIS AI---")
+    print("Ask questions about FAR Details. Type 'exit' to quit.")
+
+    #  Words that trigger a "Yes/No" response
+    yes_no_starters = ('is', 'are', 'do', 'does', 'did', 'has', 'have')
+
+    while True:
+        try:
+            user_question = input("\n> ")
+            if user_question.lower().strip() == 'exit':
+                print("Goodbye!")
+                break
+
+            # Determine response type based on the question's first word
+            is_yes_no_question = user_question.lower().strip().startswith(yes_no_starters)
+
+            # 1. Generate SQL Query
+            print("🤖 Thinking...")
+            generated_sql = sql_generation_chain.invoke({"question": user_question})
+
+            # Clean up potential markdown formatting from LLM output
+            generated_sql = generated_sql.strip().replace("```sql", "").replace("```", "").strip()
+            print(f"🔍 Generated SQL: {generated_sql}")
+
+            # 2. Validate the Query
+            if not is_readonly_query(generated_sql):
+                print("⚠️ Error: Only read-only queries are allowed. Aborting.")
+                continue
+
+            # 3. Execute the Query
+            db_result = db.run(generated_sql)
+
+            # 4. Generate the Final Answer
+            if is_yes_no_question:
+                answer = get_yes_no_answer(db_result)
+                print(f"\n🤖 Answer: {answer}")
+            else:
+                # For descriptive questions, use the explanation chain
+                explanation = explanation_chain.invoke({"question": user_question, "result": db_result})
+                print(f"\n🤖 Answer: {explanation}")
+
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            print("Please try rephrasing your question.")
+
+# Test the function
+if __name__ == "__main__":
+    # Test with sample querie
+
+    for query in test_queries:
+        print(f"\n{'='*60}")
+        print(f"Testing: {query}")
+        print('='*60)
+        result = Teammain(query)
+        print(result)
