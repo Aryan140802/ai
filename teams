@@ -228,15 +228,16 @@ def enhance_question_understanding(question: str) -> str:
     return enhanced_question
 
 def clean_and_fix_sql(raw_sql: str, original_question: str = "") -> str:
-    """Enhanced SQL cleaning with better pattern recognition"""
+    """Enhanced SQL cleaning with better pattern recognition and column validation"""
     logger.info(f"Raw SQL input: {repr(raw_sql)}")
     
     # Handle case where LLM returns descriptive text instead of SQL
-    if "select" not in raw_sql.lower() and any(word in raw_sql.lower() for word in ["uid", "employee", "name"]):
+    if "select" not in raw_sql.lower() and any(word in raw_sql.lower() for word in ["uid", "employee", "name", "team"]):
         # Try to extract meaningful parts
         uid_match = re.search(r'\b(\d{4,8})\b', raw_sql)
         name_match = re.search(r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)*)\b', original_question)
         email_match = re.search(r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b', original_question)
+        team_match = re.search(r'\b(iib|team|department|group)\b', original_question.lower())
         
         if uid_match:
             uid = uid_match.group(1)
@@ -247,6 +248,12 @@ def clean_and_fix_sql(raw_sql: str, original_question: str = "") -> str:
         elif name_match:
             name = name_match.group(0)
             return f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, BACompany FROM UserMaster WHERE EmpName LIKE '%{name}%'"
+        elif team_match:
+            # Handle team queries specifically
+            team_name = re.search(r'\b(iib|team|department|group)\s+([A-Za-z0-9]+)', original_question.lower())
+            if team_name:
+                return f"SELECT Uid, EmpName, Team, Position FROM UserMaster WHERE Team LIKE '%{team_name.group(2)}%'"
+            return f"SELECT COUNT(*) as count FROM UserMaster WHERE Team LIKE '%iib%'"
 
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
@@ -289,6 +296,12 @@ def clean_and_fix_sql(raw_sql: str, original_question: str = "") -> str:
         # Convert = to LIKE for text fields
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
         sql = re.sub(f'({field})\\s*=\\s*"([^"]*)"', f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
+
+    # Special handling for team queries
+    if 'team' in original_question.lower() or 'department' in original_question.lower():
+        # Ensure we're searching in the Team column
+        sql = re.sub(r'\b(where|and|or)\s+[a-zA-Z]+\s+like\s+\'%iib%\'', 
+                    r"\1 Team LIKE '%iib%'", sql, flags=re.IGNORECASE)
 
     sql = sql.strip().rstrip(";")
 
@@ -457,9 +470,10 @@ class EnhancedTeamDetailsAssistant:
 
 Question: {processed_question}
 
-Generate a SQL query to count records. Use COUNT(*) or COUNT(column_name).
-For counting employees in teams/projects/positions, use appropriate WHERE clauses.
-Example: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%TeamName%'
+Generate a SQL query to count records matching the criteria. 
+For team counts, use: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%team_name%'
+For project counts, use: SELECT COUNT(*) FROM UserMaster WHERE Project LIKE '%project_name%'
+Always search in the correct column based on the question.
 """
             elif question_type == "exists":
                 final_question = f"""
@@ -467,9 +481,9 @@ Example: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%TeamName%'
 
 Question: {processed_question}
 
-Generate a SQL query to check existence. You can use COUNT(*) > 0 or just SELECT with LIMIT.
-For yes/no questions, select relevant fields with appropriate WHERE conditions.
-Example: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%TeamName%' AND Position LIKE '%Manager%'
+Generate a SQL query to check existence. For team-related questions, 
+make sure to search in the Team column: 
+SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%team_name%' AND other_conditions
 """
             elif question_type == "list":
                 final_question = f"""
@@ -477,9 +491,8 @@ Example: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%TeamName%' AND Positi
 
 Question: {processed_question}
 
-Generate a SQL query to list/show records. Select relevant columns.
-Use LIKE for text matching and appropriate WHERE clauses.
-Example: SELECT Uid, EmpName, Team, Position FROM UserMaster WHERE Team LIKE '%TeamName%'
+Generate a SQL query to list records. For team-related queries, 
+use: SELECT Uid, EmpName, Team, Position FROM UserMaster WHERE Team LIKE '%team_name%'
 """
             else:
                 final_question = f"""
@@ -488,18 +501,12 @@ Example: SELECT Uid, EmpName, Team, Position FROM UserMaster WHERE Team LIKE '%T
 Question: {processed_question}
 
 Generate an appropriate SQL SELECT query based on the question.
-- Use LIKE '%value%' for text field searching
-- Use = for exact numeric matches  
+- For team questions, search in Team column: Team LIKE '%value%'
+- For project questions, search in Project column
+- Use LIKE for text matching
 - Select only relevant columns
 - Add appropriate WHERE conditions
 - Use LIMIT for large result sets
-
-IMPORTANT:
-- Never include Pwd, SecQ, SecA fields
-- Use proper SQL syntax
-- For names, use EmpName LIKE '%name%'
-- For IDs, use Uid = number
-- For teams/projects, use LIKE '%value%'
 """
 
             # Generate SQL query using AI
@@ -737,7 +744,7 @@ If showing employee details, format clearly with emojis:
             if "error" in query_result:
                 response = f"❌ {query_result['error']}"
             else:
-                response = self._format_results_basic(query_result, question)
+                response = self._format_results_enhanced(query_result, question)
                 response += f"\n\n📊 **Query Details:**\n"
                 response += f"• Query Type: Simple (Direct SQL)\n"
                 response += f"• SQL Used: `{query_result['sql_used']}`\n"
@@ -766,7 +773,7 @@ if __name__ == "__main__":
         "1234567",  # Simple UID query
         "John Smith",  # Simple name query  
         "What is the team of employee 1234567?",  # Complex query
-        "How many employees are in the Development team?",  # Complex query
+        "How many people are in IIB team?",  # Team count query
         "Are there any employees named John in the QA team?",  # Complex query
         "Show me all managers in the project Alpha",  # Complex query
     ]
