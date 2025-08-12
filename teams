@@ -3,25 +3,34 @@ import re
 import logging
 import pymysql
 import traceback
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timedelta
 import json
-
+import sqlparse
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from langchain.prompts import PromptTemplate
+import hashlib
+from collections import defaultdict
 
-# --- FAR DETAILS CONFIGURATION ---
-FAR_DB_CONFIG = {
-    "name": "FAR Details",
+# --- TEAM DETAILS CONFIGURATION ---
+TEAM_DB_CONFIG = {
+    "name": "Team Details",
     "db_config": {
         "host": "localhost",
         "user": "root",
         "password": "root123",
         "database": "EIS_n"
     },
-    "include_tables": ["FarDetailsAll"],
+    "include_tables": ["UserMaster"],
+}
+
+# Context-aware configuration
+CONTEXT_CONFIG = {
+    "max_history_items": 10,  # Maximum conversation history to maintain
+    "context_expiry_minutes": 30,  # Context expires after 30 minutes
+    "similarity_threshold": 0.7,  # Threshold for context relevance
+    "cache_size": 100,  # Maximum cached queries
 }
 
 # Blocked patterns for security
@@ -33,66 +42,111 @@ BLOCKED_PATTERNS = [
     r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
 
-# Column metadata for better query generation
-COLUMN_INFO = {
-    "Far_Id": "int - Unique FAR identifier (use = for exact match)",
-    "Subject": "text - FAR subject/title (use LIKE for search)",
-    "Status": "text - Current status like active, resolved, rejected (use LIKE for search)",
-    "Created": "date - Creation date in YYYY-MM-DD HH:MM:SS format (use date functions)",
-    "Expires": "date - Expiry date in YYYY-MM-DD HH:MM:SS format (use date functions)",
-    "Requested_Source": "text - Source IP addresses (use LIKE for search)",
-    "Requested_Destination": "text - Destination IP addresses (use LIKE for search)",
-    "Requested_Service": "text - Service/port information (use LIKE for search)",
-    "Dependent_application": "text - Related applications (use LIKE for search)",
-    "ZONE": "text - Environment zone like PROD, UAT (use LIKE for search)",
-    "Permanent_Rule": "text - Whether rule is permanent (use LIKE for search)"
+# Sensitive fields that should never be included in queries or results
+SENSITIVE_FIELDS = ["Pwd", "SecQ", "SecA"]
+
+# Field mappings for better query understanding
+FIELD_MAPPINGS = {
+    "phone": "Contact",
+    "mobile": "Contact",
+    "contact": "Contact",
+    "phone_number": "Contact",
+    "employee_id": "Uid",
+    "emp_id": "Uid",
+    "id": "Uid",
+    "name": "EmpName",
+    "employee_name": "EmpName",
+    "emp_name": "EmpName",
+    "email": "TcsEmail",
+    "tcs_email": "TcsEmail",
+    "sbi_email": "SbiEmail",
+    "ad_id": "AdId",
+    "position": "Position",
+    "level": "Level",
+    "team": "Team",
+    "project": "Project"
 }
-
-# Enhanced SQL Generation Prompt Template
-SQL_GENERATION_PROMPT = """You are an expert SQL query generator for a FAR (Firewall Access Request) database.
-
-**DATABASE SCHEMA:**
-Table: FarDetailsAll
-Columns and their proper usage:
-- Far_Id (INT): Unique identifier - use = for exact matches (e.g., Far_Id = 123)
-- Subject (TEXT): Request title - use LIKE with % wildcards (e.g., Subject LIKE '%firewall%')
-- Status (TEXT): Current status - use LIKE (e.g., Status LIKE '%active%' or Status LIKE '%resolved%')
-- Created (DATETIME): Creation timestamp - use date functions (e.g., DATE(Created) = '2024-01-15')
-- Expires (DATETIME): Expiry timestamp - use date functions (e.g., DATE(Expires) > '2024-12-31')
-- Requested_Source (TEXT): Source IPs - use LIKE (e.g., Requested_Source LIKE '%192.168%')
-- Requested_Destination (TEXT): Destination IPs - use LIKE (e.g., Requested_Destination LIKE '%10.0%')
-- Requested_Service (TEXT): Services/ports - use LIKE (e.g., Requested_Service LIKE '%80%')
-- Dependent_application (TEXT): Applications - use LIKE (e.g., Dependent_application LIKE '%web%')
-- ZONE (TEXT): Environment zone - use LIKE (e.g., ZONE LIKE '%PROD%')
-- Permanent_Rule (TEXT): Permanent status - use LIKE (e.g., Permanent_Rule LIKE '%yes%')
-
-**CRITICAL INSTRUCTIONS:**
-1. ONLY generate SELECT statements - no INSERT, UPDATE, DELETE, DROP, etc.
-2. Always use the exact table name: FarDetailsAll
-3. For text searches, use LIKE with % wildcards for partial matches
-4. For numeric IDs, use exact equality (=)
-5. For dates, use DATE() function to compare dates: DATE(Created) = '2024-01-15'
-6. Add LIMIT 50 unless specifically asked for counts or user specifies a different limit
-7. Return ONLY the SQL query - no explanations, markdown, or additional text
-
-**QUERY EXAMPLES:**
-- "Show FAR 123" → SELECT * FROM FarDetailsAll WHERE Far_Id = 123 LIMIT 1
-- "Active FARs" → SELECT * FROM FarDetailsAll WHERE Status LIKE '%active%' LIMIT 50
-- "FARs created today" → SELECT * FROM FarDetailsAll WHERE DATE(Created) = CURDATE() LIMIT 50
-- "Count resolved FARs" → SELECT COUNT(*) as total_resolved FROM FarDetailsAll WHERE Status LIKE '%resolved%'
-- "FARs in PROD zone" → SELECT * FROM FarDetailsAll WHERE ZONE LIKE '%PROD%' LIMIT 50
-
-**USER QUESTION:** {question}
-
-**SQL QUERY:**"""
 
 # Setup logging
 logging.basicConfig(
-    filename=os.path.expanduser("~/.far_details_ai.log"),
+    filename=os.path.expanduser("~/.team_details_ai.log"),
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+class QueryCache:
+    """Simple query cache to improve response time"""
+    def __init__(self, max_size: int = 100):
+        self.cache = {}
+        self.access_times = {}
+        self.max_size = max_size
+    
+    def _generate_key(self, query: str) -> str:
+        """Generate cache key from query"""
+        return hashlib.md5(query.lower().strip().encode()).hexdigest()
+    
+    def get(self, query: str) -> Optional[str]:
+        """Get cached result if exists and not expired"""
+        key = self._generate_key(query)
+        if key in self.cache:
+            # Check if cache entry is still valid (within 5 minutes)
+            if datetime.now() - self.access_times[key] < timedelta(minutes=5):
+                self.access_times[key] = datetime.now()  # Update access time
+                logger.info(f"Cache hit for query: {query[:50]}...")
+                return self.cache[key]
+            else:
+                # Remove expired entry
+                del self.cache[key]
+                del self.access_times[key]
+        return None
+    
+    def set(self, query: str, result: str):
+        """Cache query result"""
+        key = self._generate_key(query)
+        
+        # Remove oldest entries if cache is full
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
+            del self.cache[oldest_key]
+            del self.access_times[oldest_key]
+        
+        self.cache[key] = result
+        self.access_times[key] = datetime.now()
+        logger.info(f"Cached result for query: {query[:50]}...")
+
+class ConversationContext:
+    """Manages conversation context and history"""
+    def __init__(self, max_items: int = 10, expiry_minutes: int = 30):
+        self.history = []
+        self.max_items = max_items
+        self.expiry_minutes = expiry_minutes
+        self.last_query_entities = {}  # Store entities from last query
+        self.session_start = datetime.now()
+    
+    def add_interaction(self, question: str, response: str, entities: Dict = None):
+        """Add interaction to conversation history"""
+        interaction = {
+            'timestamp': datetime.now(),
+            'question': question.strip(),
+            'response': response,
+            'entities': entities or {}
+        }
+        
+        self.history.append(interaction)
+        
+        # Maintain max size
+        if len(self.history) > self.max_items:
+            self.history.pop(0)
+        
+        # Update last query entities
+        if entities:
+            self.last_query_entities.update(entities)
+    
+    def clear_expired_context(self):
+        """Remove expired context items"""
+        cutoff_time = datetime.now() - timedelta(minutes=self.expiry_minutes)
+        self.history = [item for item in self.history if item['timestamp'] > cutoff_time]
 
 def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
@@ -100,258 +154,240 @@ def is_dangerous(text: str) -> bool:
 
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Clean and fix SQL with proper handling for different column types"""
-    print(f"DEBUG - Raw SQL input: {repr(raw_sql)}")
+    logger.info(f"Raw SQL input: {repr(raw_sql)}")
     
     # Handle case where LLM returns descriptive text instead of SQL
-    if "sql query" in raw_sql.lower() and "far_id" in raw_sql.lower():
-        # Try to extract the actual ID from the text
-        id_match = re.search(r"far[\s_]*id[\s_]*(\d+)", raw_sql.lower())
+    if "sql query" in raw_sql.lower() and "uid" in raw_sql.lower():
+        id_match = re.search(r"uid[\s_]*(\d+)", raw_sql.lower())
         if id_match:
-            far_id = id_match.group(1)
-            sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
-            print(f"DEBUG - Extracted FAR ID {far_id}, generated SQL: {sql}")
+            uid = id_match.group(1)
+            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
+            logger.info(f"Extracted UID {uid}, generated SQL: {sql}")
             return sql
-    
+
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1).strip()
-        print(f"DEBUG - Extracted from code block: {sql}")
     else:
-        # Remove any markdown formatting
         sql = re.sub(r"```", "", raw_sql)
-        
-        # Look for SELECT statement more aggressively
         select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
         if select_match:
             sql = select_match.group(1).strip()
-            print(f"DEBUG - Extracted SELECT: {sql}")
         else:
-            # Try to find SQL pattern starting with SELECT
             sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
             sql = sql.strip()
-    
+
     # If we still don't have a proper SQL query, try to construct one
     if not sql.upper().strip().startswith('SELECT'):
-        print(f"DEBUG - No valid SELECT found, trying to construct from: {raw_sql}")
-        
-        # Check if it's asking for a specific FAR ID
-        far_id_match = re.search(r"(\d+)", raw_sql)
-        if far_id_match and "far" in raw_sql.lower():
-            far_id = far_id_match.group(1)
-            sql = f"SELECT * FROM FarDetailsAll WHERE Far_Id = {far_id}"
-            print(f"DEBUG - Constructed FAR ID query: {sql}")
+        uid_match = re.search(r"(\d+)", raw_sql)
+        if uid_match and ("employee" in raw_sql.lower() or "uid" in raw_sql.lower()):
+            uid = uid_match.group(1)
+            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
         else:
-            print(f"DEBUG - Could not construct valid SQL from: {raw_sql}")
-            return raw_sql  # Return as-is and let validation catch it
+            return raw_sql
 
-    print(f"DEBUG - SQL before field processing: {sql}")
+    # Remove sensitive fields from query
+    for field in SENSITIVE_FIELDS:
+        sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
+        sql = re.sub(rf',\s*\b{field}\b', '', sql, flags=re.IGNORECASE)
+        sql = re.sub(rf'\bWHERE\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', 'WHERE ', sql, flags=re.IGNORECASE)
+        sql = re.sub(rf'\b(AND|OR)\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', '', sql, flags=re.IGNORECASE)
 
-    # Don't convert everything to LIKE - be smart about it
-    # Only convert text fields to LIKE, keep IDs and dates as exact matches
-    text_fields = ['Subject', 'Status', 'Requested_Source', 'Requested_Destination', 
-                   'Requested_Service', 'Dependent_application', 'ZONE', 'Permanent_Rule']
-    
-    # Apply LIKE only to text fields, not to Far_Id or date fields
+    # Clean up SQL
+    sql = re.sub(r',\s*,', ',', sql)
+    sql = re.sub(r'SELECT\s*,', 'SELECT ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE)
+
+    # Convert exact matches to LIKE for text fields
+    text_fields = ['EmpName', 'Contact', 'TcsEmail', 'SbiEmail', 'AdId', 'Position', 'Level', 'Team', 'Project']
     for field in text_fields:
-        # Convert = to LIKE for text fields only
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
-        sql = re.sub(f"({field})\\s*=\\s*\"([^\"]*)\"", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
 
-    # Handle date fields properly - use STR_TO_DATE for date comparisons
-    date_fields = ['Created', 'Expires']
-    for field in date_fields:
-        # Convert simple date comparisons to use STR_TO_DATE
-        sql = re.sub(f"({field})\\s*([><=!]+)\\s*'([^']*)'", 
-                    f"STR_TO_DATE(\\1, '%Y-%m-%d %H:%i:%s') \\2 STR_TO_DATE('\\3', '%Y-%m-%d %H:%i:%s')", 
-                    sql, flags=re.IGNORECASE)
-
-    # Remove trailing semicolons
     sql = sql.strip().rstrip(";")
-    
-    # Add reasonable limit if none exists and it's not a COUNT query
+
+    # Add reasonable limit if none exists
     if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
         sql += " LIMIT 50"
-    
-    print(f"DEBUG - Final cleaned SQL: {sql}")
+
+    logger.info(f"Final cleaned SQL: {sql}")
     return sql
 
 def format_query_results_natural(result: List[Dict], question: str) -> str:
-    """Format database results in natural language"""
+    """Format database results in natural language with precise answers"""
     if not result:
-        return "I couldn't find any FAR records matching your criteria."
+        return "No matching records found."
 
     # Handle single value results (like COUNT)
     if len(result) == 1 and len(result[0]) == 1:
         value = list(result[0].values())[0]
-        if "count" in question.lower():
-            return f"There are {value} FAR records matching your criteria."
-        else:
-            return f"The result is: {value}"
+        return str(value)
 
-    # Handle single record
+    # Handle single record - return direct answer if question is simple
     if len(result) == 1:
         record = result[0]
-        response = f"I found 1 FAR record:\n\n"
         
-        # Format key information naturally
-        if 'Far_Id' in record:
-            response += f"📋 FAR ID: {record['Far_Id']}\n"
-        if 'Subject' in record:
-            response += f"📝 Subject: {record['Subject']}\n"
-        if 'Status' in record:
-            response += f"🔄 Status: {record['Status']}\n"
-        if 'Created' in record:
-            response += f"📅 Created: {record['Created']}\n"
-        if 'Expires' in record:
-            response += f"⏰ Expires: {record['Expires']}\n"
-        if 'ZONE' in record:
-            response += f"🌐 Zone: {record['ZONE']}\n"
-        if 'Requested_Source' in record:
-            response += f"🔗 Source: {record['Requested_Source']}\n"
-        if 'Requested_Destination' in record:
-            response += f"🎯 Destination: {record['Requested_Destination']}\n"
-        if 'Requested_Service' in record:
-            response += f"⚙️ Service: {record['Requested_Service']}\n"
-        if 'Dependent_application' in record:
-            response += f"📱 Application: {record['Dependent_application']}\n"
-        if 'Permanent_Rule' in record:
-            response += f"🔒 Permanent Rule: {record['Permanent_Rule']}\n"
+        # If question is just a name or ID, return basic info
+        if re.match(r'^\d+$', question.strip()) or re.match(r'^[A-Za-z\s]+$', question.strip()):
+            response = []
+            if 'EmpName' in record:
+                response.append(f"Name: {record['EmpName']}")
+            if 'Uid' in record:
+                response.append(f"ID: {record['Uid']}")
+            if 'Team' in record:
+                response.append(f"Team: {record['Team']}")
+            if 'Position' in record:
+                response.append(f"Position: {record['Position']}")
+            if 'TcsEmail' in record:
+                response.append(f"Email: {record['TcsEmail']}")
+            return "\n".join(response)
         
-        return response.strip()
-
-    # Handle multiple records - provide summary + tabular format
-    response = f"I found {len(result)} FAR records matching your criteria:\n\n"
-    
-    # Add summary information
-    if 'Status' in result[0]:
-        status_counts = {}
-        for record in result:
-            status = record.get('Status', 'Unknown')
-            status_counts[status] = status_counts.get(status, 0) + 1
+        # For more complex questions, try to answer directly
+        if "team" in question.lower():
+            return f"{record.get('EmpName', 'The employee')} is in the {record.get('Team', 'unknown')} team."
+        elif "email" in question.lower():
+            return f"{record.get('EmpName', 'The employee')}'s email is {record.get('TcsEmail', 'not available')}."
+        elif "position" in question.lower() or "role" in question.lower():
+            return f"{record.get('EmpName', 'The employee')}'s position is {record.get('Position', 'not specified')}."
+        elif "contact" in question.lower() or "phone" in question.lower():
+            return f"{record.get('EmpName', 'The employee')}'s contact number is {record.get('Contact', 'not available')}."
         
-        response += "📊 Status Summary:\n"
-        for status, count in status_counts.items():
-            response += f"   • {status}: {count} records\n"
-        response += "\n"
-    
-    # For multiple records, show tabular format
-    response += "📋 Detailed Results:\n"
-    response += format_query_results_tabular(result)
-    
-    return response
+        # Default detailed response
+        response = []
+        if 'Uid' in record:
+            response.append(f"🆔 Employee ID: {record['Uid']}")
+        if 'EmpName' in record:
+            response.append(f"👤 Name: {record['EmpName']}")
+        if 'Contact' in record:
+            response.append(f"📞 Contact: {record['Contact']}")
+        if 'TcsEmail' in record:
+            response.append(f"📧 TCS Email: {record['TcsEmail']}")
+        if 'Team' in record:
+            response.append(f"👥 Team: {record['Team']}")
+        if 'Position' in record:
+            response.append(f"💼 Position: {record['Position']}")
+        
+        return "\n".join(response)
 
-def format_query_results_tabular(result: List[Dict]) -> str:
-    """Format database results in tabular format"""
-    if not result:
-        return "No records found."
+    # Handle multiple records - return summary for simple queries
+    if len(result) > 1:
+        # For simple "list team X" queries
+        if "list" in question.lower() and "team" in question.lower():
+            team_name = re.search(r"team\s+([A-Za-z0-9]+)", question.lower())
+            if team_name:
+                return f"There are {len(result)} employees in the {team_name.group(1).title()} team."
+        
+        # For simple name searches
+        if re.match(r'^[A-Za-z\s]+$', question.strip()):
+            names = [r.get('EmpName', 'Unknown') for r in result]
+            return f"Found {len(result)} employees: " + ", ".join(names[:5]) + ("..." if len(names) > 5 else "")
+        
+        # Default summary response
+        response = f"Found {len(result)} records."
+        if 'Team' in result[0]:
+            teams = set(r.get('Team', 'Unknown') for r in result)
+            response += f" Teams: {', '.join(teams)}"
+        return response
 
-    # Get columns from first record
-    columns = list(result[0].keys())
-    
-    # Convert dict results to tuples for formatting
-    result_tuples = [tuple(row.values()) for row in result]
-    
-    output = []
-    
-    # Calculate column widths with reasonable limits
-    col_widths = []
-    for i, col in enumerate(columns):
-        max_content_width = max(len(str(row[i])) for row in result_tuples) if result_tuples else 0
-        col_width = min(max(len(str(col)), max_content_width), 60)  # Max 60 chars per column
-        col_widths.append(col_width)
-
-    # Build header
-    header = " | ".join(col.ljust(width) for col, width in zip(columns, col_widths))
-    separator = "-+-".join("-" * width for width in col_widths)
-    output.append(header)
-    output.append(separator)
-
-    # Add rows
-    for row in result_tuples:
-        formatted_row = " | ".join(
-            (str(val)[:57] + "..." if len(str(val)) > 60 else str(val)).ljust(width) 
-            if val is not None else "NULL".ljust(width) 
-            for val, width in zip(row, col_widths)
-        )
-        output.append(formatted_row)
-
-    output.append(f"\nTotal records: {len(result)}")
-    return "\n".join(output)
+    return str(result)
 
 def is_select_query(sql: str) -> bool:
     """Check if query is a safe SELECT query"""
     sql_clean = sql.strip().lower()
-    print(f"DEBUG - Validating SQL: {repr(sql_clean)}")
-    
-    # Check if it starts with SELECT
     starts_with_select = sql_clean.startswith('select')
-    
-    # Check for dangerous operations
     has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
-    
-    # Check if it's just descriptive text
     is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
     
-    is_valid = starts_with_select and not has_dangerous_ops and not is_descriptive
-    
-    print(f"DEBUG - SQL validation: starts_with_select={starts_with_select}, has_dangerous_ops={has_dangerous_ops}, is_descriptive={is_descriptive}, final_valid={is_valid}")
-    
-    return is_valid
+    return starts_with_select and not has_dangerous_ops and not is_descriptive
 
-class FarDetailsAssistant:
+def is_simple_query(query: str) -> bool:
+    """Check if query is simple (just a name or ID) and doesn't need AI processing"""
+    query = query.strip()
+    
+    # Just a number (likely an ID)
+    if re.match(r'^\d+$', query):
+        return True
+    
+    # Just a name (letters and spaces)
+    if re.match(r'^[A-Za-z\s]+$', query):
+        return True
+    
+    # Simple "employee [ID]" or "name [name]" queries
+    if re.match(r'^(employee|emp|id|name)\s+\d+$', query.lower()):
+        return True
+    if re.match(r'^(name|employee|emp)\s+[A-Za-z\s]+$', query.lower()):
+        return True
+    
+    return False
+
+def generate_simple_query(query: str) -> str:
+    """Generate SQL for simple queries (name or ID)"""
+    query = query.strip()
+    
+    # Numeric ID
+    if re.match(r'^\d+$', query):
+        return f"SELECT * FROM UserMaster WHERE Uid = {query} LIMIT 1"
+    
+    # Simple "employee [ID]"
+    if match := re.match(r'^(employee|emp|id)\s+(\d+)$', query.lower()):
+        return f"SELECT * FROM UserMaster WHERE Uid = {match.group(2)} LIMIT 1"
+    
+    # Name only
+    if re.match(r'^[A-Za-z\s]+$', query):
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{query}%' LIMIT 10"
+    
+    # Simple "name [name]"
+    if match := re.match(r'^(name|employee|emp)\s+([A-Za-z\s]+)$', query.lower()):
+        name = match.group(2)
+        return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{name}%' LIMIT 10"
+    
+    # Default fallback (shouldn't reach here if is_simple_query was checked first)
+    return f"SELECT * FROM UserMaster WHERE EmpName LIKE '%{query}%' LIMIT 10"
+
+class EnhancedTeamDetailsAssistant:
     def __init__(self):
         self.llm = None
         self.db_handler = None
         self.initialized = False
-        self.chat_history = []
+        self.context = ConversationContext(
+            max_items=CONTEXT_CONFIG['max_history_items'],
+            expiry_minutes=CONTEXT_CONFIG['context_expiry_minutes']
+        )
+        self.cache = QueryCache(max_size=CONTEXT_CONFIG['cache_size'])
 
     def initialize(self):
-        """Initialize the FAR Details Assistant with enhanced prompting"""
+        """Initialize the Team Details Assistant with optimizations"""
         try:
-            # Initialize LLM with enhanced configuration
+            # Initialize LLM with optimized settings
             self.llm = OllamaLLM(
                 model="myllm:latest", 
-                temperature=0.1,  # Low temperature for consistent SQL generation
-                top_p=0.9,        # Focus on most likely tokens
-                repeat_penalty=1.1,  # Reduce repetition
-                num_predict=200   # Limit response length for SQL queries
+                temperature=0.1,
+                request_timeout=30.0
             )
 
-            # Set up database connection
-            db_cfg = FAR_DB_CONFIG['db_config']
+            # Set up database connection with connection pooling
+            db_cfg = TEAM_DB_CONFIG['db_config']
             uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
 
-            # Connect to database with enhanced configuration
             db_for_llm = SQLDatabase.from_uri(
                 uri,
-                include_tables=FAR_DB_CONFIG.get("include_tables"),
+                include_tables=TEAM_DB_CONFIG.get("include_tables"),
                 engine_args={
                     "pool_pre_ping": True,
-                    "pool_recycle": 3600,
+                    "pool_recycle": 1800,
+                    "pool_size": 5,
+                    "max_overflow": 10,
                     "connect_args": {
-                        "connect_timeout": 15,
+                        "connect_timeout": 10,
                         "charset": "utf8mb4"
                     }
-                },
-                sample_rows_in_table_info=3,  # Show sample rows for better context
-                custom_table_info={
-                    "FarDetailsAll": "FAR (Firewall Access Request) details table containing all firewall access requests with their statuses, dates, and network information."
                 }
             )
 
-            # Create enhanced prompt template
-            prompt_template = PromptTemplate(
-                input_variables=["question"],
-                template=SQL_GENERATION_PROMPT
-            )
-
-            # Create query chain with custom prompt
-            chain = create_sql_query_chain(
-                self.llm, 
-                db_for_llm,
-                prompt=prompt_template
-            )
+            chain = create_sql_query_chain(self.llm, db_for_llm)
 
             # Create direct connection for executing queries
             db_conn = pymysql.connect(
@@ -361,213 +397,163 @@ class FarDetailsAssistant:
                 database=db_cfg['database'],
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
-                autocommit=True
+                autocommit=True,
+                connect_timeout=10
             )
 
             self.db_handler = {
                 'chain': chain,
                 'connection': db_conn,
-                'config': FAR_DB_CONFIG
+                'config': TEAM_DB_CONFIG
             }
 
             self.initialized = True
+            logger.info("Enhanced Team Details Assistant initialized successfully")
             return True
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
-    def preprocess_question(self, question: str) -> str:
-        """Preprocess and enhance the question for better SQL generation"""
-        # Convert common terms to database-friendly format
-        question_lower = question.lower()
-        
-        # Map common terms to database equivalents
-        term_mapping = {
-            'firewall request': 'FAR',
-            'access request': 'FAR',
-            'id ': 'Far_Id ',
-            'created on': 'created',
-            'expires on': 'expires',
-            'source ip': 'requested_source',
-            'destination ip': 'requested_destination',
-            'service': 'requested_service',
-            'app': 'dependent_application',
-            'application': 'dependent_application',
-            'environment': 'zone',
-            'permanent': 'permanent_rule'
-        }
-        
-        processed_question = question
-        for term, replacement in term_mapping.items():
-            processed_question = re.sub(
-                r'\b' + re.escape(term) + r'\b', 
-                replacement, 
-                processed_question, 
-                flags=re.IGNORECASE
-            )
-        
-        # Add context hints for better SQL generation
-        if 'count' in question_lower:
-            processed_question += " (provide count)"
-        elif any(word in question_lower for word in ['show', 'list', 'find', 'get']):
-            processed_question += " (list records)"
-        
-        return processed_question
+    def execute_query(self, sql: str) -> Tuple[str, List[Dict]]:
+        """Execute SQL query and return results"""
+        try:
+            with self.db_handler['connection'].cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                return "Success", result
+        except pymysql.Error as db_error:
+            error_msg = f"Database Error: {str(db_error)}"
+            logger.error(f"Database error: {db_error}\nSQL: {sql}")
+            return error_msg, []
 
-    def query_far_details(self, question: str) -> str:
-        """Query FAR details database with enhanced prompting and always show results"""
+    def query_team_details(self, question: str) -> Tuple[str, List[Dict]]:
+        """Query team details database with smart processing"""
         if not self.db_handler:
-            return "❌ FAR Details database not available."
+            return "Team Details database not available.", []
 
         try:
-            # Preprocess the question
-            processed_question = self.preprocess_question(question)
-            print(f"DEBUG - Original question: {question}")
-            print(f"DEBUG - Processed question: {processed_question}")
+            # Check cache first
+            cached_result = self.cache.get(question)
+            if cached_result:
+                return cached_result, []
 
-            # Generate the SQL query using the enhanced chain
-            raw_sql = self.db_handler['chain'].invoke({"question": processed_question})
-            print(f"DEBUG - Raw SQL from LLM: {repr(raw_sql)}")
+            # Handle simple queries directly without AI
+            if is_simple_query(question):
+                logger.info(f"Processing simple query: {question}")
+                sql = generate_simple_query(question)
+                status, result = self.execute_query(sql)
+                
+                if status != "Success":
+                    return status, []
+                
+                response = format_query_results_natural(result, question)
+                self.cache.set(question, response)
+                return response, result
+
+            # For complex queries, use AI
+            logger.info(f"Processing complex query with AI: {question}")
+            
+            # Generate SQL query using AI
+            start_time = datetime.now()
+            raw_sql = self.db_handler['chain'].invoke({"question": question})
+            generation_time = (datetime.now() - start_time).total_seconds()
+            
+            logger.info(f"SQL generation took {generation_time:.2f} seconds")
             logger.info(f"Generated SQL: {raw_sql}")
 
-            # Clean and fix the SQL
+            # Clean and validate SQL
             sql = clean_and_fix_sql(raw_sql)
-            print(f"DEBUG - Final SQL after cleaning: {sql}")
-            logger.info(f"Cleaned SQL: {sql}")
 
-            # Validate query safety
             if not is_select_query(sql):
-                return f"❌ Error: Invalid query generated. Raw output was: {repr(raw_sql)}\nCleaned to: {sql}\nOnly SELECT queries are allowed."
+                error_msg = f"Invalid query generated. Only SELECT queries are allowed."
+                return error_msg, []
 
-            # Execute the query
-            with self.db_handler['connection'].cursor() as cursor:
-                try:
-                    print(f"DEBUG - Executing SQL: {sql}")
-                    cursor.execute(sql)
-                    result = cursor.fetchall()
-                    print(f"DEBUG - Query result count: {len(result)}")
+            # Security check for sensitive fields
+            for sensitive_field in SENSITIVE_FIELDS:
+                if sensitive_field.lower() in sql.lower():
+                    logger.warning(f"Blocked query containing sensitive field: {sensitive_field}")
+                    return f"Cannot access sensitive information. Please rephrase your query.", []
 
-                    logger.info(f"Query returned {len(result)} rows")
+            # Execute query
+            status, result = self.execute_query(sql)
+            if status != "Success":
+                return status, []
 
-                    # Format output in natural language
-                    if not result:
-                        response = "I couldn't find any FAR records matching your criteria.\n\n"
-                        response += "💡 Suggestions:\n"
-                        response += "• Try using broader search terms\n"
-                        response += "• Check if the data exists in the database\n"
-                        response += "• Modify date ranges or status values\n"
-                        response += f"\n🔍 Query executed: {sql}"
-                        return response
-                    else:
-                        # Format results in natural language
-                        natural_response = format_query_results_natural(result, question)
-                        
-                        # Add query info at the end for debugging (optional)
-                        if len(result) > 5:  # Only show SQL for complex queries
-                            natural_response += f"\n\n🔍 Query executed: {sql}"
-                        
-                        return natural_response
+            # Format response
+            response = format_query_results_natural(result, question)
 
-                except pymysql.Error as db_error:
-                    error_msg = f"❌ Database Error: {str(db_error)}\n"
-                    error_msg += f"SQL Query: {sql}\n"
-                    error_msg += f"Original LLM output: {repr(raw_sql)}\n"
-                    error_msg += "Please check the query syntax and try again."
-                    logger.error(f"Database error: {db_error}\nSQL: {sql}")
-                    return error_msg
+            # Cache the result
+            self.cache.set(question, response)
+
+            return response, result
 
         except Exception as e:
-            error_msg = f"❌ Error processing request: {str(e)}\n"
-            error_msg += f"Raw LLM output: {repr(raw_sql) if 'raw_sql' in locals() else 'N/A'}\n"
-            error_msg += "Please try rephrasing your question."
+            error_msg = f"Error processing request: {str(e)}"
             logger.error(f"Query processing error: {e}\n{traceback.format_exc()}")
-            return error_msg
+            return error_msg, []
 
     def process_question(self, question: str) -> str:
-        """Process questions and return results"""
-        # Double-check initialization
-        if not self.initialized:
-            print("⚠️ Assistant not initialized, attempting to initialize...")
-            if not self.initialize():
-                return "❌ FAR Details Assistant initialization failed. Please check database connection."
+        """Process questions with context awareness"""
+        if not self.initialized and not self.initialize():
+            return "Team Details Assistant initialization failed."
 
         if is_dangerous(question):
-            return "❌ Question blocked for security reasons."
-
-        # Add to chat history
-        self.chat_history.append(f"User: {question}")
+            return "Question blocked for security reasons."
 
         # Get response
-        response = self.query_far_details(question)
-
-        # Add response to history
-        self.chat_history.append(f"Assistant: {response}")
+        response, sql_result = self.query_team_details(question)
 
         return response
 
-    def start_interactive_session(self, query):
-        """Process single query and return result"""
-        # Ensure initialization happens first
-        if not self.initialized:
-            print("🔧 Initializing FAR Details Assistant...")
-            if not self.initialize():
-                return "❌ Failed to initialize FAR Details Assistant. Check database connection and configuration."
+    def start_interactive_session(self, query: str) -> str:
+        """Process single query with enhanced context awareness"""
+        if not self.initialize():
+            return "Failed to initialize Enhanced Team Details Assistant."
 
         try:
-            if query.lower() in ['exit', 'quit', 'q']:
-                return "👋 Session ended."
-
-            print("🔍 Processing your query...")
+            logger.info(f"Processing query: {query}")
+            start_time = datetime.now()
+            
             response = self.process_question(query)
+            
+            total_time = (datetime.now() - start_time).total_seconds()
+            logger.info(f"Total processing time: {total_time:.2f} seconds")
+            
             return response
 
-        except KeyboardInterrupt:
-            return "👋 Session interrupted."
         except Exception as e:
-            error_msg = f"❌ Session error: {str(e)}"
+            error_msg = f"Session error: {str(e)}"
             logger.error(f"Session error: {e}\n{traceback.format_exc()}")
             return error_msg
-        finally:
-            # Clean up database connection
-            try:
-                if self.db_handler and self.db_handler['connection'] and self.db_handler['connection'].open:
-                    self.db_handler['connection'].close()
-            except:
-                pass
 
-def Farmain(query):
-    """Main function to process FAR queries"""
-    print("🚀 Starting FAR Details Assistant...")
+def Teammain(query: str) -> str:
+    """Enhanced main function with smart query processing"""
+    logger.info("Starting Enhanced Team Details Assistant...")
     
-    # Create assistant instance
-    assistant = FarDetailsAssistant()
-    
-    # Explicitly initialize the assistant
-    print("🔧 Initializing database connection...")
-    if not assistant.initialize():
-        return "❌ Failed to initialize FAR Details Assistant. Please check:\n• Database connection settings\n• Database server is running\n• Credentials are correct\n• Required tables exist"
-    
-    print("✅ Initialization successful!")
-    
-    # Process the query
+    assistant = EnhancedTeamDetailsAssistant()
     result = assistant.start_interactive_session(query)
-    print("✅ Query processing complete.")
+    
+    logger.info("Query processing complete.")
     return result
 
-# Test the function
+# Example usage and testing
 if __name__ == "__main__":
-    # Test with sample queries
     test_queries = [
-        "Show me FAR with ID 175",
-        "List all FARs with status resolved",
-        "Show me all FARs that expire in 2020",
-        "Count FARs by status"
+        "12345",  # Simple ID
+        "John Doe",  # Simple name
+        "employee 12345",  # Simple employee ID
+        "name John",  # Simple name query
+        "What team is John Doe in?",  # Complex query
+        "List all employees in the Marketing team",  # Complex query
     ]
+
+    assistant = EnhancedTeamDetailsAssistant()
     
     for query in test_queries:
         print(f"\n{'='*60}")
-        print(f"Testing: {query}")
+        print(f"Query: {query}")
+        print(f"Is simple query: {is_simple_query(query)}")
         print('='*60)
-        result = Farmain(query)
+        result = assistant.start_interactive_session(query)
         print(result)
