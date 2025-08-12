@@ -2,28 +2,28 @@
 | Field         | Type         | Null | Key | Default | Extra          |
 +---------------+--------------+------+-----+---------+----------------+
 | id            | bigint       | NO   | PRI | NULL    | auto_increment |
-| ip_address    | varchar(20)  | NO   |     | NULL    |                |
-| last_update   | varchar(50)  | NO   |     | NULL    |                |
-| upTime        | varchar(50)  | NO   |     | NULL    |                |
-| server_role   | varchar(50)  | NO   |     | NULL    |                |
-| ram           | int          | NO   |     | NULL    |                |
-| cpuCore       | int          | NO   |     | NULL    |                |
-| osVersion     | varchar(100) | NO   |     | NULL    |                |
-| kernelUdate   | varchar(100) | NO   |     | NULL    |                |
-| aceVersion    | varchar(20)  | NO   |     | NULL    |                |
-| mqVersion     | varchar(30)  | NO   |     | NULL    |                |
-| firewall      | varchar(50)  | NO   |     | NULL    |                |
-| rpmCount      | int          | NO   |     | NULL    |                |
+| ip_address    | varchar(20)  | NO   |     | NULL    |                | ip address of server 
+| last_update   | varchar(50)  | NO   |     | NULL    |                | last db update time
+| upTime        | varchar(50)  | NO   |     | NULL    |                | uptime of server
+| server_role   | varchar(50)  | NO   |     | NULL    |                | role of server PR Or DR
+| ram           | int          | NO   |     | NULL    |                | RAM of server
+| cpuCore       | int          | NO   |     | NULL    |                | number of cpu cores
+| osVersion     | varchar(100) | NO   |     | NULL    |                | os version
+| kernelUdate   | varchar(100) | NO   |     | NULL    |                | 
+| aceVersion    | varchar(20)  | NO   |     | NULL    |                | ibm ace version
+| mqVersion     | varchar(30)  | NO   |     | NULL    |                | ibm mq version
+| firewall      | varchar(50)  | NO   |     | NULL    |                | firewall active or inactive
+| rpmCount      | int          | NO   |     | NULL    |                | 
 | dsAgent       | varchar(50)  | NO   |     | NULL    |                |
 | splunk        | varchar(50)  | NO   |     | NULL    |                |
-| ragent        | varchar(50)  | NO   |     | NULL    |                |
-| eisuserExpi   | varchar(30)  | NO   |     | NULL    |                |
-| rootExpi      | varchar(30)  | NO   |     | NULL    |                |
+| ragent        | varchar(50)  | NO   |     | NULL    |                |  
+| eisuserExpi   | varchar(30)  | NO   |     | NULL    |                | eis user expiry date
+| rootExpi      | varchar(30)  | NO   |     | NULL    |                | root user expiry date
 | socvaExpi     | varchar(30)  | NO   |     | NULL    |                |
 | addmitamExpi  | varchar(50)  | NO   |     | NULL    |                |
 | systemTime    | varchar(50)  | NO   |     | NULL    |                |
 | fileSystem    | varchar(20)  | NO   |     | NULL    |                |
-| kernelVersion | varchar(100) | NO   |     | NULL    |                |
+| kernelVersion | varchar(100) | NO   |     | NULL    |                | kernal version
 | cpu           | int          | YES  |     | NULL    |                |
 | mem_cp_update | varchar(50)  | YES  |     | NULL    |                |
 | memory        | int          | YES  |     | NULL    |                |
