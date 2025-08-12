@@ -1,680 +1,665 @@
-
 import os
 import re
 import logging
-import json
-import glob
+import pymysql
 import traceback
 from typing import List, Optional, Dict, Any, Tuple
-from datetime import datetime
-from pathlib import Path
-
+from datetime import datetime, date, timedelta
+import json
+import calendar
+import sqlparse
+from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
+from langchain.chains import create_sql_query_chain
 
-# --- CONFIGURATION ---
+today_date = date.today()
 
-REPORT_CONFIG = {
-    "name": "System Reports",
-    "report_directory": ".",  # Directory containing system report JSON files
-    "supported_patterns": ["system_report_*.json"]
+# --- SYSTEM COMPLIANCE CONFIGURATION ---
+COMPLIANCE_DB_CONFIG = {
+    "name": "System Compliance",
+    "db_config": {
+        "host": "localhost",
+        "user": "root",
+        "password": "root123",
+        "database": "EIS_n"
+    },
+    "include_tables": ["EISHome_compliance"],
 }
 
-logging.basicConfig(
-    filename=os.path.expanduser("~/.system_report_query_ai.log"),
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Blocked patterns for security
+BLOCKED_PATTERNS = [
+    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+    r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
+    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
+    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
+]
 
-def clean_query_response(raw_response: str) -> str:
-    """Clean and extract meaningful response from LLM"""
-    # Remove any code blocks or formatting
-    response = re.sub(r"```[\w]*\s*(.*?)\s*```", r"\1", raw_response, flags=re.DOTALL)
-    return response.strip()
+def is_simple_identifier(query: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check if query is just a simple identifier (IP, ID, hostname) without natural language
+    Returns (is_simple, sql_query)
+    """
+    if not query or not isinstance(query, str):
+        return False, None
 
-def format_answer(data: Any, max_items: int = 20) -> str:
-    """Format query results for display"""
-    if not data:
-        return "No data found for your request."
+    query = query.strip()
 
-    if isinstance(data, (str, int, float, bool)):
-        return f"Result: {data}"
+    # Remove common prefixes that don't add meaning
+    clean_query = re.sub(r'^(show\s+|get\s+|find\s+)?', '', query, flags=re.IGNORECASE).strip()
 
-    if isinstance(data, dict):
-        if len(data) == 1:
-            key, value = next(iter(data.items()))
-            return f"{key}: {format_answer(value, max_items)}"
+    # IP Address pattern (IPv4)
+    ip_pattern = r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$'
+    ip_match = re.match(ip_pattern, clean_query)
+    if ip_match:
+        ip = ip_match.group(1)
+        return True, f"SELECT * FROM EISHome_compliance WHERE ip_address = '{ip}'"
 
-        output = []
-        for key, value in list(data.items())[:max_items]:
-            if isinstance(value, (dict, list)) and len(str(value)) > 100:
-                output.append(f"{key}: [Complex data - {len(value) if isinstance(value, (list, dict)) else 'N/A'} items]")
-            else:
-                output.append(f"{key}: {value}")
+    # Server ID (just numbers)
+    id_pattern = r'^(\d+)$'
+    id_match = re.match(id_pattern, clean_query)
+    if id_match:
+        server_id = id_match.group(1)
+        return True, f"SELECT * FROM EISHome_compliance WHERE id = {server_id}"
 
-        if len(data) > max_items:
-            output.append(f"... and {len(data) - max_items} more items")
-        return "\n".join(output)
+    # Hostname pattern (letters, numbers, dots, hyphens - no spaces or natural language)
+    hostname_pattern = r'^([a-zA-Z0-9\.\-_]+)$'
+    hostname_match = re.match(hostname_pattern, clean_query)
+    if hostname_match and '.' in clean_query and len(clean_query) > 3:
+        hostname = hostname_match.group(1)
+        return True, f"SELECT * FROM EISHome_compliance WHERE ip_address LIKE '%{hostname}%' OR server_role LIKE '%{hostname}%'"
 
-    if isinstance(data, list):
-        if not data:
-            return "Empty list"
+    # Single word server role queries (no articles, conjunctions, or question words)
+    single_word_pattern = r'^([a-zA-Z]+)$'
+    single_word_match = re.match(single_word_pattern, clean_query)
+    if single_word_match:
+        word = single_word_match.group(1).lower()
+        # Exclude question words, articles, and common natural language words
+        natural_language_words = {
+            'what', 'where', 'when', 'who', 'why', 'how', 'which', 'are', 'is', 'do', 'does', 'can', 'will', 'would',
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from',
+            'all', 'some', 'any', 'many', 'much', 'few', 'little', 'more', 'most', 'less', 'least',
+            'same', 'different', 'similar', 'like', 'unlike', 'than', 'as', 'if', 'unless', 'since', 'because'
+        }
 
-        output = []
-        for i, item in enumerate(data[:max_items]):
-            if isinstance(item, dict):
-                # Show key fields for dictionary items
-                if 'name' in item:
-                    output.append(f"{i+1}. {item['name']}: {item}")
-                elif 'command' in item:
-                    output.append(f"{i+1}. {item['command']}: CPU:{item.get('cpu_percent', 'N/A')}% MEM:{item.get('memory_percent', 'N/A')}%")
-                elif 'device' in item:
-                    output.append(f"{i+1}. {item['device']}: {item.get('size', 'N/A')} ({item.get('usage_percent', 'N/A')} used)")
-                else:
-                    output.append(f"{i+1}. {item}")
-            else:
-                output.append(f"{i+1}. {item}")
+        if word not in natural_language_words:
+            return True, f"SELECT * FROM EISHome_compliance WHERE server_role LIKE '%{word}%'"
 
-        if len(data) > max_items:
-            output.append(f"... and {len(data) - max_items} more items")
-        return "\n".join(output)
+    return False, None
 
-    return str(data)
+def is_natural_language_question(query: str) -> bool:
+    """
+    Determine if the query is a natural language question that needs AI processing
+    """
+    if not query or not isinstance(query, str):
+        return False
 
-def clear_screen():
-    """Clear terminal screen"""
-    os.system("cls" if os.name == "nt" else "clear")
+    query_lower = query.lower().strip()
 
-class SystemReportQueryAssistant:
+    # Question patterns
+    question_starters = [
+        r'^(what|where|when|who|why|how|which)\b',
+        r'^(are|is|do|does|can|will|would|should|could)\b',
+        r'^(show\s+me|tell\s+me|list\s+all|give\s+me)\b',
+        r'^(find\s+all|get\s+all|display\s+all)\b'
+    ]
+
+    # Analytical phrases
+    analytical_phrases = [
+        'same', 'different', 'compare', 'analysis', 'summary', 'overview',
+        'all have', 'do all', 'are all', 'which ones', 'how many',
+        'percentage', 'compliance', 'status', 'breakdown', 'distribution'
+    ]
+
+    # Complex query indicators
+    complex_indicators = [
+        'and', 'or', 'but', 'with', 'without', 'that have', 'that are',
+        'more than', 'less than', 'greater than', 'higher than', 'lower than',
+        'between', 'during', 'since', 'before', 'after'
+    ]
+
+    # Check for question patterns
+    for pattern in question_starters:
+        if re.match(pattern, query_lower):
+            return True
+
+    # Check for analytical phrases
+    if any(phrase in query_lower for phrase in analytical_phrases):
+        return True
+
+    # Check for complex indicators
+    if any(indicator in query_lower for indicator in complex_indicators):
+        return True
+
+    # If query has multiple words and contains common question/analysis words
+    words = query_lower.split()
+    if len(words) > 3:  # More than 3 words suggests natural language
+        return True
+
+    return False
+
+def generate_fast_sql_patterns():
+    """Generate fast SQL patterns for common simple queries"""
+    patterns = {
+        # Count queries
+        r'^count\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
+        r'^count\s+servers?\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
+        r'^total\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
+        r'^total\s+servers?\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
+
+        # List all queries
+        r'^all\s*$': "SELECT * FROM EISHome_compliance",
+        r'^all\s+servers?\s*$': "SELECT * FROM EISHome_compliance",
+        r'^servers?\s*$': "SELECT * FROM EISHome_compliance",
+        r'^list\s*$': "SELECT * FROM EISHome_compliance",
+
+        # Status queries (single word + status)
+        r'^firewall\s*$': "SELECT * FROM EISHome_compliance WHERE firewall IS NOT NULL",
+        r'^dsagent\s*$': "SELECT * FROM EISHome_compliance WHERE dsAgent IS NOT NULL",
+        r'^splunk\s*$': "SELECT * FROM EISHome_compliance WHERE splunk IS NOT NULL",
+
+        # OS queries
+        r'^centos\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%CentOS%'",
+        r'^linux\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%Linux%'",
+        r'^windows\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%Windows%'",
+
+        # Role-based queries (single words)
+        r'^web\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%web%'",
+        r'^database\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%database%'",
+        r'^db\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%db%'",
+        r'^app\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%app%'",
+        r'^application\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%application%'"
+    }
+    return patterns
+
+def try_fast_query(query: str) -> Optional[str]:
+    """Try to match simple queries to fast SQL patterns"""
+    if not query or not isinstance(query, str):
+        return None
+
+    query_clean = query.lower().strip()
+    patterns = generate_fast_sql_patterns()
+
+    for pattern, sql in patterns.items():
+        if re.match(pattern, query_clean):
+            return sql
+
+    return None
+
+def get_sql_generation_prompt():
+    """Generate comprehensive SQL prompt for complex queries"""
+    return f"""You are an expert SQL generator for EISHome_compliance table.
+
+TABLE SCHEMA:
+- id (BIGINT): Server ID
+- ip_address (VARCHAR): Server IP
+- server_role (VARCHAR): Role (web, database, app, etc)
+- osVersion (VARCHAR): OS version
+- kernelVersion (VARCHAR): Kernel version
+- ram (INT): RAM in GB
+- cpuCore (INT): CPU cores
+- cpu (INT): CPU usage %
+- memory (INT): Memory usage %
+- firewall (VARCHAR): Firewall status
+- dsAgent (VARCHAR): Deep Security Agent
+- splunk (VARCHAR): Splunk agent
+- aceVersion (VARCHAR): ACE version
+- mqVersion (VARCHAR): MQ version
+- eisuserExpi, rootExpi, socvaExpi, addmitamExpi (VARCHAR): User expiry dates
+
+RULES:
+1. Generate ONLY valid SELECT statements
+2. Use exact table name: EISHome_compliance
+3. For text searches use LIKE with %wildcards%
+4. For numbers use =, >, <, >=, <= operators
+5. Return ONLY the SQL query, no explanations
+6. Use proper WHERE clauses for filtering
+7. For "all servers" use SELECT * FROM EISHome_compliance
+8. For version comparisons, be specific about the field name
+
+QUESTION: {{question}}
+
+SQL:"""
+
+def clean_and_fix_sql(raw_sql: str) -> str:
+    """Clean and fix SQL generated by AI with proper error handling"""
+    # Ensure we have a string to work with
+    if not raw_sql or not isinstance(raw_sql, str):
+        return "ERROR: Invalid SQL input"
+
+    print(f"DEBUG - Raw SQL: {repr(raw_sql)}")
+
+    # Handle refusal responses
+    if any(phrase in raw_sql.lower() for phrase in ["i cannot", "i can't", "sorry", "unable"]):
+        return "ERROR: AI refused to generate SQL"
+
+    # Extract SQL from various formats
+    sql = raw_sql.strip()
+
+    # Remove code block markers
+    sql = re.sub(r'```(?:sql)?\s*(.*?)\s*```', r'\1', sql, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove common prefixes
+    sql = re.sub(r'^(sql:|query:|here is|here\'s)?\s*:?\s*', '', sql, flags=re.IGNORECASE)
+
+    # Extract the SELECT statement
+    select_match = re.search(r'(SELECT\s+.*?)(?:;|\n\s*$|$)', sql, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        sql = select_match.group(1).strip()
+
+    # Ensure we still have a valid string after processing
+    if not sql or not isinstance(sql, str):
+        return "ERROR: SQL processing failed"
+
+    # Fix common issues
+    sql = re.sub(r'\s+', ' ', sql)  # Normalize whitespace
+    sql = re.sub(r'from\s+eishome_compliance', 'FROM EISHome_compliance', sql, flags=re.IGNORECASE)
+
+    # Fix text field searches - only if sql is a valid string
+    text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion',
+                   'firewall', 'dsAgent', 'splunk', 'kernelVersion']
+
+    for field in text_fields:
+        try:
+            # Check if it's not an IP address exact match
+            if field != 'ip_address' or not re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', sql):
+                pattern = f"({field})\\s*=\\s*'([^']*)'"
+                replacement = f"\\1 LIKE '%\\2%'"
+                sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
+        except Exception as e:
+            print(f"DEBUG - Error fixing field {field}: {e}")
+            continue
+
+    # Ensure proper semicolon
+    if not sql.endswith(';'):
+        sql += ';'
+
+    print(f"DEBUG - Cleaned SQL: {sql}")
+    return sql
+
+def validate_sql(sql: str) -> Tuple[str, bool]:
+    """Validate and ensure SQL is safe"""
+    if not sql or not isinstance(sql, str):
+        return sql, False
+
+    if not sql.upper().strip().startswith('SELECT'):
+        return sql, False
+
+    # Check for dangerous operations
+    dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
+    sql_upper = sql.upper()
+    if any(op in sql_upper for op in dangerous_ops):
+        return sql, False
+
+    # Basic syntax validation
+    try:
+        parsed = sqlparse.parse(sql)
+        if not parsed:
+            return sql, False
+    except:
+        return sql, False
+
+    return sql, True
+
+def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
+    """Use AI to analyze results and provide natural language insights"""
+    if not results:
+        return "No matching servers found for your query."
+
+    # Prepare summary data
+    total_count = len(results)
+
+    # Get unique values for key analysis fields
+    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 'aceVersion', 'mqVersion']
+    field_analysis = {}
+
+    for field in analysis_fields:
+        if field in results[0]:
+            values = [str(r.get(field, 'NULL')) for r in results if r.get(field) is not None]
+            unique_values = list(set(values))
+            field_analysis[field] = {
+                'unique_count': len(unique_values),
+                'values': unique_values[:10],  # Limit for prompt size
+                'total_records': len(values)
+            }
+
+    # Create focused analysis prompt
+    prompt = f"""Analyze this system compliance data to answer the user's question.
+
+USER QUESTION: "{question}"
+
+DATA SUMMARY:
+- Total servers: {total_count}
+- Field Analysis: {json.dumps(field_analysis, indent=2)}
+
+Please provide a direct, clear answer to the user's question. Focus on:
+1. Direct yes/no answer if applicable
+2. Specific differences or issues found
+3. Key statistics or patterns
+4. Actionable insights
+
+Keep response concise and specific to the question asked."""
+
+    try:
+        analysis = llm.invoke(prompt)
+        return analysis.strip()
+    except Exception as e:
+        return f"Analysis completed but couldn't generate detailed insights: {str(e)}"
+
+def format_simple_results(results: List[Dict], query: str) -> str:
+    """Format results for simple queries (non-analytical)"""
+    if not results:
+        return f"No servers found matching '{query}'"
+
+    if len(results) == 1:
+        # Single server - show detailed info
+        server = results[0]
+        output = f"🖥️ Server Details:\n"
+
+        key_fields = {
+            'id': '🆔 ID',
+            'ip_address': '🌐 IP Address',
+            'server_role': '🏷️ Role',
+            'osVersion': '💿 OS Version',
+            'kernelVersion': '🔧 Kernel',
+            'ram': '🧠 RAM',
+            'cpuCore': '⚡ CPU Cores',
+            'cpu': '🖥️ CPU Usage',
+            'memory': '💾 Memory Usage',
+            'firewall': '🔥 Firewall',
+            'dsAgent': '🛡️ Deep Security',
+            'splunk': '📊 Splunk'
+        }
+
+        for field, label in key_fields.items():
+            if field in server and server[field] is not None:
+                value = server[field]
+                if field == 'ram':
+                    value = f"{value} GB"
+                elif field in ['cpu', 'memory'] and isinstance(value, (int, float)):
+                    value = f"{value}%"
+                output += f"{label}: {value}\n"
+
+        return output.strip()
+
+    elif len(results) <= 10:
+        # Small result set - show table
+        return format_table(results)
+
+    else:
+        # Large result set - show summary + sample
+        output = f"Found {len(results)} servers:\n\n"
+
+        # Add role summary if available
+        if 'server_role' in results[0]:
+            roles = {}
+            for server in results:
+                role = server.get('server_role', 'Unknown')
+                roles[role] = roles.get(role, 0) + 1
+
+            output += "🏷️ Server Roles:\n"
+            for role, count in sorted(roles.items()):
+                output += f"  • {role}: {count} servers\n"
+            output += "\n"
+
+        # Show sample
+        output += f"📋 Sample (first 5 servers):\n"
+        output += format_table(results[:5])
+        output += f"\n... and {len(results) - 5} more servers"
+
+        return output
+
+def format_table(results: List[Dict]) -> str:
+    """Format results as a clean table"""
+    if not results:
+        return "No data to display"
+
+    # Select important columns
+    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 'firewall', 'dsAgent']
+    available_cols = [col for col in priority_cols if col in results[0]]
+
+    if not available_cols:
+        available_cols = list(results[0].keys())[:6]  # First 6 columns
+
+    # Calculate column widths
+    col_widths = {}
+    for col in available_cols:
+        max_width = len(str(col))
+        for row in results:
+            value = str(row.get(col, 'NULL'))
+            max_width = max(max_width, len(value))
+        col_widths[col] = min(max_width, 25)  # Max 25 chars
+
+    # Build table
+    output = []
+
+    # Header
+    header = " | ".join(col.ljust(col_widths[col]) for col in available_cols)
+    separator = "-+-".join("-" * col_widths[col] for col in available_cols)
+    output.append(header)
+    output.append(separator)
+
+    # Rows
+    for row in results:
+        formatted_row = " | ".join(
+            str(row.get(col, 'NULL')).ljust(col_widths[col])[:col_widths[col]]
+            for col in available_cols
+        )
+        output.append(formatted_row)
+
+    return "\n".join(output)
+
+class SystemComplianceAssistant:
     def __init__(self):
         self.llm = None
-        self.reports_data = {}
+        self.db_connection = None
+        self.db_chain = None
         self.initialized = False
-        self.chat_history = []
 
     def initialize(self):
-        """Initialize the system report query assistant"""
+        """Initialize database connection and AI components"""
         try:
-            print("🔧 Initializing System Report Query Assistant...")
+            db_config = COMPLIANCE_DB_CONFIG['db_config']
 
-            # Initialize LLM
-            self.llm = OllamaLLM(model="myllm:latest", temperature=0.0)
+            # Direct database connection
+            self.db_connection = pymysql.connect(
+                host=db_config['host'],
+                user=db_config['user'],
+                password=db_config['password'],
+                database=db_config['database'],
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True
+            )
 
-            # Load system report files
-            self.load_system_reports()
+            # AI components (only initialize when needed)
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.2)
+
+            # Database chain for complex queries
+            uri = f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}/{db_config['database']}"
+            db_for_chain = SQLDatabase.from_uri(uri, include_tables=["EISHome_compliance"])
+            self.db_chain = create_sql_query_chain(self.llm, db_for_chain)
 
             self.initialized = True
-            print("✅ System Report Query Assistant initialized successfully!")
             return True
+
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
-            logger.error(f"Initialization failed: {e}", exc_info=True)
             return False
 
-    def load_system_reports(self):
-        """Load all system report JSON files from the directory"""
+    def execute_query(self, sql: str) -> List[Dict]:
+        """Execute SQL query safely"""
         try:
-            report_dir = REPORT_CONFIG['report_directory']
-            patterns = REPORT_CONFIG['supported_patterns']
-
-            loaded_count = 0
-            for pattern in patterns:
-                file_pattern = os.path.join(report_dir, pattern)
-                for file_path in glob.glob(file_pattern):
-                    try:
-                        with open(file_path, 'r') as f:
-                            report_data = json.load(f)
-
-                        # Use filename as key
-                        file_key = os.path.basename(file_path)
-                        self.reports_data[file_key] = {
-                            'data': report_data,
-                            'file_path': file_path,
-                            'loaded_at': datetime.now().isoformat(),
-                            'file_size': os.path.getsize(file_path)
-                        }
-                        loaded_count += 1
-
-                    except Exception as e:
-                        logger.error(f"Failed to load {file_path}: {e}")
-                        print(f"⚠️  Failed to load {file_path}: {e}")
-
-            if loaded_count == 0:
-                print("⚠️  No system report files found. Please ensure system report JSON files exist in the current directory.")
-                print("📁 Looking for files matching:", patterns)
-                return False
-
-            print(f"✅ Loaded {loaded_count} system report files")
-            return True
-
+            with self.db_connection.cursor() as cursor:
+                cursor.execute(sql)
+                return cursor.fetchall()
         except Exception as e:
-            print(f"❌ Failed to load system reports: {e}")
-            logger.error(f"Failed to load system reports: {e}")
-            return False
-
-    def search_data(self, data: Any, search_terms: List[str], path: str = "") -> List[Dict]:
-        """Recursively search through data structure for relevant information"""
-        results = []
-
-        if isinstance(data, dict):
-            for key, value in data.items():
-                current_path = f"{path}.{key}" if path else key
-
-                # Check if current key matches search terms
-                if any(term.lower() in key.lower() for term in search_terms):
-                    results.append({
-                        'path': current_path,
-                        'key': key,
-                        'value': value,
-                        'type': type(value).__name__
-                    })
-
-                # Recursively search in nested structures
-                results.extend(self.search_data(value, search_terms, current_path))
-
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                current_path = f"{path}[{i}]" if path else f"[{i}]"
-                results.extend(self.search_data(item, search_terms, current_path))
-
-        elif isinstance(data, str):
-            # Check if string value contains search terms
-            if any(term.lower() in data.lower() for term in search_terms):
-                results.append({
-                    'path': path,
-                    'value': data,
-                    'type': 'string_match'
-                })
-
-        return results
-
-    def filter_processes(self, processes_data: Dict, criteria: Dict) -> List[Dict]:
-        """Filter processes based on criteria"""
-        results = []
-
-        for process_type, process_list in processes_data.items():
-            if not isinstance(process_list, list):
-                continue
-
-            for process in process_list:
-                if not isinstance(process, dict):
-                    continue
-
-                match = True
-
-                # Check CPU threshold
-                if 'min_cpu' in criteria:
-                    cpu = process.get('cpu_percent', 0)
-                    if isinstance(cpu, (int, float)) and cpu < criteria['min_cpu']:
-                        match = False
-
-                # Check memory threshold
-                if 'min_memory' in criteria:
-                    memory = process.get('memory_percent', 0)
-                    if isinstance(memory, (int, float)) and memory < criteria['min_memory']:
-                        match = False
-
-                # Check command/name contains text
-                if 'contains' in criteria:
-                    command = process.get('command', '').lower()
-                    name = process.get('name', '').lower()
-                    search_text = criteria['contains'].lower()
-                    if search_text not in command and search_text not in name:
-                        match = False
-
-                # Check user
-                if 'user' in criteria:
-                    if process.get('user', '') != criteria['user']:
-                        match = False
-
-                if match:
-                    process_copy = process.copy()
-                    process_copy['source_type'] = process_type
-                    results.append(process_copy)
-
-        return results
-
-    def filter_storage(self, storage_data: Dict, criteria: Dict) -> List[Dict]:
-        """Filter storage devices based on criteria"""
-        results = []
-        disks = storage_data.get('disks', [])
-
-        for disk in disks:
-            if not isinstance(disk, dict):
-                continue
-
-            match = True
-
-            # Check usage threshold
-            if 'min_usage' in criteria:
-                usage_str = disk.get('usage_percent', '0%')
-                try:
-                    usage = float(usage_str.replace('%', ''))
-                    if usage < criteria['min_usage']:
-                        match = False
-                except (ValueError, AttributeError):
-                    match = False
-
-            # Check device name contains text
-            if 'contains' in criteria:
-                device = disk.get('device', '').lower()
-                mount_point = disk.get('mount_point', '').lower()
-                search_text = criteria['contains'].lower()
-                if search_text not in device and search_text not in mount_point:
-                    match = False
-
-            # Check filesystem type
-            if 'filesystem' in criteria:
-                if disk.get('filesystem_type', '') != criteria['filesystem']:
-                    match = False
-
-            if match:
-                results.append(disk)
-
-        return results
-
-    def filter_services(self, services_data: Dict, criteria: Dict) -> List[Dict]:
-        """Filter services based on criteria"""
-        results = []
-
-        for service_type, service_list in services_data.items():
-            if not isinstance(service_list, list):
-                continue
-
-            for service in service_list:
-                if not isinstance(service, dict):
-                    continue
-
-                match = True
-
-                # Check service state
-                if 'state' in criteria:
-                    active_state = service.get('active_state', '').lower()
-                    if criteria['state'].lower() not in active_state:
-                        match = False
-
-                # Check service name contains text
-                if 'contains' in criteria:
-                    name = service.get('name', '').lower()
-                    description = service.get('description', '').lower()
-                    search_text = criteria['contains'].lower()
-                    if search_text not in name and search_text not in description:
-                        match = False
-
-                if match:
-                    service_copy = service.copy()
-                    service_copy['source_type'] = service_type
-                    results.append(service_copy)
-
-        return results
-
-    def analyze_question_intent(self, question: str) -> Dict:
-        """Analyze question to determine intent and extract criteria"""
-        question_lower = question.lower()
-        intent = {
-            'type': 'general',
-            'criteria': {},
-            'search_terms': []
-        }
-
-        # Extract numbers for thresholds
-        numbers = re.findall(r'\d+(?:\.\d+)?', question)
-
-        # Determine query type
-        if any(word in question_lower for word in ['process', 'cpu', 'memory', 'running']):
-            intent['type'] = 'processes'
-
-            # Extract CPU/memory thresholds
-            if 'cpu' in question_lower and numbers:
-                intent['criteria']['min_cpu'] = float(numbers[0])
-            if 'memory' in question_lower and numbers:
-                intent['criteria']['min_memory'] = float(numbers[0])
-
-            # Extract process name searches
-            if 'contain' in question_lower or 'with' in question_lower:
-                # Try to extract quoted strings or common process names
-                quoted = re.findall(r'"([^"]*)"', question)
-                if quoted:
-                    intent['criteria']['contains'] = quoted[0]
-
-        elif any(word in question_lower for word in ['disk', 'storage', 'filesystem', 'mount']):
-            intent['type'] = 'storage'
-
-            # Extract usage thresholds
-            if any(word in question_lower for word in ['usage', 'used', 'full']) and numbers:
-                intent['criteria']['min_usage'] = float(numbers[0])
-
-        elif any(word in question_lower for word in ['service', 'systemd', 'daemon']):
-            intent['type'] = 'services'
-
-            # Extract service state
-            if 'running' in question_lower:
-                intent['criteria']['state'] = 'active'
-            elif 'failed' in question_lower:
-                intent['criteria']['state'] = 'failed'
-
-        # Extract general search terms
-        # Remove common words and extract meaningful terms
-        stop_words = {'the', 'is', 'are', 'what', 'show', 'list', 'get', 'all', 'with', 'and', 'or', 'of', 'in', 'on', 'at', 'by'}
-        words = re.findall(r'\b\w+\b', question_lower)
-        intent['search_terms'] = [word for word in words if word not in stop_words and len(word) > 2]
-
-        return intent
-
-    def query_reports_structured(self, question: str) -> str:
-        """Query reports using structured filtering based on question analysis"""
-        try:
-            intent = self.analyze_question_intent(question)
-            all_results = []
-
-            for file_key, report_info in self.reports_data.items():
-                report_data = report_info['data']
-                file_results = []
-
-                if intent['type'] == 'processes' and 'processes' in report_data:
-                    filtered = self.filter_processes(report_data['processes'], intent['criteria'])
-                    file_results.extend(filtered)
-
-                elif intent['type'] == 'storage' and 'storage' in report_data:
-                    filtered = self.filter_storage(report_data['storage'], intent['criteria'])
-                    file_results.extend(filtered)
-
-                elif intent['type'] == 'services' and 'services' in report_data:
-                    filtered = self.filter_services(report_data['services'], intent['criteria'])
-                    file_results.extend(filtered)
-
-                else:
-                    # General search across all data
-                    if intent['search_terms']:
-                        search_results = self.search_data(report_data, intent['search_terms'])
-                        file_results.extend(search_results)
-
-                # Add source file info to results
-                for result in file_results:
-                    result['source_file'] = file_key
-
-                all_results.extend(file_results[:10])  # Limit per file
-
-            if not all_results:
-                return "No matching data found for your query."
-
-            # Sort results by relevance (you can customize this)
-            if intent['type'] == 'processes':
-                # Sort by CPU usage if available
-                all_results.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
-            elif intent['type'] == 'storage':
-                # Sort by usage percentage
-                all_results.sort(key=lambda x: float(str(x.get('usage_percent', '0%')).replace('%', '')), reverse=True)
-
-            # Format results
-            return format_answer(all_results[:20])  # Top 20 results
-
-        except Exception as e:
-            logger.error(f"Structured query error: {e}")
-            return f"❌ Error processing structured query: {str(e)}"
-
-    def query_reports_llm(self, question: str) -> str:
-        """Query reports using LLM for complex analysis"""
-        try:
-            # Create context from all loaded reports
-            context_data = {}
-            for file_key, report_info in self.reports_data.items():
-                context_data[file_key] = report_info['data']
-
-            # Prepare prompt for the LLM
-            prompt = f"""
-You are a system administrator assistant analyzing system reports. Answer the user's question based on the provided system report data.
-
-User Question: {question}
-
-System Reports Data:
-{json.dumps(context_data, indent=2)}
-
-Instructions:
-1. Analyze the system report data to answer the user's question
-2. Provide specific details from the reports
-3. If comparing multiple reports, mention the differences
-4. Include relevant metrics, numbers, and technical details
-5. If the question cannot be answered from the data, say so clearly
-6. Format your response in a clear, structured way
-7. Focus on the most relevant information and avoid overwhelming details
-
-Answer:"""
-
-            response = self.llm.invoke(prompt)
-            return clean_query_response(response)
-
-        except Exception as e:
-            logger.error(f"LLM query error: {e}")
-            return f"❌ Error processing query: {str(e)}"
-
-    def process_question(self, question: str) -> Dict[str, Any]:
-        """Process system report question and return structured response"""
+            print(f"❌ Query execution failed: {e}")
+            raise
+
+    def process_query(self, query: str) -> str:
+        """Main query processing logic"""
         if not self.initialized:
-            return {
-                "success": False,
-                "error": "Assistant not initialized",
-                "response": "❌ Assistant not initialized. Please restart."
-            }
+            if not self.initialize():
+                return "❌ System not available"
+
+        start_time = datetime.now()
+
+        # Ensure query is valid
+        if not query or not isinstance(query, str):
+            return "❌ Invalid query provided"
+
+        query = query.strip()
+
+        print(f"🔍 Processing: '{query}'")
 
         try:
-            # Determine query approach based on question complexity
-            question_lower = question.lower()
+            # Step 1: Check for simple identifiers (IP, ID, hostname)
+            is_simple, direct_sql = is_simple_identifier(query)
+            if is_simple:
+                print(f"⚡ Fast path - Direct SQL: {direct_sql}")
+                results = self.execute_query(direct_sql)
+                elapsed = (datetime.now() - start_time).total_seconds()
+                print(f"✅ Completed in {elapsed:.2f}s")
+                return format_simple_results(results, query)
 
-            # Use structured filtering for simple, specific queries
-            if any(keyword in question_lower for keyword in ['top', 'highest', 'lowest', 'list', 'show', 'processes using', 'services with']):
-                response = self.query_reports_structured(question)
+            # Step 2: Check for simple pattern matches
+            fast_sql = try_fast_query(query)
+            if fast_sql and not is_natural_language_question(query):
+                print(f"⚡ Fast pattern match: {fast_sql}")
+                results = self.execute_query(fast_sql)
+                elapsed = (datetime.now() - start_time).total_seconds()
+                print(f"✅ Completed in {elapsed:.2f}s")
+                return format_simple_results(results, query)
+
+            # Step 3: Natural language processing with AI
+            if is_natural_language_question(query):
+                print("🧠 Using AI for natural language query")
+
+                # Generate SQL with AI
+                prompt = get_sql_generation_prompt().format(question=query)
+
+                try:
+                    raw_sql = self.db_chain.invoke({"question": query})
+                except Exception as e:
+                    print(f"❌ AI SQL generation failed: {e}")
+                    return f"❌ Could not generate SQL for: '{query}'"
+
+                # Clean and validate SQL
+                sql = clean_and_fix_sql(raw_sql)
+
+                if sql.startswith("ERROR:"):
+                    return sql
+
+                sql, is_valid = validate_sql(sql)
+
+                if not is_valid:
+                    return f"❌ Could not generate valid SQL for: '{query}'"
+
+                print(f"🔧 Generated SQL: {sql}")
+
+                # Execute query
+                results = self.execute_query(sql)
+
+                # Analyze results with AI
+                analysis = analyze_results_with_ai(query, results, self.llm)
+
+                elapsed = (datetime.now() - start_time).total_seconds()
+                print(f"✅ AI analysis completed in {elapsed:.2f}s")
+
+                # Combine analysis with data
+                if results and len(results) <= 10:
+                    return f"{analysis}\n\n📊 Supporting Data:\n{format_table(results)}"
+                elif results and len(results) > 10:
+                    return f"{analysis}\n\n📊 Sample Data:\n{format_table(results[:5])}\n... ({len(results)} total servers)"
+                else:
+                    return analysis
+
+            # Step 4: Fallback - treat as simple query
+            print("🔄 Fallback to simple processing")
+            # Try to find any matches in server roles or IP addresses
+            fallback_sql = f"""
+            SELECT * FROM EISHome_compliance
+            WHERE ip_address LIKE '%{query}%'
+               OR server_role LIKE '%{query}%'
+               OR CAST(id AS CHAR) LIKE '%{query}%'
+            """
+            results = self.execute_query(fallback_sql)
+            elapsed = (datetime.now() - start_time).total_seconds()
+            print(f"✅ Fallback completed in {elapsed:.2f}s")
+
+            if results:
+                return format_simple_results(results, query)
             else:
-                # Use LLM for complex analysis and comparisons
-                response = self.query_reports_llm(question)
-
-            self.chat_history.append({"user": question, "assistant": response})
-
-            return {
-                "success": True,
-                "query": question,
-                "response": response,
-                "timestamp": datetime.now().isoformat(),
-                "reports_loaded": len(self.reports_data)
-            }
+                return f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question)."
 
         except Exception as e:
-            logger.error(f"Processing error: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "response": f"❌ Error processing your request: {e}"
-            }
+            elapsed = (datetime.now() - start_time).total_seconds()
+            error_msg = f"❌ Error after {elapsed:.2f}s: {str(e)}"
+            print(error_msg)
+            traceback.print_exc()  # Add full traceback for debugging
+            return error_msg
 
-    def save_feedback(self, question, answer, feedback):
-        """Save user feedback for query improvement"""
-        data = {
-            "question": question,
-            "answer": answer,
-            "feedback": feedback,
-            "timestamp": datetime.now().isoformat()
-        }
+    def cleanup(self):
+        """Clean up resources"""
         try:
-            with open("system_report_feedback_log.jsonl", "a") as f:
-                f.write(json.dumps(data) + "\n")
-        except Exception as e:
-            logger.error(f"Failed to save feedback: {e}")
+            if self.db_connection:
+                self.db_connection.close()
+        except:
+            pass
 
-    def show_help(self):
-        """Display help information"""
-        help_text = f"""
-📖 SYSTEM REPORT QUERY ASSISTANT HELP
+# Setup logging
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
-📊 LOADED REPORTS: {len(self.reports_data)} files
-{chr(10).join(f"  - {filename}" for filename in list(self.reports_data.keys())[:5])}
-{f"  ... and {len(self.reports_data) - 5} more" if len(self.reports_data) > 5 else ""}
+def is_dangerous(text: str) -> bool:
+    """Check for dangerous patterns"""
+    if not text or not isinstance(text, str):
+        return False
+    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
-💾 EXAMPLE QUERIES:
-  System Information:
-  - "What is the hostname and OS version?"
-  - "Show system uptime and load average"
-  - "Compare kernel versions across reports"
+def ComplianceMain(query):
+    """Main entry point"""
+    if not query or not isinstance(query, str):
+        return "❌ Invalid query provided"
 
-  Performance Queries:
-  - "What are the top CPU consuming processes?"
-  - "Show memory usage statistics"
-  - "List processes using more than 5% CPU"
-  - "Show processes containing python"
+    if is_dangerous(query):
+        return "❌ Query blocked for security reasons"
 
-  Storage Queries:
-  - "Show disk usage information"
-  - "Which filesystems are nearly full?"
-  - "List storage with more than 80% usage"
-  - "Show all mounted storage devices"
+    assistant = SystemComplianceAssistant()
+    try:
+        return assistant.process_query(query)
+    finally:
+        assistant.cleanup()
 
-  Service Queries:
-  - "What services are running?"
-  - "Show any failed services"
-  - "List services containing network"
-  - "Show active services"
-
-🔍 QUERY FEATURES:
-  - Natural language processing with LLM
-  - Direct JSON data filtering and search
-  - Multiple report comparison
-  - Real-time report data access
-  - Intelligent query type detection
-
-💡 COMMANDS:
-  - 'help' - Show this help
-  - 'clear' - Clear screen
-  - 'status' - Show system status
-  - 'reload' - Reload report files
-  - 'exit' - Quit assistant
-        """
-        print(help_text)
-
-    def show_status(self):
-        """Display system status"""
-        print("🔍 SYSTEM STATUS")
-        print(f"📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🤖 AI Model: {'✅ Initialized' if self.initialized else '❌ Not Initialized'}")
-        print(f"📊 Reports Loaded: {len(self.reports_data)}")
-        print(f"📝 Chat History: {len(self.chat_history)} queries")
-
-        if self.reports_data:
-            print("\n📁 LOADED REPORTS:")
-            for filename, info in list(self.reports_data.items())[:3]:
-                size_kb = info['file_size'] / 1024
-                print(f"  - {filename} ({size_kb:.1f} KB)")
-            if len(self.reports_data) > 3:
-                print(f"  ... and {len(self.reports_data) - 3} more reports")
-
-    def reload_reports(self):
-        """Reload system report files"""
-        print("🔄 Reloading system reports...")
-        self.reports_data = {}
-        if self.load_system_reports():
-            print("✅ Reports reloaded successfully!")
-        else:
-            print("❌ Failed to reload reports")
-
-    def start_interactive_session(self):
-        """Start interactive query session"""
-        if not self.initialize():
-            return
-
-        clear_screen()
-        print("📊 System Report Query Assistant Ready")
-        print(f"Loaded {len(self.reports_data)} system report files")
-        print("Ask me about your system reports using natural language...")
-        print("Type 'exit' to quit, 'help' for examples\n")
-
-        while True:
-            try:
-                question = input("🔍 Query: ").strip()
-                if not question:
-                    continue
-
-                question_lower = question.lower()
-                if question_lower in ['exit', 'quit', 'q']:
-                    print("👋 Goodbye!")
-                    break
-                elif question_lower == 'help':
-                    self.show_help()
-                    continue
-                elif question_lower == 'clear':
-                    clear_screen()
-                    continue
-                elif question_lower == 'status':
-                    self.show_status()
-                    continue
-                elif question_lower == 'reload':
-                    self.reload_reports()
-                    continue
-
-                result = self.process_question(question)
-                print(f"\n📝 Response:\n{result['response']}\n")
-
-                if result['success']:
-                    feedback = input("Was this answer helpful? (yes/no/correction): ").strip()
-                    if feedback.lower() not in ['yes', 'y', '']:
-                        self.save_feedback(question, result['response'], feedback)
-                        print("Thank you for the feedback!")
-
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                break
-            except Exception as e:
-                print(f"\n❌ Error: {e}")
-                logger.error(f"Session error: {e}", exc_info=True)
-
-def main():
-    """Main function"""
-    assistant = SystemReportQueryAssistant()
-
-    # Check for report files
-    report_files = glob.glob("system_report_*.json")
-    if not report_files:
-        print("❌ No system report files found!")
-        print("Please run the system report generator first to create report files.")
-        print("Looking for files matching: system_report_*.json")
-        return
-
-    print("=== System Report Query Assistant ===")
-    print(f"Found {len(report_files)} report files")
-
-    # Start interactive session
-    assistant.start_interactive_session()
-
+# Interactive mode
 if __name__ == "__main__":
-    main()
+    print("🚀 Smart System Compliance Assistant - Fixed Version")
+    print("=" * 50)
+    print("💡 Usage:")
+    print("  Simple: '10.188.24.100', '123', 'web', 'count'")
+    print("  Complex: 'Do all servers have same kernel version?'")
+    print("           'Which servers have firewall disabled?'")
+    print("\nType 'exit' to quit.\n")
 
+    while True:
+        try:
+            user_query = input("🔍 Query: ").strip()
 
+            if not user_query:
+                continue
 
+            if user_query.lower() in ['exit', 'quit', 'q']:
+                print("👋 Goodbye!")
+                break
 
-+---------------+--------------+------+-----+---------+----------------+
-| Field         | Type         | Null | Key | Default | Extra          |
-+---------------+--------------+------+-----+---------+----------------+
-| id            | bigint       | NO   | PRI | NULL    | auto_increment |
-| ip_address    | varchar(20)  | NO   |     | NULL    |                |
-| last_update   | varchar(50)  | NO   |     | NULL    |                |
-| upTime        | varchar(50)  | NO   |     | NULL    |                |
-| server_role   | varchar(50)  | NO   |     | NULL    |                |
-| ram           | int          | NO   |     | NULL    |                |
-| cpuCore       | int          | NO   |     | NULL    |                |
-| osVersion     | varchar(100) | NO   |     | NULL    |                |
-| kernelUdate   | varchar(100) | NO   |     | NULL    |                |
-| aceVersion    | varchar(20)  | NO   |     | NULL    |                |
-| mqVersion     | varchar(30)  | NO   |     | NULL    |                |
-| firewall      | varchar(50)  | NO   |     | NULL    |                |
-| rpmCount      | int          | NO   |     | NULL    |                |
-| dsAgent       | varchar(50)  | NO   |     | NULL    |                |
-| splunk        | varchar(50)  | NO   |     | NULL    |                |
-| ragent        | varchar(50)  | NO   |     | NULL    |                |
-| eisuserExpi   | varchar(30)  | NO   |     | NULL    |                |
-| rootExpi      | varchar(30)  | NO   |     | NULL    |                |
-| socvaExpi     | varchar(30)  | NO   |     | NULL    |                |
-| addmitamExpi  | varchar(50)  | NO   |     | NULL    |                |
-| systemTime    | varchar(50)  | NO   |     | NULL    |                |
-| fileSystem    | varchar(20)  | NO   |     | NULL    |                |
-| kernelVersion | varchar(100) | NO   |     | NULL    |                |
-| cpu           | int          | YES  |     | NULL    |                |
-| mem_cp_update | varchar(50)  | YES  |     | NULL    |                |
-| memory        | int          | YES  |     | NULL    |                |
-+---------------+--------------+------+-----+---------+----------------+
+            result = ComplianceMain(user_query)
+            print(f"\n{result}\n")
+            print("-" * 50)
+
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"\n❌ Error: {e}\n")
+            traceback.print_exc()
