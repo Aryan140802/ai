@@ -25,6 +25,96 @@ TEAM_DB_CONFIG = {
     "include_tables": ["UserMaster"],
 }
 
+# Enhanced field mappings based on actual table structure
+FIELD_MAPPINGS = {
+    # Employee ID variations
+    "employee_id": "Uid",
+    "emp_id": "Uid", 
+    "id": "Uid",
+    "employee id": "Uid",
+    "user id": "Uid",
+    "uid": "Uid",
+    
+    # Name variations
+    "name": "EmpName",
+    "employee_name": "EmpName",
+    "emp_name": "EmpName",
+    "employee name": "EmpName",
+    "full name": "EmpName",
+    
+    # Contact variations
+    "phone": "Contact",
+    "mobile": "Contact", 
+    "contact": "Contact",
+    "phone_number": "Contact",
+    "phone number": "Contact",
+    "mobile number": "Contact",
+    "cell phone": "Contact",
+    "telephone": "Contact",
+    
+    # Email variations
+    "email": "TcsEmail",
+    "tcs_email": "TcsEmail",
+    "tcs email": "TcsEmail",
+    "company email": "TcsEmail",
+    "work email": "TcsEmail",
+    "sbi_email": "SbiEmail",
+    "sbi email": "SbiEmail",
+    "secondary email": "SbiEmail",
+    
+    # Team and project
+    "team": "Team",
+    "team name": "Team",
+    "department": "Team",
+    "group": "Team",
+    "project": "Project",
+    "project name": "Project",
+    
+    # Position and level
+    "position": "Position",
+    "role": "Position",
+    "designation": "Position",
+    "job title": "Position",
+    "level": "Level",
+    "grade": "Level",
+    
+    # AD ID
+    "ad_id": "AdId",
+    "ad id": "AdId",
+    "active directory": "AdId",
+    "domain id": "AdId",
+    
+    # Dates
+    "tcs_doj": "TcsDoj",
+    "tcs doj": "TcsDoj",
+    "tcs joining": "TcsDoj",
+    "sbi_doj": "SbiDoj",
+    "sbi doj": "SbiDoj",
+    "sbi joining": "SbiDoj",
+    "onboarded": "OnboardedOn",
+    "onboarded on": "OnboardedOn",
+    "onboarding date": "OnboardedOn",
+    
+    # Company
+    "company": "BACompany",
+    "ba company": "BACompany",
+    "business area": "BACompany",
+    
+    # Cards and IDs
+    "id card": "IdCard",
+    "access card": "AccessCard",
+    "card": "AccessCard",
+}
+
+# Question patterns for better understanding
+QUESTION_PATTERNS = {
+    "count": [r"\bhow many\b", r"\bcount\b", r"\bnumber of\b", r"\btotal\b"],
+    "exists": [r"\bis there\b", r"\bare there\b", r"\bdo we have\b", r"\bdoes\b"],
+    "list": [r"\blist\b", r"\bshow\b", r"\bfind\b", r"\bget\b", r"\btell me\b"],
+    "specific": [r"\bwhat is\b", r"\bwho is\b", r"\bwhere is\b", r"\bwhich\b"],
+    "compare": [r"\bcompare\b", r"\bdifference\b", r"\bversus\b", r"\bvs\b"],
+}
+
 # Context-aware configuration
 CONTEXT_CONFIG = {
     "max_history_items": 10,
@@ -44,37 +134,6 @@ BLOCKED_PATTERNS = [
 
 # Sensitive fields that should never be included in queries or results
 SENSITIVE_FIELDS = ["Pwd", "SecQ", "SecA"]
-
-# Field mappings for better query understanding
-FIELD_MAPPINGS = {
-    "phone": "Contact",
-    "mobile": "Contact",
-    "contact": "Contact",
-    "phone_number": "Contact",
-    "employee_id": "Uid",
-    "emp_id": "Uid",
-    "id": "Uid",
-    "name": "EmpName",
-    "employee_name": "EmpName",
-    "emp_name": "EmpName",
-    "email": "TcsEmail",
-    "tcs_email": "TcsEmail",
-    "sbi_email": "SbiEmail",
-    "ad_id": "AdId",
-    "position": "Position",
-    "level": "Level",
-    "team": "Team",
-    "project": "Project"
-}
-
-# Context keywords that indicate when to use conversation history
-CONTEXT_KEYWORDS = [
-    "also", "too", "same", "similar", "like that", "those", "these",
-    "him", "her", "them", "their", "his", "hers", "that person",
-    "previous", "before", "earlier", "last", "recent", "again",
-    "more", "other", "another", "additional", "and", "plus",
-    "what about", "how about", "tell me about"
-]
 
 # Setup logging
 logging.basicConfig(
@@ -122,7 +181,7 @@ class QueryCache:
         logger.info(f"Cached result for query: {query[:50]}...")
 
 class QueryClassifier:
-    """Classifies queries as simple or complex"""
+    """Classifies queries as simple or complex with better accuracy"""
     
     @staticmethod
     def is_simple_query(query: str) -> Tuple[bool, str]:
@@ -132,14 +191,18 @@ class QueryClassifier:
         """
         query = query.strip()
         
-        # Check if it's just a 7-digit number (UID)
-        if re.match(r'^\d{7}$', query):
+        # Check if it's just a UID (4-8 digits)
+        if re.match(r'^\d{4,8}$', query):
             return True, "uid"
         
-        # Check if it's just a name (1-3 words, all alphabetic with possible spaces)
-        if re.match(r'^[a-zA-Z\s]{2,}$', query) and len(query.split()) <= 3:
+        # Check if it's just an email
+        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', query):
+            return True, "email"
+        
+        # Check if it's just a name (1-4 words, all alphabetic with possible spaces/dots)
+        if re.match(r'^[a-zA-Z.\s]{2,50}$', query) and len(query.split()) <= 4:
             # Additional check: no question words or complex patterns
-            question_words = ['what', 'who', 'where', 'when', 'why', 'how', 'is', 'are', 'can', 'do', 'does', 'tell', 'show', 'find', 'get', 'list']
+            question_words = ['what', 'who', 'where', 'when', 'why', 'how', 'is', 'are', 'can', 'do', 'does', 'tell', 'show', 'find', 'get', 'list', 'count', 'many']
             query_lower = query.lower()
             
             if not any(word in query_lower for word in question_words):
@@ -152,62 +215,84 @@ def is_dangerous(text: str) -> bool:
     """Check if text contains dangerous patterns"""
     return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
-def clean_and_fix_sql(raw_sql: str) -> str:
-    """Clean and fix SQL with proper handling for different column types"""
+def enhance_question_understanding(question: str) -> str:
+    """Enhanced question preprocessing with better field mapping"""
+    enhanced_question = question.lower().strip()
+    
+    # Apply field mappings with word boundary checks
+    for term, field in FIELD_MAPPINGS.items():
+        # Use word boundaries to avoid partial matches
+        pattern = r'\b' + re.escape(term.lower()) + r'\b'
+        enhanced_question = re.sub(pattern, field, enhanced_question)
+    
+    return enhanced_question
+
+def clean_and_fix_sql(raw_sql: str, original_question: str = "") -> str:
+    """Enhanced SQL cleaning with better pattern recognition"""
     logger.info(f"Raw SQL input: {repr(raw_sql)}")
     
     # Handle case where LLM returns descriptive text instead of SQL
-    if "sql query" in raw_sql.lower() and "uid" in raw_sql.lower():
-        id_match = re.search(r"uid[\s_]*(\d+)", raw_sql.lower())
-        if id_match:
-            uid = id_match.group(1)
-            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
-            logger.info(f"Extracted UID {uid}, generated SQL: {sql}")
-            return sql
+    if "select" not in raw_sql.lower() and any(word in raw_sql.lower() for word in ["uid", "employee", "name"]):
+        # Try to extract meaningful parts
+        uid_match = re.search(r'\b(\d{4,8})\b', raw_sql)
+        name_match = re.search(r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)*)\b', original_question)
+        email_match = re.search(r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b', original_question)
+        
+        if uid_match:
+            uid = uid_match.group(1)
+            return f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, BACompany FROM UserMaster WHERE Uid = {uid}"
+        elif email_match:
+            email = email_match.group(0)
+            return f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, BACompany FROM UserMaster WHERE TcsEmail LIKE '%{email}%' OR SbiEmail LIKE '%{email}%'"
+        elif name_match:
+            name = name_match.group(0)
+            return f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, BACompany FROM UserMaster WHERE EmpName LIKE '%{name}%'"
 
     # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
     if match:
         sql = match.group(1).strip()
     else:
+        # Look for SELECT statement
         sql = re.sub(r"```", "", raw_sql)
         select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
         if select_match:
             sql = select_match.group(1).strip()
         else:
-            sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
-            sql = sql.strip()
+            # Try to find any SELECT statement
+            select_start = sql.lower().find('select')
+            if select_start != -1:
+                sql = sql[select_start:].strip()
+            else:
+                return raw_sql
 
-    # If we still don't have a proper SQL query, try to construct one
-    if not sql.upper().strip().startswith('SELECT'):
-        uid_match = re.search(r"(\d+)", raw_sql)
-        if uid_match and ("employee" in raw_sql.lower() or "uid" in raw_sql.lower()):
-            uid = uid_match.group(1)
-            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
-        else:
-            return raw_sql
-
-    # Remove sensitive fields from query
+    # Remove sensitive fields from SELECT clause
     for field in SENSITIVE_FIELDS:
+        # Remove from SELECT list
         sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
         sql = re.sub(rf',\s*\b{field}\b', '', sql, flags=re.IGNORECASE)
+        # Remove from WHERE clause
+        sql = re.sub(rf'\bWHERE\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', 'WHERE ', sql, flags=re.IGNORECASE)
+        sql = re.sub(rf'\b(AND|OR)\s+\b{field}\b[^A-Z]*?(?=\s+(AND|OR|ORDER|GROUP|LIMIT|$))', '', sql, flags=re.IGNORECASE)
 
-    # Clean up SQL
-    sql = re.sub(r',\s*,', ',', sql)
-    sql = re.sub(r'SELECT\s*,', 'SELECT ', sql, flags=re.IGNORECASE)
-    sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE)
+    # Clean up SQL syntax
+    sql = re.sub(r',\s*,', ',', sql)  # Remove double commas
+    sql = re.sub(r'SELECT\s*,', 'SELECT ', sql, flags=re.IGNORECASE)  # Fix SELECT ,
+    sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)  # Fix , FROM
+    sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)  # Fix WHERE AND
+    sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)  # Fix WHERE OR
+    sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE)  # Remove empty WHERE
 
-    # Convert exact matches to LIKE for text fields
-    text_fields = ['EmpName', 'Contact', 'TcsEmail', 'SbiEmail', 'AdId', 'Position', 'Level', 'Team', 'Project']
+    # Improve text field matching - use LIKE instead of exact match
+    text_fields = ['EmpName', 'Contact', 'TcsEmail', 'SbiEmail', 'AdId', 'Position', 'Level', 'Team', 'Project', 'BACompany']
     for field in text_fields:
+        # Convert = to LIKE for text fields
         sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
+        sql = re.sub(f'({field})\\s*=\\s*"([^"]*)"', f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
 
     sql = sql.strip().rstrip(";")
 
-    # Add reasonable limit if none exists
+    # Add reasonable limit if none exists and it's not a COUNT query
     if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
         sql += " LIMIT 50"
 
@@ -219,9 +304,8 @@ def is_select_query(sql: str) -> bool:
     sql_clean = sql.strip().lower()
     starts_with_select = sql_clean.startswith('select')
     has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
-    is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
     
-    return starts_with_select and not has_dangerous_ops and not is_descriptive
+    return starts_with_select and not has_dangerous_ops
 
 class EnhancedTeamDetailsAssistant:
     def __init__(self):
@@ -238,7 +322,7 @@ class EnhancedTeamDetailsAssistant:
             self.llm = OllamaLLM(
                 model="myllm:latest", 
                 temperature=0.1,
-                request_timeout=30.0
+                request_timeout=45.0
             )
 
             # Set up database connection
@@ -254,7 +338,7 @@ class EnhancedTeamDetailsAssistant:
                     "pool_size": 5,
                     "max_overflow": 10,
                     "connect_args": {
-                        "connect_timeout": 10,
+                        "connect_timeout": 15,
                         "charset": "utf8mb4"
                     }
                 }
@@ -271,7 +355,7 @@ class EnhancedTeamDetailsAssistant:
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True,
-                connect_timeout=10
+                connect_timeout=15
             )
 
             self.db_handler = {
@@ -293,7 +377,11 @@ class EnhancedTeamDetailsAssistant:
         try:
             if query_type == "uid":
                 uid = query.strip()
-                sql = f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany FROM UserMaster WHERE Uid = {uid}"
+                sql = f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany, OnboardedOn FROM UserMaster WHERE Uid = {uid}"
+                
+            elif query_type == "email":
+                email = query.strip()
+                sql = f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany FROM UserMaster WHERE TcsEmail LIKE '%{email}%' OR SbiEmail LIKE '%{email}%' LIMIT 10"
                 
             elif query_type == "name":
                 name = query.strip()
@@ -321,29 +409,97 @@ class EnhancedTeamDetailsAssistant:
             return {"error": f"Database error: {str(e)}"}
 
     def execute_complex_query(self, query: str) -> Dict:
-        """Execute complex query using AI"""
+        """Execute complex query using AI with enhanced understanding"""
         try:
             # Check cache first
             cached_result = self.cache.get(query)
             if cached_result:
                 return cached_result
 
-            # Preprocess the question to map common terms
-            processed_question = query.lower()
-            for term, field in FIELD_MAPPINGS.items():
-                pattern = rf'\b{re.escape(term)}\b'
-                processed_question = re.sub(pattern, field, processed_question, flags=re.IGNORECASE)
+            # Enhanced question preprocessing
+            processed_question = enhance_question_understanding(query)
+            
+            # Determine question type for better prompting
+            question_type = "general"
+            for qtype, patterns in QUESTION_PATTERNS.items():
+                if any(re.search(pattern, query.lower()) for pattern in patterns):
+                    question_type = qtype
+                    break
 
-            # Add database context for AI
-            final_question = f"""
-{processed_question}
+            # Create comprehensive database schema context
+            schema_context = """
+            TABLE: UserMaster
+            COLUMNS:
+            - Uid (int): Employee ID (Primary Key)
+            - EmpName (varchar): Employee Name
+            - Project (varchar): Project Name
+            - Team (varchar): Team Name
+            - Contact (varchar): Phone Number (11 digits)
+            - TcsEmail (varchar): TCS Email Address
+            - SbiEmail (varchar): SBI Email Address  
+            - AdId (varchar): Active Directory ID
+            - Position (varchar): Job Position/Designation
+            - Level (varchar): Employee Level/Grade
+            - TcsDoj (varchar): TCS Date of Joining
+            - SbiDoj (varchar): SBI Date of Joining
+            - BACompany (varchar): Business Area Company
+            - OnboardedOn (date): Onboarding Date
+            - IdCard, AccessCard, PvcAppId: Various ID cards/applications
+            - Rid, Tid, Enable, Mandatory, SuperLevel: System fields
+            
+            NEVER include: Pwd, SecQ, SecA (sensitive fields)
+            """
 
-IMPORTANT INSTRUCTIONS:
-- Never include or reference these sensitive fields: Pwd, SecQ, SecA
-- Available fields: Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany, Rid, Mandatory, SuperLevel, Tid, Enable, Onboarding, OnboardedOn, PvcAppId, PvcStatus, PvcActionDate, Phone
-- Use partial matching (LIKE) for name searches
-- Generate efficient SQL queries with appropriate LIMIT clauses
-- For phone numbers, use the Contact field
+            # Enhanced prompt based on question type
+            if question_type == "count":
+                final_question = f"""
+{schema_context}
+
+Question: {processed_question}
+
+Generate a SQL query to count records. Use COUNT(*) or COUNT(column_name).
+For counting employees in teams/projects/positions, use appropriate WHERE clauses.
+Example: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%TeamName%'
+"""
+            elif question_type == "exists":
+                final_question = f"""
+{schema_context}
+
+Question: {processed_question}
+
+Generate a SQL query to check existence. You can use COUNT(*) > 0 or just SELECT with LIMIT.
+For yes/no questions, select relevant fields with appropriate WHERE conditions.
+Example: SELECT COUNT(*) FROM UserMaster WHERE Team LIKE '%TeamName%' AND Position LIKE '%Manager%'
+"""
+            elif question_type == "list":
+                final_question = f"""
+{schema_context}
+
+Question: {processed_question}
+
+Generate a SQL query to list/show records. Select relevant columns.
+Use LIKE for text matching and appropriate WHERE clauses.
+Example: SELECT Uid, EmpName, Team, Position FROM UserMaster WHERE Team LIKE '%TeamName%'
+"""
+            else:
+                final_question = f"""
+{schema_context}
+
+Question: {processed_question}
+
+Generate an appropriate SQL SELECT query based on the question.
+- Use LIKE '%value%' for text field searching
+- Use = for exact numeric matches  
+- Select only relevant columns
+- Add appropriate WHERE conditions
+- Use LIMIT for large result sets
+
+IMPORTANT:
+- Never include Pwd, SecQ, SecA fields
+- Use proper SQL syntax
+- For names, use EmpName LIKE '%name%'
+- For IDs, use Uid = number
+- For teams/projects, use LIKE '%value%'
 """
 
             # Generate SQL query using AI
@@ -352,10 +508,10 @@ IMPORTANT INSTRUCTIONS:
             generation_time = (datetime.now() - start_time).total_seconds()
             
             logger.info(f"SQL generation took {generation_time:.2f} seconds")
-            logger.info(f"Generated SQL: {raw_sql}")
+            logger.info(f"Generated raw SQL: {raw_sql}")
 
             # Clean and validate SQL
-            sql = clean_and_fix_sql(raw_sql)
+            sql = clean_and_fix_sql(raw_sql, query)
 
             if not is_select_query(sql):
                 return {"error": "Invalid query generated. Only SELECT queries are allowed."}
@@ -377,6 +533,7 @@ IMPORTANT INSTRUCTIONS:
 
                 query_result = {
                     "query_type": "complex",
+                    "question_type": question_type,
                     "original_query": query,
                     "sql_used": sql,
                     "result": result,
@@ -394,39 +551,99 @@ IMPORTANT INSTRUCTIONS:
             return {"error": f"Query processing error: {str(e)}"}
 
     def analyze_results_with_ai(self, query_result: Dict, original_question: str) -> str:
-        """Analyze query results using AI to provide natural language response"""
+        """Enhanced AI analysis with better context understanding"""
         try:
             if "error" in query_result:
                 return f"❌ {query_result['error']}"
 
             result = query_result["result"]
+            question_type = query_result.get("question_type", "general")
             
             if not result:
-                return "❌ No records found matching your criteria."
+                if question_type == "exists":
+                    return "❌ **Answer: NO** - No employees found matching your criteria."
+                elif question_type == "count":
+                    return "📊 **Answer: 0** - No employees found matching your criteria."
+                else:
+                    return "❌ No records found matching your criteria."
 
-            # Prepare context for AI analysis
-            analysis_prompt = f"""
+            # Enhanced analysis prompt based on question type
+            if question_type == "count":
+                if len(result) == 1 and 'COUNT(*)' in str(result[0]) or any('count' in str(k).lower() for k in result[0].keys()):
+                    count_value = list(result[0].values())[0]
+                    analysis_prompt = f"""
+Original Question: "{original_question}"
+SQL Query Used: {query_result["sql_used"]}
+Count Result: {count_value}
+
+Provide a clear, direct answer starting with the number. 
+Format: "📊 **Answer: {count_value}** - [brief explanation]"
+Be specific about what was counted.
+"""
+                else:
+                    analysis_prompt = f"""
+Original Question: "{original_question}"
+SQL Query Used: {query_result["sql_used"]}
+Results Count: {len(result)}
+
+The query returned {len(result)} records instead of a count. 
+Provide the count and brief summary of what was found.
+Format: "📊 **Answer: {len(result)}** - [brief explanation]"
+"""
+
+            elif question_type == "exists":
+                analysis_prompt = f"""
+Original Question: "{original_question}"
+SQL Query Used: {query_result["sql_used"]}
+Results Found: {len(result)} records
+
+This is a yes/no question. Provide a clear YES or NO answer.
+Format: "✅ **Answer: YES** - [brief explanation]" or "❌ **Answer: NO** - [brief explanation]"
+If records found, answer YES with details. If no records, answer NO.
+"""
+
+            else:
+                # Prepare result summary for analysis
+                result_summary = []
+                for i, record in enumerate(result[:5]):  # Show first 5 for analysis
+                    summary = {}
+                    if 'Uid' in record and record['Uid']: 
+                        summary['ID'] = record['Uid']
+                    if 'EmpName' in record and record['EmpName']: 
+                        summary['Name'] = record['EmpName']
+                    if 'Team' in record and record['Team']: 
+                        summary['Team'] = record['Team']
+                    if 'Project' in record and record['Project']: 
+                        summary['Project'] = record['Project']
+                    if 'Position' in record and record['Position']: 
+                        summary['Position'] = record['Position']
+                    if 'TcsEmail' in record and record['TcsEmail']: 
+                        summary['Email'] = record['TcsEmail']
+                    result_summary.append(summary)
+
+                analysis_prompt = f"""
 Original Question: "{original_question}"
 SQL Query Used: {query_result["sql_used"]}
 Number of Results: {len(result)}
 
-Query Results:
-{json.dumps(result, indent=2, default=str)}
+Sample Results (first 5):
+{json.dumps(result_summary, indent=2)}
 
-Please analyze these results and provide a natural language response that:
+Provide a natural language response that:
 1. Directly answers the user's question
-2. Provides specific details when appropriate
-3. Uses a conversational tone
-4. Gives clear yes/no answers when applicable
-5. Summarizes multiple results effectively
+2. Includes specific details when relevant
+3. Uses a conversational, helpful tone
+4. Summarizes multiple results effectively
+5. Highlights the most important information
 
-If the question asks for:
-- A specific person's details: Show their information clearly
-- A yes/no question: Give a clear yes/no answer with brief explanation
-- A count or list: Provide the count and relevant details
-- Comparison: Compare the data as requested
-
-Response should be concise but complete."""
+If showing employee details, format clearly with emojis:
+🆔 ID: [employee_id]
+👤 Name: [name]
+👥 Team: [team]
+📂 Project: [project]
+💼 Position: [position]
+📧 Email: [email]
+"""
 
             # Get AI analysis
             analysis_start = datetime.now()
@@ -439,25 +656,39 @@ Response should be concise but complete."""
 
         except Exception as e:
             logger.error(f"AI analysis error: {e}")
-            # Fallback to basic formatting
-            return self._format_results_basic(query_result, original_question)
+            # Enhanced fallback formatting
+            return self._format_results_enhanced(query_result, original_question)
 
-    def _format_results_basic(self, query_result: Dict, original_question: str) -> str:
-        """Basic result formatting as fallback"""
+    def _format_results_enhanced(self, query_result: Dict, original_question: str) -> str:
+        """Enhanced basic result formatting as fallback"""
         result = query_result["result"]
+        question_type = query_result.get("question_type", "general")
         
-        if len(result) == 1:
+        if question_type == "count":
+            if len(result) == 1 and any('count' in str(k).lower() for k in result[0].keys()):
+                count_value = list(result[0].values())[0]
+                return f"📊 **Answer: {count_value}** employees found matching your criteria."
+            else:
+                return f"📊 **Answer: {len(result)}** employees found matching your criteria."
+        
+        elif question_type == "exists":
+            if len(result) > 0:
+                return f"✅ **Answer: YES** - Found {len(result)} employee(s) matching your criteria."
+            else:
+                return f"❌ **Answer: NO** - No employees found matching your criteria."
+        
+        elif len(result) == 1:
             record = result[0]
-            response = "Found 1 employee:\n\n"
-            if 'Uid' in record:
-                response += f"🆔 ID: {record['Uid']}\n"
-            if 'EmpName' in record:
+            response = "🔍 **Found 1 employee:**\n\n"
+            if 'Uid' in record and record['Uid']:
+                response += f"🆔 Employee ID: {record['Uid']}\n"
+            if 'EmpName' in record and record['EmpName']:
                 response += f"👤 Name: {record['EmpName']}\n"
-            if 'Team' in record:
+            if 'Team' in record and record['Team']:
                 response += f"👥 Team: {record['Team']}\n"
-            if 'Project' in record:
+            if 'Project' in record and record['Project']:
                 response += f"📂 Project: {record['Project']}\n"
-            if 'Position' in record:
+            if 'Position' in record and record['Position']:
                 response += f"💼 Position: {record['Position']}\n"
             if 'Contact' in record:
                 response += f"📞 Contact: {record['Contact']}\n"
