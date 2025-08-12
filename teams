@@ -5,14 +5,17 @@ import pymysql
 import traceback
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-import hashlib
+import json
+import sqlparse
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaLLM
 from langchain.chains import create_sql_query_chain
-from langchain.prompts import PromptTemplate
+import hashlib
+from collections import defaultdict
 
-# Configuration
-CONFIG = {
+# --- TEAM DETAILS CONFIGURATION ---
+TEAM_DB_CONFIG = {
+    "name": "Team Details",
     "db_config": {
         "host": "localhost",
         "user": "root",
@@ -20,16 +23,58 @@ CONFIG = {
         "database": "EIS_n"
     },
     "include_tables": ["UserMaster"],
-    "cache_ttl_minutes": 5,
-    "cache_size": 100,
-    "max_results": 50,
-    "blocked_patterns": [
-        r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b",
-        r"\buserdel\b", r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b",
-        r"\bcurl\b", r":\s*(){:|:&};:", r"\bsudo\b", r"\bsu\b"
-    ],
-    "sensitive_fields": ["Pwd", "SecQ", "SecA"]
 }
+
+# Context-aware configuration
+CONTEXT_CONFIG = {
+    "max_history_items": 10,
+    "context_expiry_minutes": 30,
+    "similarity_threshold": 0.7,
+    "cache_size": 100,
+}
+
+# Blocked patterns for security
+BLOCKED_PATTERNS = [
+    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+    r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
+    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
+    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
+]
+
+# Sensitive fields that should never be included in queries or results
+SENSITIVE_FIELDS = ["Pwd", "SecQ", "SecA"]
+
+# Field mappings for better query understanding
+FIELD_MAPPINGS = {
+    "phone": "Contact",
+    "mobile": "Contact",
+    "contact": "Contact",
+    "phone_number": "Contact",
+    "employee_id": "Uid",
+    "emp_id": "Uid",
+    "id": "Uid",
+    "name": "EmpName",
+    "employee_name": "EmpName",
+    "emp_name": "EmpName",
+    "email": "TcsEmail",
+    "tcs_email": "TcsEmail",
+    "sbi_email": "SbiEmail",
+    "ad_id": "AdId",
+    "position": "Position",
+    "level": "Level",
+    "team": "Team",
+    "project": "Project"
+}
+
+# Context keywords that indicate when to use conversation history
+CONTEXT_KEYWORDS = [
+    "also", "too", "same", "similar", "like that", "those", "these",
+    "him", "her", "them", "their", "his", "hers", "that person",
+    "previous", "before", "earlier", "last", "recent", "again",
+    "more", "other", "another", "additional", "and", "plus",
+    "what about", "how about", "tell me about"
+]
 
 # Setup logging
 logging.basicConfig(
@@ -40,252 +85,468 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class QueryCache:
+    """Simple query cache to improve response time"""
     def __init__(self, max_size: int = 100):
         self.cache = {}
         self.access_times = {}
         self.max_size = max_size
     
     def _generate_key(self, query: str) -> str:
+        """Generate cache key from query"""
         return hashlib.md5(query.lower().strip().encode()).hexdigest()
     
-    def get(self, query: str) -> Optional[Tuple[str, List[Dict]]]:
+    def get(self, query: str) -> Optional[Dict]:
+        """Get cached result if exists and not expired"""
         key = self._generate_key(query)
         if key in self.cache:
-            if datetime.now() - self.access_times[key] < timedelta(minutes=CONFIG['cache_ttl_minutes']):
+            if datetime.now() - self.access_times[key] < timedelta(minutes=5):
                 self.access_times[key] = datetime.now()
+                logger.info(f"Cache hit for query: {query[:50]}...")
                 return self.cache[key]
-            del self.cache[key]
-            del self.access_times[key]
+            else:
+                del self.cache[key]
+                del self.access_times[key]
         return None
     
-    def set(self, query: str, result: Tuple[str, List[Dict]]):
+    def set(self, query: str, result: Dict):
+        """Cache query result"""
         key = self._generate_key(query)
+        
         if len(self.cache) >= self.max_size:
             oldest_key = min(self.access_times.keys(), key=lambda k: self.access_times[k])
             del self.cache[oldest_key]
             del self.access_times[oldest_key]
+        
         self.cache[key] = result
         self.access_times[key] = datetime.now()
+        logger.info(f"Cached result for query: {query[:50]}...")
+
+class QueryClassifier:
+    """Classifies queries as simple or complex"""
+    
+    @staticmethod
+    def is_simple_query(query: str) -> Tuple[bool, str]:
+        """
+        Determine if query is simple (just name/uid) or complex
+        Returns: (is_simple, query_type)
+        """
+        query = query.strip()
+        
+        # Check if it's just a 7-digit number (UID)
+        if re.match(r'^\d{7}$', query):
+            return True, "uid"
+        
+        # Check if it's just a name (1-3 words, all alphabetic with possible spaces)
+        if re.match(r'^[a-zA-Z\s]{2,}$', query) and len(query.split()) <= 3:
+            # Additional check: no question words or complex patterns
+            question_words = ['what', 'who', 'where', 'when', 'why', 'how', 'is', 'are', 'can', 'do', 'does', 'tell', 'show', 'find', 'get', 'list']
+            query_lower = query.lower()
+            
+            if not any(word in query_lower for word in question_words):
+                return True, "name"
+        
+        # Everything else is complex
+        return False, "complex"
 
 def is_dangerous(text: str) -> bool:
-    return any(re.search(pattern, text.lower()) for pattern in CONFIG['blocked_patterns'])
+    """Check if text contains dangerous patterns"""
+    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
 
-def clean_sql(raw_sql: str) -> str:
-    """Extract and clean SQL from LLM output"""
-    # Extract SQL from code block
+def clean_and_fix_sql(raw_sql: str) -> str:
+    """Clean and fix SQL with proper handling for different column types"""
+    logger.info(f"Raw SQL input: {repr(raw_sql)}")
+    
+    # Handle case where LLM returns descriptive text instead of SQL
+    if "sql query" in raw_sql.lower() and "uid" in raw_sql.lower():
+        id_match = re.search(r"uid[\s_]*(\d+)", raw_sql.lower())
+        if id_match:
+            uid = id_match.group(1)
+            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
+            logger.info(f"Extracted UID {uid}, generated SQL: {sql}")
+            return sql
+
+    # Extract SQL from code block if present
     match = re.search(r"```sql\s*(.*?)\s*```", raw_sql, re.DOTALL | re.IGNORECASE)
-    sql = match.group(1).strip() if match else raw_sql
-    
-    # Remove sensitive fields
-    for field in CONFIG['sensitive_fields']:
+    if match:
+        sql = match.group(1).strip()
+    else:
+        sql = re.sub(r"```", "", raw_sql)
+        select_match = re.search(r"(SELECT.*?)(?:\n|$|;)", sql, re.IGNORECASE | re.DOTALL)
+        if select_match:
+            sql = select_match.group(1).strip()
+        else:
+            sql = re.sub(r"^(.*?)(SELECT|INSERT|UPDATE|DELETE|WITH)", r"\2", sql, flags=re.IGNORECASE | re.DOTALL)
+            sql = sql.strip()
+
+    # If we still don't have a proper SQL query, try to construct one
+    if not sql.upper().strip().startswith('SELECT'):
+        uid_match = re.search(r"(\d+)", raw_sql)
+        if uid_match and ("employee" in raw_sql.lower() or "uid" in raw_sql.lower()):
+            uid = uid_match.group(1)
+            sql = f"SELECT * FROM UserMaster WHERE Uid = {uid}"
+        else:
+            return raw_sql
+
+    # Remove sensitive fields from query
+    for field in SENSITIVE_FIELDS:
         sql = re.sub(rf'\b{field}\b\s*,?\s*', '', sql, flags=re.IGNORECASE)
-    
-    # Add limit if missing
-    if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE):
-        sql = re.sub(r";?\s*$", f" LIMIT {CONFIG['max_results']}", sql)
-    
-    return sql.strip().rstrip(";")
+        sql = re.sub(rf',\s*\b{field}\b', '', sql, flags=re.IGNORECASE)
 
-def is_simple_query(query: str) -> bool:
-    """Check if query is simple (name or UID)"""
-    query = query.strip()
-    return (re.match(r'^\d{7}$', query) or  # 7-digit UID
-           re.match(r'^[A-Za-z\s]+$', query))  # Name only
+    # Clean up SQL
+    sql = re.sub(r',\s*,', ',', sql)
+    sql = re.sub(r'SELECT\s*,', 'SELECT ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s+AND', 'WHERE', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s+OR', 'WHERE', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s*$', '', sql, flags=re.IGNORECASE)
 
-def generate_simple_query(query: str) -> str:
-    """Generate SQL for simple queries"""
-    query = query.strip()
-    if re.match(r'^\d{7}$', query):  # UID query
-        return f"SELECT Uid, EmpName, Team, Position, TcsEmail, Contact FROM UserMaster WHERE Uid = {query} LIMIT 1"
-    return f"SELECT Uid, EmpName, Team, Position FROM UserMaster WHERE EmpName LIKE '%{query}%' LIMIT 10"
+    # Convert exact matches to LIKE for text fields
+    text_fields = ['EmpName', 'Contact', 'TcsEmail', 'SbiEmail', 'AdId', 'Position', 'Level', 'Team', 'Project']
+    for field in text_fields:
+        sql = re.sub(f"({field})\\s*=\\s*'([^']*)'", f"\\1 LIKE '%\\2%'", sql, flags=re.IGNORECASE)
+
+    sql = sql.strip().rstrip(";")
+
+    # Add reasonable limit if none exists
+    if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE) and not re.search(r"\bCOUNT\s*\(", sql, re.IGNORECASE):
+        sql += " LIMIT 50"
+
+    logger.info(f"Final cleaned SQL: {sql}")
+    return sql
+
+def is_select_query(sql: str) -> bool:
+    """Check if query is a safe SELECT query"""
+    sql_clean = sql.strip().lower()
+    starts_with_select = sql_clean.startswith('select')
+    has_dangerous_ops = any(kw in sql_clean for kw in ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'truncate'])
+    is_descriptive = any(phrase in sql_clean for phrase in ['this is', 'sql query', 'the query', 'here is'])
+    
+    return starts_with_select and not has_dangerous_ops and not is_descriptive
 
 class EnhancedTeamDetailsAssistant:
     def __init__(self):
         self.llm = None
-        self.db_chain = None
-        self.db_conn = None
-        self.cache = QueryCache(max_size=CONFIG['cache_size'])
+        self.db_handler = None
         self.initialized = False
+        self.cache = QueryCache(max_size=CONTEXT_CONFIG['cache_size'])
+        self.classifier = QueryClassifier()
 
-    def initialize(self) -> bool:
-        """Initialize database and LLM connections"""
+    def initialize(self):
+        """Initialize the Team Details Assistant with optimizations"""
         try:
             # Initialize LLM with optimized settings
             self.llm = OllamaLLM(
-                model="myllm:latest",
+                model="myllm:latest", 
                 temperature=0.1,
-                request_timeout=15.0
+                request_timeout=30.0
             )
 
-            # SQL generation chain
-            db = SQLDatabase.from_uri(
-                f"mysql+pymysql://{CONFIG['db_config']['user']}:{CONFIG['db_config']['password']}@"
-                f"{CONFIG['db_config']['host']}/{CONFIG['db_config']['database']}",
-                include_tables=CONFIG['include_tables'],
+            # Set up database connection
+            db_cfg = TEAM_DB_CONFIG['db_config']
+            uri = f"mysql+pymysql://{db_cfg['user']}:{db_cfg['password']}@{db_cfg['host']}/{db_cfg['database']}"
+
+            db_for_llm = SQLDatabase.from_uri(
+                uri,
+                include_tables=TEAM_DB_CONFIG.get("include_tables"),
                 engine_args={
                     "pool_pre_ping": True,
                     "pool_recycle": 1800,
                     "pool_size": 5,
                     "max_overflow": 10,
-                    "connect_args": {"connect_timeout": 5}
+                    "connect_args": {
+                        "connect_timeout": 10,
+                        "charset": "utf8mb4"
+                    }
                 }
             )
-            self.db_chain = create_sql_query_chain(self.llm, db)
 
-            # Direct DB connection for faster execution
-            self.db_conn = pymysql.connect(
-                **CONFIG['db_config'],
+            chain = create_sql_query_chain(self.llm, db_for_llm)
+
+            # Create direct connection for executing queries
+            db_conn = pymysql.connect(
+                host=db_cfg['host'],
+                user=db_cfg['user'],
+                password=db_cfg['password'],
+                database=db_cfg['database'],
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True,
-                connect_timeout=5
+                connect_timeout=10
             )
 
-            # Result explanation prompt
-            self.explanation_prompt = PromptTemplate(
-                input_variables=["question", "results"],
-                template="""
-                Given this database query results, provide a concise natural language answer:
-                
-                Question: {question}
-                Results: {results}
-                
-                Answer concisely in 1-2 sentences. If no results, say "No matching records found."
-                """
-            )
+            self.db_handler = {
+                'chain': chain,
+                'connection': db_conn,
+                'config': TEAM_DB_CONFIG
+            }
 
             self.initialized = True
+            logger.info("Enhanced Team Details Assistant initialized successfully")
             return True
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}\n{traceback.format_exc()}")
             return False
 
-    def execute_query(self, sql: str) -> Tuple[str, List[Dict]]:
-        """Execute SQL query quickly"""
+    def execute_simple_query(self, query: str, query_type: str) -> Dict:
+        """Execute simple query without AI (direct SQL)"""
         try:
-            with self.db_conn.cursor() as cursor:
-                cursor.execute(sql)
-                return "Success", cursor.fetchall()
-        except pymysql.Error as e:
-            logger.error(f"Database error: {e}\nSQL: {sql}")
-            return f"Database Error: {str(e)}", []
-
-    def explain_results(self, question: str, results: List[Dict]) -> str:
-        """Use AI to explain results in natural language"""
-        try:
-            # Format results for LLM
-            results_str = "\n".join(
-                f"{i}. {str(r)}" for i, r in enumerate(results[:5], 1)
-            ) if results else "No results"
+            if query_type == "uid":
+                uid = query.strip()
+                sql = f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany FROM UserMaster WHERE Uid = {uid}"
+                
+            elif query_type == "name":
+                name = query.strip()
+                sql = f"SELECT Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany FROM UserMaster WHERE EmpName LIKE '%{name}%' LIMIT 10"
             
-            # Get explanation from LLM
-            explanation = self.llm.invoke(
-                self.explanation_prompt.format(
-                    question=question,
-                    results=results_str
-                )
-            )
-            return explanation.strip()
-        except Exception as e:
-            logger.error(f"Explanation error: {e}")
-            return "Here are the results (could not generate explanation)"
+            else:
+                return {"error": "Unknown simple query type"}
 
-    def process_query(self, question: str) -> Tuple[str, str, List[Dict]]:
-        """Process query and return (response, sql, results)"""
+            logger.info(f"Executing simple query - SQL: {sql}")
+            
+            with self.db_handler['connection'].cursor() as cursor:
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                
+                return {
+                    "query_type": "simple",
+                    "original_query": query,
+                    "sql_used": sql,
+                    "result": result,
+                    "result_count": len(result)
+                }
+                
+        except Exception as e:
+            logger.error(f"Simple query execution error: {e}")
+            return {"error": f"Database error: {str(e)}"}
+
+    def execute_complex_query(self, query: str) -> Dict:
+        """Execute complex query using AI"""
+        try:
+            # Check cache first
+            cached_result = self.cache.get(query)
+            if cached_result:
+                return cached_result
+
+            # Preprocess the question to map common terms
+            processed_question = query.lower()
+            for term, field in FIELD_MAPPINGS.items():
+                pattern = rf'\b{re.escape(term)}\b'
+                processed_question = re.sub(pattern, field, processed_question, flags=re.IGNORECASE)
+
+            # Add database context for AI
+            final_question = f"""
+{processed_question}
+
+IMPORTANT INSTRUCTIONS:
+- Never include or reference these sensitive fields: Pwd, SecQ, SecA
+- Available fields: Uid, EmpName, Project, Team, Contact, TcsEmail, SbiEmail, AdId, Position, Level, TcsDoj, SbiDoj, BACompany, Rid, Mandatory, SuperLevel, Tid, Enable, Onboarding, OnboardedOn, PvcAppId, PvcStatus, PvcActionDate, Phone
+- Use partial matching (LIKE) for name searches
+- Generate efficient SQL queries with appropriate LIMIT clauses
+- For phone numbers, use the Contact field
+"""
+
+            # Generate SQL query using AI
+            start_time = datetime.now()
+            raw_sql = self.db_handler['chain'].invoke({"question": final_question})
+            generation_time = (datetime.now() - start_time).total_seconds()
+            
+            logger.info(f"SQL generation took {generation_time:.2f} seconds")
+            logger.info(f"Generated SQL: {raw_sql}")
+
+            # Clean and validate SQL
+            sql = clean_and_fix_sql(raw_sql)
+
+            if not is_select_query(sql):
+                return {"error": "Invalid query generated. Only SELECT queries are allowed."}
+
+            # Security check for sensitive fields
+            for sensitive_field in SENSITIVE_FIELDS:
+                if sensitive_field.lower() in sql.lower():
+                    logger.warning(f"Blocked query containing sensitive field: {sensitive_field}")
+                    return {"error": "Cannot access sensitive information. Please rephrase your query."}
+
+            # Execute query
+            with self.db_handler['connection'].cursor() as cursor:
+                execution_start = datetime.now()
+                cursor.execute(sql)
+                result = cursor.fetchall()
+                execution_time = (datetime.now() - execution_start).total_seconds()
+                
+                logger.info(f"Query execution took {execution_time:.2f} seconds, returned {len(result)} rows")
+
+                query_result = {
+                    "query_type": "complex",
+                    "original_query": query,
+                    "sql_used": sql,
+                    "result": result,
+                    "result_count": len(result),
+                    "generation_time": generation_time,
+                    "execution_time": execution_time
+                }
+
+                # Cache the result
+                self.cache.set(query, query_result)
+                return query_result
+
+        except Exception as e:
+            logger.error(f"Complex query execution error: {e}")
+            return {"error": f"Query processing error: {str(e)}"}
+
+    def analyze_results_with_ai(self, query_result: Dict, original_question: str) -> str:
+        """Analyze query results using AI to provide natural language response"""
+        try:
+            if "error" in query_result:
+                return f"❌ {query_result['error']}"
+
+            result = query_result["result"]
+            
+            if not result:
+                return "❌ No records found matching your criteria."
+
+            # Prepare context for AI analysis
+            analysis_prompt = f"""
+Original Question: "{original_question}"
+SQL Query Used: {query_result["sql_used"]}
+Number of Results: {len(result)}
+
+Query Results:
+{json.dumps(result, indent=2, default=str)}
+
+Please analyze these results and provide a natural language response that:
+1. Directly answers the user's question
+2. Provides specific details when appropriate
+3. Uses a conversational tone
+4. Gives clear yes/no answers when applicable
+5. Summarizes multiple results effectively
+
+If the question asks for:
+- A specific person's details: Show their information clearly
+- A yes/no question: Give a clear yes/no answer with brief explanation
+- A count or list: Provide the count and relevant details
+- Comparison: Compare the data as requested
+
+Response should be concise but complete."""
+
+            # Get AI analysis
+            analysis_start = datetime.now()
+            ai_response = self.llm.invoke(analysis_prompt)
+            analysis_time = (datetime.now() - analysis_start).total_seconds()
+            
+            logger.info(f"AI analysis took {analysis_time:.2f} seconds")
+            
+            return ai_response.strip()
+
+        except Exception as e:
+            logger.error(f"AI analysis error: {e}")
+            # Fallback to basic formatting
+            return self._format_results_basic(query_result, original_question)
+
+    def _format_results_basic(self, query_result: Dict, original_question: str) -> str:
+        """Basic result formatting as fallback"""
+        result = query_result["result"]
+        
+        if len(result) == 1:
+            record = result[0]
+            response = "Found 1 employee:\n\n"
+            if 'Uid' in record:
+                response += f"🆔 ID: {record['Uid']}\n"
+            if 'EmpName' in record:
+                response += f"👤 Name: {record['EmpName']}\n"
+            if 'Team' in record:
+                response += f"👥 Team: {record['Team']}\n"
+            if 'Project' in record:
+                response += f"📂 Project: {record['Project']}\n"
+            if 'Position' in record:
+                response += f"💼 Position: {record['Position']}\n"
+            if 'Contact' in record:
+                response += f"📞 Contact: {record['Contact']}\n"
+            return response.strip()
+        else:
+            return f"Found {len(result)} employees matching your criteria."
+
+    def process_question(self, question: str) -> str:
+        """Main processing function that handles both simple and complex queries"""
         if not self.initialized and not self.initialize():
-            return "❌ System initialization failed", "", []
+            return "❌ Team Details Assistant initialization failed."
 
         if is_dangerous(question):
-            return "❌ Blocked for security reasons", "", []
+            return "❌ Question blocked for security reasons."
 
-        # Check cache
-        cached = self.cache.get(question)
-        if cached:
-            return cached[0], cached[1], cached[2]
+        start_time = datetime.now()
 
-        # SIMPLE QUERY PROCESSING (fast path)
-        if is_simple_query(question):
-            sql = generate_simple_query(question)
-            status, results = self.execute_query(sql)
+        # Classify query
+        is_simple, query_type = self.classifier.is_simple_query(question)
+        
+        logger.info(f"Query classified as: {'Simple' if is_simple else 'Complex'} ({query_type})")
+
+        # Execute appropriate query type
+        if is_simple:
+            query_result = self.execute_simple_query(question, query_type)
+        else:
+            query_result = self.execute_complex_query(question)
+
+        # For complex queries, use AI to analyze results
+        if not is_simple and "error" not in query_result:
+            ai_response = self.analyze_results_with_ai(query_result, question)
             
-            if status != "Success":
-                return f"❌ {status}", sql, []
-            
-            response = self.explain_results(question, results)
-            self.cache.set(question, (response, sql, results))
-            return response, sql, results
+            # Create detailed response with explanation
+            response = f"🤖 **AI Analysis:**\n{ai_response}\n\n"
+            response += f"📊 **Query Details:**\n"
+            response += f"• Query Type: Complex (AI-generated)\n"
+            response += f"• SQL Used: `{query_result['sql_used']}`\n"
+            response += f"• Results Found: {query_result['result_count']}\n"
+            if 'generation_time' in query_result:
+                response += f"• Generation Time: {query_result['generation_time']:.2f}s\n"
+            if 'execution_time' in query_result:
+                response += f"• Execution Time: {query_result['execution_time']:.2f}s"
 
-        # COMPLEX QUERY PROCESSING (AI path)
-        try:
-            # Step 1: Generate SQL with AI
-            raw_sql = self.db_chain.invoke({"question": question})
-            sql = clean_sql(raw_sql)
-            
-            if not sql.strip().upper().startswith("SELECT"):
-                return "❌ Only SELECT queries are allowed", sql, []
+        else:
+            # For simple queries, provide direct results
+            if "error" in query_result:
+                response = f"❌ {query_result['error']}"
+            else:
+                response = self._format_results_basic(query_result, question)
+                response += f"\n\n📊 **Query Details:**\n"
+                response += f"• Query Type: Simple (Direct SQL)\n"
+                response += f"• SQL Used: `{query_result['sql_used']}`\n"
+                response += f"• Results Found: {query_result['result_count']}"
 
-            # Step 2: Execute query
-            status, results = self.execute_query(sql)
-            if status != "Success":
-                return f"❌ {status}", sql, []
-
-            # Step 3: Generate natural language response
-            response = self.explain_results(question, results)
-            self.cache.set(question, (response, sql, results))
-            return response, sql, results
-
-        except Exception as e:
-            logger.error(f"Processing error: {e}\n{traceback.format_exc()}")
-            return f"❌ Processing error: {str(e)}", "", []
-
-def format_response(question: str, response: str, sql: str, results: List[Dict]) -> str:
-    """Format final output with all details"""
-    output = []
-    output.append(f"🔹 {'SIMPLE' if is_simple_query(question) else 'AI'} QUERY")
-    output.append(f"Question: {question}")
-    output.append(f"SQL Used: {sql}")
-    
-    if not is_simple_query(question):
-        output.append("\n🤖 AI EXPLANATION")
-        output.append(response)
-    
-    output.append("\n📊 RESULTS")
-    
-    if not results:
-        output.append("No matching records found.")
-    else:
-        output.append(f"Found {len(results)} records:")
-        for i, record in enumerate(results[:5], 1):
-            output.append(f"\nRecord {i}:")
-            for key, value in record.items():
-                output.append(f"  {key}: {value}")
-        if len(results) > 5:
-            output.append(f"\n... and {len(results)-5} more records")
-    
-    return "\n".join(output)
+        total_time = (datetime.now() - start_time).total_seconds()
+        response += f"\n• Total Time: {total_time:.2f}s"
+        
+        logger.info(f"Total processing time: {total_time:.2f} seconds")
+        return response
 
 def Teammain(query: str) -> str:
-    """Main entry point - returns formatted response"""
+    """Enhanced main function with simple/complex query handling"""
+    logger.info("🚀 Starting Enhanced Team Details Assistant...")
+    
     assistant = EnhancedTeamDetailsAssistant()
-    response, sql, results = assistant.process_query(query)
-    return format_response(query, response, sql, results)
+    result = assistant.process_question(query)
+    
+    logger.info("✅ Query processing complete.")
+    return result
 
-# Example usage
+# Example usage and testing
 if __name__ == "__main__":
+    # Test different query types
     test_queries = [
-        "1234567",  # Simple UID
-        "John Doe",  # Simple name
-        "List employees in IIB team",  # Complex
-        "Who are the managers in Marketing department?",  # Complex
-        "Show me people with both Java and Python skills",  # Complex
+        "1234567",  # Simple UID query
+        "John Smith",  # Simple name query  
+        "What is the team of employee 1234567?",  # Complex query
+        "How many employees are in the Development team?",  # Complex query
+        "Are there any employees named John in the QA team?",  # Complex query
+        "Show me all managers in the project Alpha",  # Complex query
     ]
 
-    print("🚀 Team Details Assistant - Enhanced Version")
+    assistant = EnhancedTeamDetailsAssistant()
+    
     for query in test_queries:
         print(f"\n{'='*80}")
-        print(f"Processing: '{query}'")
-        print('-'*80)
-        result = Teammain(query)
-        print(result)
+        print(f"Query: {query}")
+        is_simple, query_type = assistant.classifier.is_simple_query(query)
+        print(f"Classification: {'Simple' if is_simple else 'Complex'} ({query_type})")
         print('='*80)
+        result = assistant.process_question(query)
+        print(result)
