@@ -49,7 +49,7 @@ TABLE_SCHEMAS = {
         },
         "description": "Contains layer definitions for the system architecture"
     },
-    
+
     "dbOpTest_serverdetails": {
         "columns": {
             "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
@@ -62,7 +62,7 @@ TABLE_SCHEMAS = {
         },
         "description": "Server details including IP addresses and layer assignments"
     },
-    
+
     "dbOpTest_brokerdetails": {
         "columns": {
             "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
@@ -78,7 +78,7 @@ TABLE_SCHEMAS = {
         },
         "description": "Broker configuration including ports, names, and status"
     },
-    
+
     "dbOpTest_egdetails": {
         "columns": {
             "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
@@ -93,7 +93,7 @@ TABLE_SCHEMAS = {
         },
         "description": "Execution Group details with names and status"
     },
-    
+
     "dbOpTest_servicedetails": {
         "columns": {
             "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
@@ -113,7 +113,7 @@ TABLE_SCHEMAS = {
         },
         "description": "Service configuration including performance metrics and status"
     },
-    
+
     "dbOpTest_serviceadditionaldetails": {
         "columns": {
             "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
@@ -126,7 +126,7 @@ TABLE_SCHEMAS = {
         },
         "description": "Additional service details including deployment and edit dates"
     },
-    
+
     "dbOpTest_schemas": {
         "columns": {
             "id": {"type": "bigint", "primary_key": True, "auto_increment": True},
@@ -156,22 +156,22 @@ BLOCKED_PATTERNS = [
 def analyze_table_relationships() -> Dict[str, Any]:
     """Analyze table relationships and create a comprehensive mapping"""
     relationships = {}
-    
+
     for table_name, schema in TABLE_SCHEMAS.items():
         relationships[table_name] = {
             "direct_relationships": schema.get("relationships", {}),
-            "searchable_fields": [col for col, info in schema["columns"].items() 
+            "searchable_fields": [col for col, info in schema["columns"].items()
                                 if info.get("searchable", False)],
-            "status_fields": [col for col, info in schema["columns"].items() 
+            "status_fields": [col for col, info in schema["columns"].items()
                             if info.get("status_field", False)],
-            "date_fields": [col for col, info in schema["columns"].items() 
+            "date_fields": [col for col, info in schema["columns"].items()
                           if info.get("date_field", False)],
-            "primary_key": [col for col, info in schema["columns"].items() 
+            "primary_key": [col for col, info in schema["columns"].items()
                           if info.get("primary_key", False)],
-            "foreign_keys": [col for col, info in schema["columns"].items() 
+            "foreign_keys": [col for col, info in schema["columns"].items()
                            if info.get("foreign_key")]
         }
-    
+
     return relationships
 
 def get_comprehensive_date_context():
@@ -205,7 +205,7 @@ def get_comprehensive_date_context():
 def analyze_question_intent(question: str) -> Dict[str, Any]:
     """Analyze user question to understand intent and suggest appropriate tables/joins"""
     question_lower = question.lower().strip()
-    
+
     intent_analysis = {
         "question_type": "unknown",
         "target_tables": [],
@@ -217,7 +217,7 @@ def analyze_question_intent(question: str) -> Dict[str, Any]:
         "suggested_joins": [],
         "filters": {}
     }
-    
+
     # Detect question type
     if any(word in question_lower for word in ["how many", "count", "total"]):
         intent_analysis["question_type"] = "count"
@@ -226,13 +226,13 @@ def analyze_question_intent(question: str) -> Dict[str, Any]:
         intent_analysis["question_type"] = "list"
     elif any(word in question_lower for word in ["status", "active", "inactive", "enabled", "disabled"]):
         intent_analysis["status_query"] = True
-    
+
     # Detect hierarchical queries
     hierarchy_keywords = ["layer", "server", "broker", "eg", "service"]
     mentioned_levels = [kw for kw in hierarchy_keywords if kw in question_lower]
     if len(mentioned_levels) > 1:
         intent_analysis["hierarchical_query"] = True
-    
+
     # Map keywords to tables
     table_keywords = {
         "layer": ["dbOpTest_layerdetails"],
@@ -247,14 +247,14 @@ def analyze_question_intent(question: str) -> Dict[str, Any]:
         "deployment": ["dbOpTest_serviceadditionaldetails"],
         "date": ["dbOpTest_serviceadditionaldetails"]
     }
-    
+
     for keyword, tables in table_keywords.items():
         if keyword in question_lower:
             intent_analysis["target_tables"].extend(tables)
-    
+
     # Remove duplicates
     intent_analysis["target_tables"] = list(set(intent_analysis["target_tables"]))
-    
+
     # Extract search terms (simple approach)
     # Look for quoted strings or standalone words that might be search terms
     search_patterns = [
@@ -263,21 +263,21 @@ def analyze_question_intent(question: str) -> Dict[str, Any]:
         r'\b(\d+\.\d+\.\d+\.\d+)\b',  # IP addresses
         r'\b(\w+_\w+)\b'  # Underscore separated words (likely identifiers)
     ]
-    
+
     for pattern in search_patterns:
         matches = re.findall(pattern, question_lower)
         intent_analysis["search_terms"].extend(matches)
-    
+
     # Suggest joins based on hierarchical relationships
     if intent_analysis["hierarchical_query"]:
         intent_analysis["suggested_joins"] = suggest_joins_for_tables(intent_analysis["target_tables"])
-    
+
     return intent_analysis
 
 def suggest_joins_for_tables(tables: List[str]) -> List[Dict[str, str]]:
     """Suggest appropriate joins based on table relationships"""
     joins = []
-    
+
     # Define common join patterns
     join_patterns = [
         {
@@ -306,21 +306,21 @@ def suggest_joins_for_tables(tables: List[str]) -> List[Dict[str, str]]:
             "condition": "dbOpTest_servicedetails.id = dbOpTest_serviceadditionaldetails.service_id"
         }
     ]
-    
+
     # Find relevant joins for the target tables
     for pattern in join_patterns:
         if pattern["from"] in tables and pattern["to"] in tables:
             joins.append(pattern)
-    
+
     return joins
 
 def preprocess_question(question: str) -> str:
     """Enhanced question preprocessing with table schema awareness"""
     question_lower = question.lower().strip()
-    
+
     # Analyze question intent
     intent = analyze_question_intent(question)
-    
+
     # Extract explicit month-year patterns
     month_year_patterns = [
         r'\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|october|oct|november|nov|december|dec)\s+(\d{4})\b',
@@ -387,17 +387,17 @@ def is_dangerous(text: str) -> bool:
 def create_table_documentation() -> str:
     """Create comprehensive table documentation for LLM context"""
     doc = "=== DATABASE SCHEMA DOCUMENTATION ===\n\n"
-    
+
     # Add hierarchical overview
     doc += "HIERARCHICAL STRUCTURE:\n"
     doc += "Layer -> Server -> Broker -> EG -> Service -> Service Additional Details\n\n"
-    
+
     # Add detailed table information
     for table_name, schema in TABLE_SCHEMAS.items():
         doc += f"TABLE: {table_name}\n"
         doc += f"Description: {schema['description']}\n"
         doc += "Columns:\n"
-        
+
         for col_name, col_info in schema["columns"].items():
             doc += f"  - {col_name}: {col_info['type']}"
             if col_info.get("primary_key"):
@@ -409,14 +409,14 @@ def create_table_documentation() -> str:
             if col_info.get("status_field"):
                 doc += " (STATUS: 1=Active, 0=Inactive)"
             doc += "\n"
-        
+
         if schema.get("relationships"):
             doc += "Relationships:\n"
             for rel_name, rel_info in schema["relationships"].items():
                 doc += f"  - {rel_name}: {rel_info['type']} with {rel_info['table']}\n"
-        
+
         doc += "\n"
-    
+
     return doc
 
 def clean_markdown_from_sql(raw_sql: str) -> str:
@@ -702,17 +702,17 @@ def sample_table_data(connection, table_name: str, limit: int = 5) -> List[Dict]
 def analyze_data_patterns(connection) -> Dict[str, Any]:
     """Analyze actual data patterns in tables to improve query generation"""
     patterns = {}
-    
+
     for table_name in OP_TEST_DB_CONFIG['include_tables']:
         print(f"DEBUG - Analyzing data patterns for {table_name}")
         sample_data = sample_table_data(connection, table_name, 10)
-        
+
         if sample_data:
             patterns[table_name] = {
                 'row_count': len(sample_data),
                 'sample_values': {}
             }
-            
+
             # Analyze column value patterns
             for col_name in sample_data[0].keys():
                 values = [row[col_name] for row in sample_data if row[col_name] is not None]
@@ -722,13 +722,13 @@ def analyze_data_patterns(connection) -> Dict[str, Any]:
                         'sample_values': list(set(values))[:5],  # First 5 unique values
                         'data_type': type(values[0]).__name__ if values else 'unknown'
                     }
-                    
+
                     # Special analysis for searchable fields
                     schema = TABLE_SCHEMAS.get(table_name, {})
                     col_info = schema.get('columns', {}).get(col_name, {})
                     if col_info.get('searchable'):
                         patterns[table_name]['sample_values'][col_name]['is_searchable'] = True
-    
+
     print(f"DEBUG - Data patterns analysis complete: {patterns}")
     return patterns
 
@@ -945,7 +945,7 @@ class OpTestDetailsAssistant:
         """Create enhanced context with table analysis and data patterns"""
         date_ctx = get_comprehensive_date_context()
         table_doc = create_table_documentation()
-        
+
         context = f"""
 === ENHANCED DATABASE CONTEXT ===
 
@@ -965,7 +965,7 @@ QUESTION ANALYSIS:
 
 DATA PATTERNS INSIGHTS:
 """
-        
+
         # Add data pattern insights for relevant tables
         if question_intent.get('target_tables') and self.data_patterns:
             for table in question_intent['target_tables']:
@@ -982,7 +982,7 @@ DATA PATTERNS INSIGHTS:
 
 IMPORTANT SQL GENERATION RULES:
 1. Use exact table names from the schema above
-2. For status fields: 1 = Active/Enabled, 0 = Inactive/Disabled  
+2. For status fields: 1 = Active/Enabled, 0 = Inactive/Disabled
 3. Use appropriate JOINs for hierarchical queries
 4. Use LIKE with % wildcards for text searches
 5. Handle date fields appropriately based on their string format
@@ -990,7 +990,7 @@ IMPORTANT SQL GENERATION RULES:
 
 ORIGINAL QUESTION: {question}
 """
-        
+
         return context
 
     def query_op_test_details(self, question: str) -> str:
@@ -1072,7 +1072,7 @@ ORIGINAL QUESTION: {question}
 
                 # Provide contextual error suggestions
                 error_msg += self._get_contextual_error_help(str(db_error), question_intent)
-                
+
                 logger.error(f"Database error: {db_error}\nSQL: {sql}")
                 return error_msg
 
@@ -1085,7 +1085,7 @@ ORIGINAL QUESTION: {question}
     def _get_contextual_error_help(self, error_msg: str, question_intent: Dict[str, Any]) -> str:
         """Provide contextual help based on error type and question intent"""
         help_msg = "\n💡 Contextual Help:\n"
-        
+
         if "syntax error" in error_msg.lower():
             help_msg += "- SQL syntax error detected\n"
             if question_intent.get('hierarchical_query'):
@@ -1097,29 +1097,29 @@ ORIGINAL QUESTION: {question}
         elif "table" in error_msg.lower():
             help_msg += "- Table name error detected\n"
             help_msg += f"- Available tables: {', '.join(OP_TEST_DB_CONFIG['include_tables'])}\n"
-        
+
         if question_intent.get('status_query'):
             help_msg += "- For status queries, use: 1 for Active, 0 for Inactive\n"
-            
+
         return help_msg
 
     def _generate_enhanced_suggestions(self, question: str, sql: str, analysis: Dict[str, Any], question_intent: Dict[str, Any]) -> str:
         """Generate enhanced suggestions based on question intent and data patterns"""
         suggestions = "💡 Enhanced Suggestions:\n"
-        
+
         # Basic suggestions
         suggestions += "- Try using broader search terms\n"
         suggestions += "- Check if the layer/server/service names are correct\n"
-        
+
         # Intent-based suggestions
         if question_intent.get('status_query'):
             suggestions += "- Status values: 1 = Active/Enabled, 0 = Inactive/Disabled\n"
-            
+
         if question_intent.get('hierarchical_query'):
             suggestions += "- Your query spans multiple hierarchy levels\n"
             if question_intent.get('suggested_joins'):
                 suggestions += f"- Consider relationships: {len(question_intent['suggested_joins'])} joins suggested\n"
-        
+
         # Data pattern suggestions
         if question_intent.get('target_tables') and self.data_patterns:
             suggestions += "\n📊 Based on actual data patterns:\n"
@@ -1134,12 +1134,12 @@ ORIGINAL QUESTION: {question}
         # Analysis-based suggestions
         if analysis and analysis.get('tables'):
             suggestions += f"\n🔍 Query involved tables: {', '.join(analysis['tables'])}\n"
-            
+
         if analysis and analysis.get('has_joins'):
             suggestions += "- Query uses table joins - ensure relationships exist\n"
 
         suggestions += f"\n📝 Generated SQL: {sql}"
-        
+
         return suggestions
 
     def process_question(self, question: str) -> str:
