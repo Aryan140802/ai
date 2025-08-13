@@ -42,33 +42,33 @@ def is_simple_identifier(query: str) -> Tuple[bool, Optional[str]]:
     """
     if not query or not isinstance(query, str):
         return False, None
-        
+
     query = query.strip()
-    
+
     # Remove common prefixes that don't add meaning
     clean_query = re.sub(r'^(show\s+|get\s+|find\s+)?', '', query, flags=re.IGNORECASE).strip()
-    
+
     # IP Address pattern (IPv4)
     ip_pattern = r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$'
     ip_match = re.match(ip_pattern, clean_query)
     if ip_match:
         ip = ip_match.group(1)
         return True, f"SELECT * FROM EISHome_compliance WHERE ip_address = '{ip}'"
-    
+
     # Server ID (just numbers)
     id_pattern = r'^(\d+)$'
     id_match = re.match(id_pattern, clean_query)
     if id_match:
         server_id = id_match.group(1)
         return True, f"SELECT * FROM EISHome_compliance WHERE id = {server_id}"
-    
+
     # Hostname pattern (letters, numbers, dots, hyphens - no spaces or natural language)
     hostname_pattern = r'^([a-zA-Z0-9\.\-_]+)$'
     hostname_match = re.match(hostname_pattern, clean_query)
     if hostname_match and '.' in clean_query and len(clean_query) > 3:
         hostname = hostname_match.group(1)
         return True, f"SELECT * FROM EISHome_compliance WHERE ip_address LIKE '%{hostname}%' OR server_role LIKE '%{hostname}%'"
-    
+
     # Single word server role queries (no articles, conjunctions, or question words)
     single_word_pattern = r'^([a-zA-Z]+)$'
     single_word_match = re.match(single_word_pattern, clean_query)
@@ -81,10 +81,10 @@ def is_simple_identifier(query: str) -> Tuple[bool, Optional[str]]:
             'all', 'some', 'any', 'many', 'much', 'few', 'little', 'more', 'most', 'less', 'least',
             'same', 'different', 'similar', 'like', 'unlike', 'than', 'as', 'if', 'unless', 'since', 'because'
         }
-        
+
         if word not in natural_language_words:
             return True, f"SELECT * FROM EISHome_compliance WHERE server_role LIKE '%{word}%'"
-    
+
     return False, None
 
 def is_natural_language_question(query: str) -> bool:
@@ -93,9 +93,9 @@ def is_natural_language_question(query: str) -> bool:
     """
     if not query or not isinstance(query, str):
         return False
-        
+
     query_lower = query.lower().strip()
-    
+
     # Question patterns
     question_starters = [
         r'^(what|where|when|who|why|how|which)\b',
@@ -103,39 +103,39 @@ def is_natural_language_question(query: str) -> bool:
         r'^(show\s+me|tell\s+me|list\s+all|give\s+me)\b',
         r'^(find\s+all|get\s+all|display\s+all)\b'
     ]
-    
+
     # Analytical phrases
     analytical_phrases = [
         'same', 'different', 'compare', 'analysis', 'summary', 'overview',
         'all have', 'do all', 'are all', 'which ones', 'how many',
         'percentage', 'compliance', 'status', 'breakdown', 'distribution'
     ]
-    
+
     # Complex query indicators
     complex_indicators = [
         'and', 'or', 'but', 'with', 'without', 'that have', 'that are',
         'more than', 'less than', 'greater than', 'higher than', 'lower than',
         'between', 'during', 'since', 'before', 'after'
     ]
-    
+
     # Check for question patterns
     for pattern in question_starters:
         if re.match(pattern, query_lower):
             return True
-    
+
     # Check for analytical phrases
     if any(phrase in query_lower for phrase in analytical_phrases):
         return True
-    
+
     # Check for complex indicators
     if any(indicator in query_lower for indicator in complex_indicators):
         return True
-    
+
     # If query has multiple words and contains common question/analysis words
     words = query_lower.split()
     if len(words) > 3:  # More than 3 words suggests natural language
         return True
-    
+
     return False
 
 def generate_fast_sql_patterns():
@@ -146,23 +146,23 @@ def generate_fast_sql_patterns():
         r'^count\s+servers?\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
         r'^total\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
         r'^total\s+servers?\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
-        
+
         # List all queries
         r'^all\s*$': "SELECT * FROM EISHome_compliance",
         r'^all\s+servers?\s*$': "SELECT * FROM EISHome_compliance",
         r'^servers?\s*$': "SELECT * FROM EISHome_compliance",
         r'^list\s*$': "SELECT * FROM EISHome_compliance",
-        
+
         # Status queries (single word + status)
         r'^firewall\s*$': "SELECT * FROM EISHome_compliance WHERE firewall IS NOT NULL",
         r'^dsagent\s*$': "SELECT * FROM EISHome_compliance WHERE dsAgent IS NOT NULL",
         r'^splunk\s*$': "SELECT * FROM EISHome_compliance WHERE splunk IS NOT NULL",
-        
+
         # OS queries
         r'^centos\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%CentOS%'",
         r'^linux\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%Linux%'",
         r'^windows\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%Windows%'",
-        
+
         # Role-based queries (single words)
         r'^web\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%web%'",
         r'^database\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%database%'",
@@ -176,14 +176,14 @@ def try_fast_query(query: str) -> Optional[str]:
     """Try to match simple queries to fast SQL patterns"""
     if not query or not isinstance(query, str):
         return None
-        
+
     query_clean = query.lower().strip()
     patterns = generate_fast_sql_patterns()
-    
+
     for pattern, sql in patterns.items():
         if re.match(pattern, query_clean):
             return sql
-    
+
     return None
 
 def get_sql_generation_prompt():
@@ -192,7 +192,7 @@ def get_sql_generation_prompt():
 
 TABLE SCHEMA:
 - id (BIGINT): Server ID
-- ip_address (VARCHAR): Server IP 
+- ip_address (VARCHAR): Server IP
 - server_role (VARCHAR): Role (web, database, app, etc)
 - osVersion (VARCHAR): OS version
 - kernelVersion (VARCHAR): Kernel version
@@ -209,7 +209,7 @@ TABLE SCHEMA:
 
 RULES:
 1. Generate ONLY valid SELECT statements
-2. Use exact table name: EISHome_compliance  
+2. Use exact table name: EISHome_compliance
 3. For text searches use LIKE with %wildcards%
 4. For numbers use =, >, <, >=, <= operators
 5. Return ONLY the SQL query, no explanations
@@ -226,35 +226,35 @@ def clean_and_fix_sql(raw_sql: str) -> str:
     # Ensure we have a string to work with
     if not raw_sql or not isinstance(raw_sql, str):
         return "ERROR: Invalid SQL input"
-        
+
     print(f"DEBUG - Raw SQL: {repr(raw_sql)}")
-    
+
     # Handle refusal responses
     if any(phrase in raw_sql.lower() for phrase in ["i cannot", "i can't", "sorry", "unable"]):
         return "ERROR: AI refused to generate SQL"
-    
+
     # Extract SQL from various formats
     sql = raw_sql.strip()
-    
+
     # Remove code block markers
     sql = re.sub(r'```(?:sql)?\s*(.*?)\s*```', r'\1', sql, flags=re.DOTALL | re.IGNORECASE)
-    
+
     # Remove common prefixes
     sql = re.sub(r'^(sql:|query:|here is|here\'s)?\s*:?\s*', '', sql, flags=re.IGNORECASE)
-    
+
     # Extract the SELECT statement
     select_match = re.search(r'(SELECT\s+.*?)(?:;|\n\s*$|$)', sql, re.IGNORECASE | re.DOTALL)
     if select_match:
         sql = select_match.group(1).strip()
-    
+
     # Ensure we still have a valid string after processing
     if not sql or not isinstance(sql, str):
         return "ERROR: SQL processing failed"
-    
+
     # Fix common issues
     sql = re.sub(r'\s+', ' ', sql)  # Normalize whitespace
     sql = re.sub(r'from\s+eishome_compliance', 'FROM EISHome_compliance', sql, flags=re.IGNORECASE)
-    
+
     # Fix text field searches - only if sql is a valid string
     text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion',
                    'firewall', 'dsAgent', 'splunk', 'kernelVersion']
@@ -269,11 +269,11 @@ def clean_and_fix_sql(raw_sql: str) -> str:
         except Exception as e:
             print(f"DEBUG - Error fixing field {field}: {e}")
             continue
-    
+
     # Ensure proper semicolon
     if not sql.endswith(';'):
         sql += ';'
-    
+
     print(f"DEBUG - Cleaned SQL: {sql}")
     return sql
 
@@ -281,16 +281,16 @@ def validate_sql(sql: str) -> Tuple[str, bool]:
     """Validate and ensure SQL is safe"""
     if not sql or not isinstance(sql, str):
         return sql, False
-        
+
     if not sql.upper().strip().startswith('SELECT'):
         return sql, False
-    
+
     # Check for dangerous operations
     dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
     sql_upper = sql.upper()
     if any(op in sql_upper for op in dangerous_ops):
         return sql, False
-    
+
     # Basic syntax validation
     try:
         parsed = sqlparse.parse(sql)
@@ -298,21 +298,21 @@ def validate_sql(sql: str) -> Tuple[str, bool]:
             return sql, False
     except:
         return sql, False
-    
+
     return sql, True
 
 def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
     """Use AI to analyze results and provide natural language insights"""
     if not results:
         return "No matching servers found for your query."
-    
+
     # Prepare summary data
     total_count = len(results)
-    
+
     # Get unique values for key analysis fields
     analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 'aceVersion', 'mqVersion']
     field_analysis = {}
-    
+
     for field in analysis_fields:
         if field in results[0]:
             values = [str(r.get(field, 'NULL')) for r in results if r.get(field) is not None]
@@ -322,7 +322,7 @@ def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
                 'values': unique_values[:10],  # Limit for prompt size
                 'total_records': len(values)
             }
-    
+
     # Create focused analysis prompt
     prompt = f"""Analyze this system compliance data to answer the user's question.
 
@@ -350,15 +350,15 @@ def format_simple_results(results: List[Dict], query: str) -> str:
     """Format results for simple queries (non-analytical)"""
     if not results:
         return f"No servers found matching '{query}'"
-    
+
     if len(results) == 1:
         # Single server - show detailed info
         server = results[0]
         output = f"🖥️ Server Details:\n"
-        
+
         key_fields = {
             'id': '🆔 ID',
-            'ip_address': '🌐 IP Address', 
+            'ip_address': '🌐 IP Address',
             'server_role': '🏷️ Role',
             'osVersion': '💿 OS Version',
             'kernelVersion': '🔧 Kernel',
@@ -370,7 +370,7 @@ def format_simple_results(results: List[Dict], query: str) -> str:
             'dsAgent': '🛡️ Deep Security',
             'splunk': '📊 Splunk'
         }
-        
+
         for field, label in key_fields.items():
             if field in server and server[field] is not None:
                 value = server[field]
@@ -379,48 +379,48 @@ def format_simple_results(results: List[Dict], query: str) -> str:
                 elif field in ['cpu', 'memory'] and isinstance(value, (int, float)):
                     value = f"{value}%"
                 output += f"{label}: {value}\n"
-        
+
         return output.strip()
-    
+
     elif len(results) <= 10:
         # Small result set - show table
         return format_table(results)
-    
+
     else:
         # Large result set - show summary + sample
         output = f"Found {len(results)} servers:\n\n"
-        
+
         # Add role summary if available
         if 'server_role' in results[0]:
             roles = {}
             for server in results:
                 role = server.get('server_role', 'Unknown')
                 roles[role] = roles.get(role, 0) + 1
-            
+
             output += "🏷️ Server Roles:\n"
             for role, count in sorted(roles.items()):
                 output += f"  • {role}: {count} servers\n"
             output += "\n"
-        
+
         # Show sample
         output += f"📋 Sample (first 5 servers):\n"
         output += format_table(results[:5])
         output += f"\n... and {len(results) - 5} more servers"
-        
+
         return output
 
 def format_table(results: List[Dict]) -> str:
     """Format results as a clean table"""
     if not results:
         return "No data to display"
-    
+
     # Select important columns
     priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 'firewall', 'dsAgent']
     available_cols = [col for col in priority_cols if col in results[0]]
-    
+
     if not available_cols:
         available_cols = list(results[0].keys())[:6]  # First 6 columns
-    
+
     # Calculate column widths
     col_widths = {}
     for col in available_cols:
@@ -429,16 +429,16 @@ def format_table(results: List[Dict]) -> str:
             value = str(row.get(col, 'NULL'))
             max_width = max(max_width, len(value))
         col_widths[col] = min(max_width, 25)  # Max 25 chars
-    
+
     # Build table
     output = []
-    
+
     # Header
     header = " | ".join(col.ljust(col_widths[col]) for col in available_cols)
     separator = "-+-".join("-" * col_widths[col] for col in available_cols)
     output.append(header)
     output.append(separator)
-    
+
     # Rows
     for row in results:
         formatted_row = " | ".join(
@@ -446,7 +446,7 @@ def format_table(results: List[Dict]) -> str:
             for col in available_cols
         )
         output.append(formatted_row)
-    
+
     return "\n".join(output)
 
 class SystemComplianceAssistant:
@@ -460,7 +460,7 @@ class SystemComplianceAssistant:
         """Initialize database connection and AI components"""
         try:
             db_config = COMPLIANCE_DB_CONFIG['db_config']
-            
+
             # Direct database connection
             self.db_connection = pymysql.connect(
                 host=db_config['host'],
@@ -471,18 +471,18 @@ class SystemComplianceAssistant:
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True
             )
-            
+
             # AI components (only initialize when needed)
-            self.llm = OllamaLLM(model="myllm:latest", temperature=0.0)
-            
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.2)
+
             # Database chain for complex queries
             uri = f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}/{db_config['database']}"
             db_for_chain = SQLDatabase.from_uri(uri, include_tables=["EISHome_compliance"])
             self.db_chain = create_sql_query_chain(self.llm, db_for_chain)
-            
+
             self.initialized = True
             return True
-            
+
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
             return False
@@ -502,17 +502,17 @@ class SystemComplianceAssistant:
         if not self.initialized:
             if not self.initialize():
                 return "❌ System not available"
-        
+
         start_time = datetime.now()
-        
+
         # Ensure query is valid
         if not query or not isinstance(query, str):
             return "❌ Invalid query provided"
-            
+
         query = query.strip()
-        
+
         print(f"🔍 Processing: '{query}'")
-        
+
         try:
             # Step 1: Check for simple identifiers (IP, ID, hostname)
             is_simple, direct_sql = is_simple_identifier(query)
@@ -522,7 +522,7 @@ class SystemComplianceAssistant:
                 elapsed = (datetime.now() - start_time).total_seconds()
                 print(f"✅ Completed in {elapsed:.2f}s")
                 return format_simple_results(results, query)
-            
+
             # Step 2: Check for simple pattern matches
             fast_sql = try_fast_query(query)
             if fast_sql and not is_natural_language_question(query):
@@ -531,42 +531,42 @@ class SystemComplianceAssistant:
                 elapsed = (datetime.now() - start_time).total_seconds()
                 print(f"✅ Completed in {elapsed:.2f}s")
                 return format_simple_results(results, query)
-            
+
             # Step 3: Natural language processing with AI
             if is_natural_language_question(query):
                 print("🧠 Using AI for natural language query")
-                
+
                 # Generate SQL with AI
                 prompt = get_sql_generation_prompt().format(question=query)
-                
+
                 try:
                     raw_sql = self.db_chain.invoke({"question": query})
                 except Exception as e:
                     print(f"❌ AI SQL generation failed: {e}")
                     return f"❌ Could not generate SQL for: '{query}'"
-                
+
                 # Clean and validate SQL
                 sql = clean_and_fix_sql(raw_sql)
-                
+
                 if sql.startswith("ERROR:"):
                     return sql
-                    
+
                 sql, is_valid = validate_sql(sql)
-                
+
                 if not is_valid:
                     return f"❌ Could not generate valid SQL for: '{query}'"
-                
+
                 print(f"🔧 Generated SQL: {sql}")
-                
+
                 # Execute query
                 results = self.execute_query(sql)
-                
+
                 # Analyze results with AI
                 analysis = analyze_results_with_ai(query, results, self.llm)
-                
+
                 elapsed = (datetime.now() - start_time).total_seconds()
                 print(f"✅ AI analysis completed in {elapsed:.2f}s")
-                
+
                 # Combine analysis with data
                 if results and len(results) <= 10:
                     return f"{analysis}\n\n📊 Supporting Data:\n{format_table(results)}"
@@ -574,25 +574,25 @@ class SystemComplianceAssistant:
                     return f"{analysis}\n\n📊 Sample Data:\n{format_table(results[:5])}\n... ({len(results)} total servers)"
                 else:
                     return analysis
-            
+
             # Step 4: Fallback - treat as simple query
             print("🔄 Fallback to simple processing")
             # Try to find any matches in server roles or IP addresses
             fallback_sql = f"""
-            SELECT * FROM EISHome_compliance 
-            WHERE ip_address LIKE '%{query}%' 
-               OR server_role LIKE '%{query}%' 
+            SELECT * FROM EISHome_compliance
+            WHERE ip_address LIKE '%{query}%'
+               OR server_role LIKE '%{query}%'
                OR CAST(id AS CHAR) LIKE '%{query}%'
             """
             results = self.execute_query(fallback_sql)
             elapsed = (datetime.now() - start_time).total_seconds()
             print(f"✅ Fallback completed in {elapsed:.2f}s")
-            
+
             if results:
                 return format_simple_results(results, query)
             else:
                 return f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question)."
-        
+
         except Exception as e:
             elapsed = (datetime.now() - start_time).total_seconds()
             error_msg = f"❌ Error after {elapsed:.2f}s: {str(e)}"
@@ -622,10 +622,10 @@ def ComplianceMain(query):
     """Main entry point"""
     if not query or not isinstance(query, str):
         return "❌ Invalid query provided"
-        
+
     if is_dangerous(query):
         return "❌ Query blocked for security reasons"
-    
+
     assistant = SystemComplianceAssistant()
     try:
         return assistant.process_query(query)
@@ -645,18 +645,18 @@ if __name__ == "__main__":
     while True:
         try:
             user_query = input("🔍 Query: ").strip()
-            
+
             if not user_query:
                 continue
-                
+
             if user_query.lower() in ['exit', 'quit', 'q']:
                 print("👋 Goodbye!")
                 break
-            
+
             result = ComplianceMain(user_query)
             print(f"\n{result}\n")
             print("-" * 50)
-            
+
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
             break
