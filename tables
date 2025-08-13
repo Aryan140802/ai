@@ -1,31 +1,142 @@
-+---------------+--------------+------+-----+---------+----------------+
-| Field         | Type         | Null | Key | Default | Extra          |
-+---------------+--------------+------+-----+---------+----------------+
-| id            | bigint       | NO   | PRI | NULL    | auto_increment |
-| ip_address    | varchar(20)  | NO   |     | NULL    |                | ip address of server 
-| last_update   | varchar(50)  | NO   |     | NULL    |                | last db update time
-| upTime        | varchar(50)  | NO   |     | NULL    |                | uptime of server
-| server_role   | varchar(50)  | NO   |     | NULL    |                | role of server PR Or DR
-| ram           | int          | NO   |     | NULL    |                | RAM of server
-| cpuCore       | int          | NO   |     | NULL    |                | number of cpu cores
-| osVersion     | varchar(100) | NO   |     | NULL    |                | os version
-| kernelUdate   | varchar(100) | NO   |     | NULL    |                | 
-| aceVersion    | varchar(20)  | NO   |     | NULL    |                | ibm ace version
-| mqVersion     | varchar(30)  | NO   |     | NULL    |                | ibm mq version
-| firewall      | varchar(50)  | NO   |     | NULL    |                | firewall active or inactive
-| rpmCount      | int          | NO   |     | NULL    |                | 
-| dsAgent       | varchar(50)  | NO   |     | NULL    |                |
-| splunk        | varchar(50)  | NO   |     | NULL    |                |
-| ragent        | varchar(50)  | NO   |     | NULL    |                |  
-| eisuserExpi   | varchar(30)  | NO   |     | NULL    |                | eis user expiry date
-| rootExpi      | varchar(30)  | NO   |     | NULL    |                | root user expiry date
-| socvaExpi     | varchar(30)  | NO   |     | NULL    |                |
-| addmitamExpi  | varchar(50)  | NO   |     | NULL    |                |
-| systemTime    | varchar(50)  | NO   |     | NULL    |                |
-| fileSystem    | varchar(20)  | NO   |     | NULL    |                |
-| kernelVersion | varchar(100) | NO   |     | NULL    |                | kernal version
-| cpu           | int          | YES  |     | NULL    |                |
-| mem_cp_update | varchar(50)  | YES  |     | NULL    |                |
-| memory        | int          | YES  |     | NULL    |                |
-+---------------+--------------+------+-----+---------+----------------+
- EISHome_compliance;
+ dbOpTest_brokerdetails  ,   refer this when user asks about brokerdetails
+
++--------------+--------------+------+-----+---------+----------------+
+| Field        | Type         | Null | Key | Default | Extra          |
++--------------+--------------+------+-----+---------+----------------+
+| id           | bigint       | NO   | PRI | NULL    | auto_increment |
+| udpPort      | int          | NO   |     | NULL    |                |
+| brokerName   | varchar(100) | NO   |     | NULL    |                |
+| brokerStatus | tinyint(1)   | NO   |     | NULL    |                |
+| server_id    | bigint       | NO   | MUL | NULL    |                |
++--------------+--------------+------+-----+---------+----------------+
+dbOpTest_brokerdetails limit 5;
++---------+---------+------------+--------------+-----------+
+| id      | udpPort | brokerName | brokerStatus | server_id |
++---------+---------+------------+--------------+-----------+
+| 4764759 |    4417 | AADHAR_EXP |            1 |     23897 |
+| 4764760 |    4417 | AADHAR_EXP |            1 |     23897 |
+| 4764761 |    4417 | AADHAR_EXP |            1 |     23897 |
+| 4764762 |    4417 | AADHAR_EXP |            1 |     23897 |
+| 4764763 |    4417 | AADHAR_EXP |            1 |     23897 |
++---------+---------+------------+--------------+-----------+
+
+
+ dbOpTest_egdetails refer this when user asks about edgedetails
++-----------+--------------+------+-----+---------+----------------+
+| Field     | Type         | Null | Key | Default | Extra          |
++-----------+--------------+------+-----+---------+----------------+
+| id        | bigint       | NO   | PRI | NULL    | auto_increment |
+| egName    | varchar(100) | NO   |     | NULL    |                |
+| egStatus  | tinyint(1)   | NO   |     | NULL    |                |
+| broker_id | bigint       | NO   | MUL | NULL    |                |
++-----------+--------------+------+-----+---------+----------------+
+
+dbOpTest_egdetails limit 5;
++---------+---------------+----------+-----------+
+| id      | egName        | egStatus | broker_id |
++---------+---------------+----------+-----------+
+| 4811882 | AADHAR_EXP_01 |        1 |   4764759 |
+| 4811883 | AADHAR_EXP_01 |        1 |   4764760 |
+| 4811884 | AADHAR_EXP_01 |        1 |   4764761 |
+| 4811885 | AADHAR_EXP_01 |        1 |   4764762 |
+| 4811886 | AADHAR_EXP_01 |        1 |   4764763 |
++---------+---------------+----------+-----------+
+
+
+
+
+dbOpTest_layerdetails;  refer this when user asks about layer details
++------------+--------------+------+-----+---------+----------------+
+| Field      | Type         | Null | Key | Default | Extra          |
++------------+--------------+------+-----+---------+----------------+
+| id         | bigint       | NO   | PRI | NULL    | auto_increment |
+| layer_name | varchar(100) | NO   |     | NULL    |                |
++------------+--------------+------+-----+---------+----------------+
+
++------+--------------+
+| id   | layer_name   |
++------+--------------+
+| 2720 | AADHAR_EXP   |
+| 2721 | AADHAR_SYS   |
+| 2722 | ACCOUNT_EXP  |
+| 2723 | ACCOUNT_SYS  |
+| 2724 | CUSTOMER_EXP |
++------+--------------+
+
+
+
+dbOpTest_schemas;     
++-------------------+--------------+------+-----+---------+----------------+
+| Field             | Type         | Null | Key | Default | Extra          |
++-------------------+--------------+------+-----+---------+----------------+
+| id                | bigint       | NO   | PRI | NULL    | auto_increment |
+| layer_name        | varchar(100) | NO   |     | NULL    |                |
+| brokerDetails_id  | bigint       | NO   | MUL | NULL    |                |
+| egDetails_id      | bigint       | NO   | MUL | NULL    |                |
+| serviceDetails_id | bigint       | NO   | MUL | NULL    |                |
++-------------------+--------------+------+-----+---------+----------------+
+
+dbOpTest_serverdetails  refer this when user asks about server details
+    -> ;
++----------+-------------+------+-----+---------+----------------+
+| Field    | Type        | Null | Key | Default | Extra          |
++----------+-------------+------+-----+---------+----------------+
+| id       | bigint      | NO   | PRI | NULL    | auto_increment |
+| serverIP | varchar(20) | NO   |     | NULL    |                |
+| layer_id | bigint      | NO   | MUL | NULL    |                |
++----------+-------------+------+-----+---------+----------------+
++-------+----------+----------+
+| id    | serverIP | layer_id |
++-------+----------+----------+
+| 23897 | 25_190   |     2720 |
+| 23898 | 25_191   |     2720 |
+| 23899 | 25_192   |     2720 |
+| 23900 | 24_190   |     2720 |
+| 23901 | 24_191   |     2720 |
++-------+----------+----------+
+
+
+dbOpTest_serviceadditionaldetails;  refer this when user asks about aditional details about service
++-----------------+--------------+------+-----+---------+----------------+
+| Field           | Type         | Null | Key | Default | Extra          |
++-----------------+--------------+------+-----+---------+----------------+
+| id              | bigint       | NO   | PRI | NULL    | auto_increment |
+| serviceDepDate  | varchar(100) | NO   |     | NULL    |                |
+| serviceLastEdit | varchar(100) | NO   |     | NULL    |                |
+| service_id      | bigint       | NO   | MUL | NULL    |                |
++-----------------+--------------+------+-----+---------+----------------+
+
++---------+-------------------------+-------------------------------------+------------+
+| id      | serviceDepDate          | serviceLastEdit                     | service_id |
++---------+-------------------------+-------------------------------------+------------+
+| 4773112 | 2022-08-04_11:59:33     | Last edited: '2024-01-13 02:44:28'  |    4762052 |
+| 4773113 | 2022-01-26_06:47:59.619 | Last edited: '2024-01-13 02:44:28'  |    4762053 |
+| 4773114 | 2022-08-24_18:47:09     | Last edited: '2024-01-13 02:44:28'  |    4762054 |
+| 4773115 | 2022-08-24_18:47:11     | Last edited: '2024-01-13 02:44:28'  |    4762055 |
+| 4773116 | 2022-08-24_18:47:12     | Last edited: '2024-01-13 02:44:30'  |    4762056 |
++---------+-------------------------+-------------------------------------+------------+
+
+
+dbOpTest_servicedetails;  refer this when user asks about service details
++---------------------+--------------+------+-----+---------+----------------+
+| Field               | Type         | Null | Key | Default | Extra          |
++---------------------+--------------+------+-----+---------+----------------+
+| id                  | bigint       | NO   | PRI | NULL    | auto_increment |
+| serviceName         | varchar(100) | NO   |     | NULL    |                |
+| serviceStatus       | tinyint(1)   | NO   |     | NULL    |                |
+| additionalInstances | varchar(100) | NO   |     | NULL    |                |
+| threadCapicity      | varchar(100) | NO   |     | NULL    |                |
+| threadInUse         | varchar(100) | NO   |     | NULL    |                |
+| timeout             | varchar(500) | NO   |     | NULL    |                |
+| eg_id               | bigint       | NO   | MUL | NULL    |                |
+| genericName         | varchar(100) | NO   |     | NULL    |                |
++---------------------+--------------+------+-----+---------+----------------+
++---------+--------------------------------------+---------------+---------------------+----------------+-------------+----------------------------------------------------------+---------+------------------------------------------+
+| id      | serviceName                          | serviceStatus | additionalInstances | threadCapicity | threadInUse | timeout                                                  | eg_id   | genericName                              |
++---------+--------------------------------------+---------------+---------------------+----------------+-------------+----------------------------------------------------------+---------+------------------------------------------+
+| 4762052 | Dynatrace_Logger                     |             1 | 120                 | 120            | 1           | No_Data                                                  | 4811882 | Dynatrace_Logger                         |
+| 4762053 | panEnquiryPassThrough_expDs          |             1 | 3                   | 3              | 1           | 'HTTPTimeOut':_10                                        | 4811883 | gen.panEnquiryPassThrough_expDs          |
+| 4762054 | panValidationEnquiryDotNet_th_expDS  |             1 | 20                  | 20             | 1           | 'HTTPTimeOut':_50,_'NSDL_SERVICE.timeoutForServer':_'10' | 4811884 | gen.panValidationEnquiryDotNet_th_expDS  |
+| 4762055 | panValidationEnquiryDotNet_expDS     |             1 | 20                  | 20             | 1           | 'HTTPTimeOut':_50,_'NSDL_SERVICE.timeoutForServer':_'10' | 4811885 | gen.panValidationEnquiryDotNet_expDS     |
+| 4762056 | panValidationEnquiryDotNet_bth_expDS |             1 | 20                  | 20             | 1           | 'HTTPTimeOut':_50,_'NSDL_SERVICE.timeoutForServer':_'10' | 4811886 | gen.panValidationEnquiryDotNet_bth_expDS |
++---------+--------------------------------------+---------------+---------------------+----------------+-------------+----------------------------------------------------------+---------+------------------------------------------+
