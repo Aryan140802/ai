@@ -3,6 +3,7 @@ import re
 import logging
 import pymysql
 import traceback
+import time
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
 import json
@@ -14,7 +15,8 @@ from langchain.chains import create_sql_query_chain
 
 today_date = date.today()
 
-# --- SYSTEM COMPLIANCE CONFIGURATION ---
+# --- SYSTEM CONFIGURATION ---
+LOG_FILE_PATH = "compliance_assistant_logs.txt"
 COMPLIANCE_DB_CONFIG = {
     "name": "System Compliance",
     "db_config": {
@@ -34,6 +36,43 @@ BLOCKED_PATTERNS = [
     r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
     r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
 ]
+
+def log_interaction(question: str, answer: str, sql_query: str = None, time_taken: float = None):
+    """
+    Log interactions to a formatted text file with timestamp
+    Format includes:
+    - Timestamp
+    - Question
+    - Answer (truncated if too long)
+    - SQL query used (if applicable)
+    - Time taken
+    """
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Prepare log entry
+        log_entry = f"\n{'=' * 80}\n"
+        log_entry += f"📅 {timestamp}\n\n"
+        log_entry += f"❓ QUESTION: {question}\n\n"
+        
+        if sql_query:
+            log_entry += f"🔧 SQL USED: {sql_query}\n\n"
+        
+        if time_taken is not None:
+            log_entry += f"⏱️ TIME TAKEN: {time_taken:.2f} seconds\n\n"
+        
+        # Truncate very long answers
+        max_answer_length = 2000
+        formatted_answer = answer if len(answer) <= max_answer_length else f"{answer[:max_answer_length]}... [TRUNCATED]"
+        log_entry += f"💡 ANSWER:\n{formatted_answer}\n"
+        log_entry += f"{'=' * 80}\n"
+        
+        # Write to log file
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(log_entry)
+            
+    except Exception as e:
+        print(f"⚠️ Failed to log interaction: {e}")
 
 def is_simple_identifier(query: str) -> Tuple[bool, Optional[str]]:
     """
@@ -573,15 +612,9 @@ class SystemComplianceAssistant:
             if not self.initialize():
                 return "❌ System not available"
 
-        start_time = datetime.now()
-
-        # Ensure query is valid
-        if not query or not isinstance(query, str):
-            return "❌ Invalid query provided"
-
-        query = query.strip()
-
-        print(f"🔍 Processing: '{query}'")
+        start_time = time.time()
+        sql_used = None
+        response = ""
 
         try:
             # Step 1: Check for simple identifiers (IP, ID, hostname)
@@ -589,18 +622,20 @@ class SystemComplianceAssistant:
             if is_simple:
                 print(f"⚡ Fast path - Direct SQL: {direct_sql}")
                 results = self.execute_query(direct_sql)
-                elapsed = (datetime.now() - start_time).total_seconds()
-                print(f"✅ Completed in {elapsed:.2f}s")
-                return format_simple_results(results, query)
+                elapsed = time.time() - start_time
+                response = format_simple_results(results, query)
+                sql_used = direct_sql
+                return response
 
             # Step 2: Check for simple pattern matches
             fast_sql = try_fast_query(query)
             if fast_sql and not is_natural_language_question(query):
                 print(f"⚡ Fast pattern match: {fast_sql}")
                 results = self.execute_query(fast_sql)
-                elapsed = (datetime.now() - start_time).total_seconds()
-                print(f"✅ Completed in {elapsed:.2f}s")
-                return format_simple_results(results, query)
+                elapsed = time.time() - start_time
+                response = format_simple_results(results, query)
+                sql_used = fast_sql
+                return response
 
             # Step 3: Natural language processing with AI
             if is_natural_language_question(query):
@@ -613,20 +648,24 @@ class SystemComplianceAssistant:
                     raw_sql = self.db_chain.invoke({"question": query})
                 except Exception as e:
                     print(f"❌ AI SQL generation failed: {e}")
-                    return f"❌ Could not generate SQL for: '{query}'"
+                    response = f"❌ Could not generate SQL for: '{query}'"
+                    return response
 
                 # Clean and validate SQL
                 sql = clean_and_fix_sql(raw_sql)
 
                 if sql.startswith("ERROR:"):
-                    return sql
+                    response = sql
+                    return response
 
                 sql, is_valid = validate_sql(sql)
 
                 if not is_valid:
-                    return f"❌ Could not generate valid SQL for: '{query}'"
+                    response = f"❌ Could not generate valid SQL for: '{query}'"
+                    return response
 
                 print(f"🔧 Generated SQL: {sql}")
+                sql_used = sql
 
                 # Execute query
                 results = self.execute_query(sql)
@@ -634,16 +673,18 @@ class SystemComplianceAssistant:
                 # Analyze results with AI
                 analysis = analyze_results_with_ai(query, results, self.llm)
 
-                elapsed = (datetime.now() - start_time).total_seconds()
+                elapsed = time.time() - start_time
                 print(f"✅ AI analysis completed in {elapsed:.2f}s")
 
                 # Combine analysis with data
                 if results and len(results) <= 10:
-                    return f"{analysis}\n\n📊 Supporting Data:\n{format_table(results)}"
+                    response = f"{analysis}\n\n📊 Supporting Data:\n{format_table(results)}"
                 elif results and len(results) > 10:
-                    return f"{analysis}\n\n📊 Sample Data:\n{format_table(results[:5])}\n... ({len(results)} total servers)"
+                    response = f"{analysis}\n\n📊 Sample Data:\n{format_table(results[:5])}\n... ({len(results)} total servers)"
                 else:
-                    return analysis
+                    response = analysis
+                
+                return response
 
             # Step 4: Fallback - treat as simple query
             print("🔄 Fallback to simple processing")
@@ -656,20 +697,32 @@ class SystemComplianceAssistant:
                OR osVersion LIKE '%{query}%'
             """
             results = self.execute_query(fallback_sql)
-            elapsed = (datetime.now() - start_time).total_seconds()
+            elapsed = time.time() - start_time
             print(f"✅ Fallback completed in {elapsed:.2f}s")
+            sql_used = fallback_sql
 
             if results:
-                return format_simple_results(results, query)
+                response = format_simple_results(results, query)
             else:
-                return f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question like 'What is CPU usage of server X?')."
+                response = f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question like 'What is CPU usage of server X?')."
+            
+            return response
 
         except Exception as e:
-            elapsed = (datetime.now() - start_time).total_seconds()
+            elapsed = time.time() - start_time
             error_msg = f"❌ Error after {elapsed:.2f}s: {str(e)}"
+            response = error_msg
             print(error_msg)
-            traceback.print_exc()  # Add full traceback for debugging
-            return error_msg
+            traceback.print_exc()
+            return response
+        finally:
+            # Log the interaction
+            log_interaction(
+                question=query,
+                answer=response,
+                sql_query=sql_used,
+                time_taken=(time.time() - start_time)
+            )
 
     def cleanup(self):
         """Clean up resources"""
@@ -691,15 +744,21 @@ def is_dangerous(text: str) -> bool:
 
 def ComplianceMain(query):
     """Main entry point"""
+    start_time = time.time()
     if not query or not isinstance(query, str):
-        return "❌ Invalid query provided"
+        response = "❌ Invalid query provided"
+        log_interaction(query, response, None, time.time() - start_time)
+        return response
 
     if is_dangerous(query):
-        return "❌ Query blocked for security reasons"
+        response = "❌ Query blocked for security reasons"
+        log_interaction(query, response, None, time.time() - start_time)
+        return response
 
     assistant = SystemComplianceAssistant()
     try:
-        return assistant.process_query(query)
+        response = assistant.process_query(query)
+        return response
     finally:
         assistant.cleanup()
 
