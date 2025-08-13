@@ -108,7 +108,8 @@ def is_natural_language_question(query: str) -> bool:
     analytical_phrases = [
         'same', 'different', 'compare', 'analysis', 'summary', 'overview',
         'all have', 'do all', 'are all', 'which ones', 'how many',
-        'percentage', 'compliance', 'status', 'breakdown', 'distribution'
+        'percentage', 'compliance', 'status', 'breakdown', 'distribution',
+        'cpu usage', 'memory usage', 'disk usage', 'performance', 'utilization'
     ]
 
     # Complex query indicators
@@ -168,7 +169,12 @@ def generate_fast_sql_patterns():
         r'^database\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%database%'",
         r'^db\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%db%'",
         r'^app\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%app%'",
-        r'^application\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%application%'"
+        r'^application\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%application%'",
+
+        # Performance queries
+        r'^cpu\s*$': "SELECT id, ip_address, server_role, cpu FROM EISHome_compliance WHERE cpu IS NOT NULL ORDER BY cpu DESC",
+        r'^memory\s*$': "SELECT id, ip_address, server_role, memory FROM EISHome_compliance WHERE memory IS NOT NULL ORDER BY memory DESC",
+        r'^ram\s*$': "SELECT id, ip_address, server_role, ram FROM EISHome_compliance WHERE ram IS NOT NULL ORDER BY ram DESC"
     }
     return patterns
 
@@ -191,21 +197,39 @@ def get_sql_generation_prompt():
     return f"""You are an expert SQL generator for EISHome_compliance table.
 
 TABLE SCHEMA:
-- id (BIGINT): Server ID
-- ip_address (VARCHAR): Server IP
-- server_role (VARCHAR): Role (web, database, app, etc)
-- osVersion (VARCHAR): OS version
-- kernelVersion (VARCHAR): Kernel version
-- ram (INT): RAM in GB
-- cpuCore (INT): CPU cores
-- cpu (INT): CPU usage %
-- memory (INT): Memory usage %
-- firewall (VARCHAR): Firewall status
-- dsAgent (VARCHAR): Deep Security Agent
-- splunk (VARCHAR): Splunk agent
-- aceVersion (VARCHAR): ACE version
-- mqVersion (VARCHAR): MQ version
-- eisuserExpi, rootExpi, socvaExpi, addmitamExpi (VARCHAR): User expiry dates
+- id (BIGINT): Server ID (Primary Key, auto_increment)
+- ip_address (VARCHAR(20)): Server IP address
+- last_update (VARCHAR(50)): Last database update time
+- upTime (VARCHAR(50)): Server uptime
+- server_role (VARCHAR(50)): Server role (PR or DR)
+- ram (INT): RAM of server in GB
+- cpuCore (INT): Number of CPU cores
+- osVersion (VARCHAR(100)): Operating system version
+- kernelUdate (VARCHAR(100)): Kernel update info
+- aceVersion (VARCHAR(20)): IBM ACE version
+- mqVersion (VARCHAR(30)): IBM MQ version
+- firewall (VARCHAR(50)): Firewall status (active/inactive)
+- rpmCount (INT): RPM package count
+- dsAgent (VARCHAR(50)): Deep Security Agent status
+- splunk (VARCHAR(50)): Splunk agent status
+- ragent (VARCHAR(50)): R agent status
+- eisuserExpi (VARCHAR(30)): EIS user expiry date
+- rootExpi (VARCHAR(30)): Root user expiry date
+- socvaExpi (VARCHAR(30)): SOCVA expiry date
+- addmitamExpi (VARCHAR(50)): ADDMITAM expiry date
+- systemTime (VARCHAR(50)): System time
+- fileSystem (VARCHAR(20)): File system info
+- kernelVersion (VARCHAR(100)): Kernel version
+- cpu (INT): CPU usage percentage (can be NULL)
+- mem_cp_update (VARCHAR(50)): Memory/CPU update info (can be NULL)
+- memory (INT): Memory usage percentage (can be NULL)
+
+IMPORTANT FIELD MAPPINGS:
+- For CPU usage queries: Use 'cpu' field (percentage)
+- For Memory usage queries: Use 'memory' field (percentage) 
+- For RAM capacity queries: Use 'ram' field (GB)
+- For CPU cores: Use 'cpuCore' field
+- For kernel info: Use 'kernelVersion' field (NOT 'kernelUdate')
 
 RULES:
 1. Generate ONLY valid SELECT statements
@@ -215,7 +239,14 @@ RULES:
 5. Return ONLY the SQL query, no explanations
 6. Use proper WHERE clauses for filtering
 7. For "all servers" use SELECT * FROM EISHome_compliance
-8. For version comparisons, be specific about the field name
+8. For performance metrics, handle NULL values appropriately
+9. For CPU/memory usage comparisons, use numeric operators
+10. Always include relevant fields in SELECT for performance queries
+
+EXAMPLES:
+- "What is CPU usage of server 10.1.1.1?" → SELECT id, ip_address, server_role, cpu FROM EISHome_compliance WHERE ip_address = '10.1.1.1'
+- "Servers with high CPU usage" → SELECT * FROM EISHome_compliance WHERE cpu > 80
+- "Memory usage of all servers" → SELECT id, ip_address, server_role, memory FROM EISHome_compliance WHERE memory IS NOT NULL ORDER BY memory DESC
 
 QUESTION: {{question}}
 
@@ -257,11 +288,13 @@ def clean_and_fix_sql(raw_sql: str) -> str:
 
     # Fix text field searches - only if sql is a valid string
     text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion',
-                   'firewall', 'dsAgent', 'splunk', 'kernelVersion']
+                   'firewall', 'dsAgent', 'splunk', 'kernelVersion', 'last_update', 
+                   'upTime', 'kernelUdate', 'ragent', 'eisuserExpi', 'rootExpi', 
+                   'socvaExpi', 'addmitamExpi', 'systemTime', 'fileSystem', 'mem_cp_update']
 
     for field in text_fields:
         try:
-            # Check if it's not an IP address exact match
+            # Check if it's not an IP address exact match or numeric comparison
             if field != 'ip_address' or not re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', sql):
                 pattern = f"({field})\\s*=\\s*'([^']*)'"
                 replacement = f"\\1 LIKE '%\\2%'"
@@ -309,19 +342,32 @@ def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
     # Prepare summary data
     total_count = len(results)
 
-    # Get unique values for key analysis fields
-    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 'aceVersion', 'mqVersion']
+    # Get unique values for key analysis fields - updated field list
+    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 
+                      'aceVersion', 'mqVersion', 'splunk', 'cpu', 'memory', 'ram', 'cpuCore']
     field_analysis = {}
 
     for field in analysis_fields:
         if field in results[0]:
             values = [str(r.get(field, 'NULL')) for r in results if r.get(field) is not None]
-            unique_values = list(set(values))
-            field_analysis[field] = {
-                'unique_count': len(unique_values),
-                'values': unique_values[:10],  # Limit for prompt size
-                'total_records': len(values)
-            }
+            if values:  # Only analyze if we have non-null values
+                unique_values = list(set(values))
+                field_analysis[field] = {
+                    'unique_count': len(unique_values),
+                    'values': unique_values[:10],  # Limit for prompt size
+                    'total_records': len(values)
+                }
+
+                # Add statistics for numeric fields
+                if field in ['cpu', 'memory', 'ram', 'cpuCore', 'rpmCount']:
+                    try:
+                        numeric_values = [float(v) for v in values if v != 'NULL' and v.replace('.','').isdigit()]
+                        if numeric_values:
+                            field_analysis[field]['min'] = min(numeric_values)
+                            field_analysis[field]['max'] = max(numeric_values)
+                            field_analysis[field]['avg'] = sum(numeric_values) / len(numeric_values)
+                    except:
+                        pass
 
     # Create focused analysis prompt
     prompt = f"""Analyze this system compliance data to answer the user's question.
@@ -337,6 +383,7 @@ Please provide a direct, clear answer to the user's question. Focus on:
 2. Specific differences or issues found
 3. Key statistics or patterns
 4. Actionable insights
+5. For performance queries (CPU, memory), highlight high/low values and averages
 
 Keep response concise and specific to the question asked."""
 
@@ -356,19 +403,24 @@ def format_simple_results(results: List[Dict], query: str) -> str:
         server = results[0]
         output = f"🖥️ Server Details:\n"
 
+        # Updated key fields mapping
         key_fields = {
             'id': '🆔 ID',
             'ip_address': '🌐 IP Address',
             'server_role': '🏷️ Role',
             'osVersion': '💿 OS Version',
-            'kernelVersion': '🔧 Kernel',
+            'kernelVersion': '🔧 Kernel Version',
             'ram': '🧠 RAM',
             'cpuCore': '⚡ CPU Cores',
             'cpu': '🖥️ CPU Usage',
             'memory': '💾 Memory Usage',
             'firewall': '🔥 Firewall',
             'dsAgent': '🛡️ Deep Security',
-            'splunk': '📊 Splunk'
+            'splunk': '📊 Splunk',
+            'aceVersion': '🔧 ACE Version',
+            'mqVersion': '📦 MQ Version',
+            'upTime': '⏰ Uptime',
+            'last_update': '🔄 Last Update'
         }
 
         for field, label in key_fields.items():
@@ -378,6 +430,8 @@ def format_simple_results(results: List[Dict], query: str) -> str:
                     value = f"{value} GB"
                 elif field in ['cpu', 'memory'] and isinstance(value, (int, float)):
                     value = f"{value}%"
+                elif field == 'cpuCore':
+                    value = f"{value} cores"
                 output += f"{label}: {value}\n"
 
         return output.strip()
@@ -402,6 +456,21 @@ def format_simple_results(results: List[Dict], query: str) -> str:
                 output += f"  • {role}: {count} servers\n"
             output += "\n"
 
+        # Add performance summary if CPU or memory data is available
+        cpu_values = [s.get('cpu') for s in results if s.get('cpu') is not None]
+        memory_values = [s.get('memory') for s in results if s.get('memory') is not None]
+        
+        if cpu_values:
+            avg_cpu = sum(cpu_values) / len(cpu_values)
+            output += f"📊 CPU Usage: Avg {avg_cpu:.1f}%, Min {min(cpu_values)}%, Max {max(cpu_values)}%\n"
+        
+        if memory_values:
+            avg_memory = sum(memory_values) / len(memory_values)
+            output += f"💾 Memory Usage: Avg {avg_memory:.1f}%, Min {min(memory_values)}%, Max {max(memory_values)}%\n"
+        
+        if cpu_values or memory_values:
+            output += "\n"
+
         # Show sample
         output += f"📋 Sample (first 5 servers):\n"
         output += format_table(results[:5])
@@ -414,12 +483,13 @@ def format_table(results: List[Dict]) -> str:
     if not results:
         return "No data to display"
 
-    # Select important columns
-    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 'firewall', 'dsAgent']
+    # Select important columns - updated priority
+    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 
+                    'cpu', 'memory', 'firewall', 'dsAgent', 'kernelVersion']
     available_cols = [col for col in priority_cols if col in results[0]]
 
     if not available_cols:
-        available_cols = list(results[0].keys())[:6]  # First 6 columns
+        available_cols = list(results[0].keys())[:8]  # First 8 columns
 
     # Calculate column widths
     col_widths = {}
@@ -583,6 +653,7 @@ class SystemComplianceAssistant:
             WHERE ip_address LIKE '%{query}%'
                OR server_role LIKE '%{query}%'
                OR CAST(id AS CHAR) LIKE '%{query}%'
+               OR osVersion LIKE '%{query}%'
             """
             results = self.execute_query(fallback_sql)
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -591,7 +662,7 @@ class SystemComplianceAssistant:
             if results:
                 return format_simple_results(results, query)
             else:
-                return f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question)."
+                return f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question like 'What is CPU usage of server X?')."
 
         except Exception as e:
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -634,12 +705,31 @@ def ComplianceMain(query):
 
 # Interactive mode
 if __name__ == "__main__":
-    print("🚀 Smart System Compliance Assistant - Fixed Version")
-    print("=" * 50)
-    print("💡 Usage:")
-    print("  Simple: '10.188.24.100', '123', 'web', 'count'")
-    print("  Complex: 'Do all servers have same kernel version?'")
-    print("           'Which servers have firewall disabled?'")
+    print("🚀 Smart System Compliance Assistant - Updated with Full Schema")
+    print("=" * 60)
+    print("💡 Usage Examples:")
+    print("  Simple Queries:")
+    print("    '10.188.24.100' - Get server by IP")
+    print("    '123' - Get server by ID") 
+    print("    'web' - Get web servers")
+    print("    'cpu' - Show CPU usage for all servers")
+    print("    'memory' - Show memory usage for all servers")
+    print("    'count' - Count total servers")
+    print("")
+    print("  Complex Questions:")
+    print("    'What is CPU usage of server 10.1.1.1?'")
+    print("    'Which servers have high memory usage?'")
+    print("    'Do all servers have same kernel version?'")
+    print("    'Show servers with firewall disabled'")
+    print("    'What are the ACE versions across servers?'")
+    print("    'Which servers need user password expiry updates?'")
+    print("")
+    print("  Available Fields:")
+    print("    Performance: cpu (%), memory (%), ram (GB), cpuCore")
+    print("    System: osVersion, kernelVersion, upTime, systemTime")
+    print("    Software: aceVersion, mqVersion, firewall, dsAgent, splunk")
+    print("    Security: eisuserExpi, rootExpi, socvaExpi, addmitamExpi")
+    print("    Info: server_role, ip_address, last_update")
     print("\nType 'exit' to quit.\n")
 
     while True:
@@ -655,7 +745,7 @@ if __name__ == "__main__":
 
             result = ComplianceMain(user_query)
             print(f"\n{result}\n")
-            print("-" * 50)
+            print("-" * 60)
 
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
