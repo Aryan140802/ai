@@ -16,7 +16,7 @@ from langchain.chains import create_sql_query_chain
 today_date = date.today()
 
 # --- SYSTEM CONFIGURATION ---
-LOG_FILE_PATH = "compliance_assistant_logs.txt"
+LOG_FILE_PATH = "/var/www/PORTAL_PRE_TEST/PyPortal/AiOps/compliance_assistant_logs.txt"
 COMPLIANCE_DB_CONFIG = {
     "name": "System Compliance",
     "db_config": {
@@ -49,28 +49,28 @@ def log_interaction(question: str, answer: str, sql_query: str = None, time_take
     """
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Prepare log entry
         log_entry = f"\n{'=' * 80}\n"
         log_entry += f"📅 {timestamp}\n\n"
         log_entry += f"❓ QUESTION: {question}\n\n"
-        
+
         if sql_query:
             log_entry += f"🔧 SQL USED: {sql_query}\n\n"
-        
+
         if time_taken is not None:
             log_entry += f"⏱️ TIME TAKEN: {time_taken:.2f} seconds\n\n"
-        
+
         # Truncate very long answers
         max_answer_length = 2000
         formatted_answer = answer if len(answer) <= max_answer_length else f"{answer[:max_answer_length]}... [TRUNCATED]"
         log_entry += f"💡 ANSWER:\n{formatted_answer}\n"
         log_entry += f"{'=' * 80}\n"
-        
+
         # Write to log file
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
             log_file.write(log_entry)
-            
+
     except Exception as e:
         print(f"⚠️ Failed to log interaction: {e}")
 
@@ -265,7 +265,7 @@ TABLE SCHEMA:
 
 IMPORTANT FIELD MAPPINGS:
 - For CPU usage queries: Use 'cpu' field (percentage)
-- For Memory usage queries: Use 'memory' field (percentage) 
+- For Memory usage queries: Use 'memory' field (percentage)
 - For RAM capacity queries: Use 'ram' field (GB)
 - For CPU cores: Use 'cpuCore' field
 - For kernel info: Use 'kernelVersion' field (NOT 'kernelUdate')
@@ -327,8 +327,8 @@ def clean_and_fix_sql(raw_sql: str) -> str:
 
     # Fix text field searches - only if sql is a valid string
     text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion',
-                   'firewall', 'dsAgent', 'splunk', 'kernelVersion', 'last_update', 
-                   'upTime', 'kernelUdate', 'ragent', 'eisuserExpi', 'rootExpi', 
+                   'firewall', 'dsAgent', 'splunk', 'kernelVersion', 'last_update',
+                   'upTime', 'kernelUdate', 'ragent', 'eisuserExpi', 'rootExpi',
                    'socvaExpi', 'addmitamExpi', 'systemTime', 'fileSystem', 'mem_cp_update']
 
     for field in text_fields:
@@ -382,7 +382,7 @@ def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
     total_count = len(results)
 
     # Get unique values for key analysis fields - updated field list
-    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 
+    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent',
                       'aceVersion', 'mqVersion', 'splunk', 'cpu', 'memory', 'ram', 'cpuCore']
     field_analysis = {}
 
@@ -498,15 +498,15 @@ def format_simple_results(results: List[Dict], query: str) -> str:
         # Add performance summary if CPU or memory data is available
         cpu_values = [s.get('cpu') for s in results if s.get('cpu') is not None]
         memory_values = [s.get('memory') for s in results if s.get('memory') is not None]
-        
+
         if cpu_values:
             avg_cpu = sum(cpu_values) / len(cpu_values)
             output += f"📊 CPU Usage: Avg {avg_cpu:.1f}%, Min {min(cpu_values)}%, Max {max(cpu_values)}%\n"
-        
+
         if memory_values:
             avg_memory = sum(memory_values) / len(memory_values)
             output += f"💾 Memory Usage: Avg {avg_memory:.1f}%, Min {min(memory_values)}%, Max {max(memory_values)}%\n"
-        
+
         if cpu_values or memory_values:
             output += "\n"
 
@@ -523,7 +523,7 @@ def format_table(results: List[Dict]) -> str:
         return "No data to display"
 
     # Select important columns - updated priority
-    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 
+    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore',
                     'cpu', 'memory', 'firewall', 'dsAgent', 'kernelVersion']
     available_cols = [col for col in priority_cols if col in results[0]]
 
@@ -683,7 +683,7 @@ class SystemComplianceAssistant:
                     response = f"{analysis}\n\n📊 Sample Data:\n{format_table(results[:5])}\n... ({len(results)} total servers)"
                 else:
                     response = analysis
-                
+
                 return response
 
             # Step 4: Fallback - treat as simple query
@@ -705,7 +705,7 @@ class SystemComplianceAssistant:
                 response = format_simple_results(results, query)
             else:
                 response = f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question like 'What is CPU usage of server X?')."
-            
+
             return response
 
         except Exception as e:
@@ -769,7 +769,7 @@ if __name__ == "__main__":
     print("💡 Usage Examples:")
     print("  Simple Queries:")
     print("    '10.188.24.100' - Get server by IP")
-    print("    '123' - Get server by ID") 
+    print("    '123' - Get server by ID")
     print("    'web' - Get web servers")
     print("    'cpu' - Show CPU usage for all servers")
     print("    'memory' - Show memory usage for all servers")
