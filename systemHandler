@@ -17,6 +17,10 @@ today_date = date.today()
 
 # --- SYSTEM CONFIGURATION ---
 LOG_FILE_PATH = "/var/www/PORTAL_PRE_TEST/PyPortal/AiOps/compliance_assistant_logs.txt"
+
+# Add threshold parameter
+THRESHOLD_PERCENTAGE = 70  # Default threshold for performance metrics
+
 COMPLIANCE_DB_CONFIG = {
     "name": "System Compliance",
     "db_config": {
@@ -28,113 +32,121 @@ COMPLIANCE_DB_CONFIG = {
     "include_tables": ["EISHome_compliance"],
 }
 
-# Blocked patterns for security
+# Updated blocked patterns - removed firewall related patterns
 BLOCKED_PATTERNS = [
-    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b",
+    r"\brm\b", r"\bkill\b", r"\breboot\b", r"\bshutdown\b", r"\buserdel\b", 
     r"\bpasswd\b", r"\bmkfs\b", r"\bwget\b", r"\bcurl\b", r":\s*(){:|:&};:",
-    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b",
-    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", r"\bmkfs\b",
-    r"\biptables\b", r"\bufw\b", r"\bfirewall\b", r"\bselinux\b"
+    r"\bsudo\b", r"\bsu\b", r"\bchmod\b", r"\bchown\b", r"\bdd\b", 
+    r"\bmount\s+/", r"\bumount\b", r"\bfdisk\b", r"\bparted\b", 
+    r"\biptables\b", r"\bufw\b", r"\bselinux\b"
+    # Removed firewall patterns to allow firewall queries
 ]
 
 def log_interaction(question: str, answer: str, sql_query: str = None, time_taken: float = None):
-    """
-    Log interactions to a formatted text file with timestamp
-    Format includes:
-    - Timestamp
-    - Question
-    - Answer (truncated if too long)
-    - SQL query used (if applicable)
-    - Time taken
-    """
+    """Log interactions to a formatted text file with timestamp"""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # Prepare log entry
+        
         log_entry = f"\n{'=' * 80}\n"
         log_entry += f"📅 {timestamp}\n\n"
         log_entry += f"❓ QUESTION: {question}\n\n"
-
+        
         if sql_query:
             log_entry += f"🔧 SQL USED: {sql_query}\n\n"
-
+        
         if time_taken is not None:
             log_entry += f"⏱️ TIME TAKEN: {time_taken:.2f} seconds\n\n"
-
-        # Truncate very long answers
+        
         max_answer_length = 2000
         formatted_answer = answer if len(answer) <= max_answer_length else f"{answer[:max_answer_length]}... [TRUNCATED]"
         log_entry += f"💡 ANSWER:\n{formatted_answer}\n"
         log_entry += f"{'=' * 80}\n"
-
-        # Write to log file
+        
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
             log_file.write(log_entry)
-
+            
     except Exception as e:
         print(f"⚠️ Failed to log interaction: {e}")
 
+def replace_threshold_in_query(query: str) -> str:
+    """Replace 'threshold' mentions with actual threshold value"""
+    threshold_patterns = [
+        (r'\bthreshold\b', str(THRESHOLD_PERCENTAGE)),
+        (r'\babove\s+threshold\b', f'above {THRESHOLD_PERCENTAGE}'),
+        (r'\bover\s+threshold\b', f'over {THRESHOLD_PERCENTAGE}'),
+        (r'\bgreater\s+than\s+threshold\b', f'greater than {THRESHOLD_PERCENTAGE}'),
+        (r'\bhigher\s+than\s+threshold\b', f'higher than {THRESHOLD_PERCENTAGE}'),
+        (r'\bbelow\s+threshold\b', f'below {THRESHOLD_PERCENTAGE}'),
+        (r'\bunder\s+threshold\b', f'under {THRESHOLD_PERCENTAGE}'),
+        (r'\bless\s+than\s+threshold\b', f'less than {THRESHOLD_PERCENTAGE}'),
+        (r'\blower\s+than\s+threshold\b', f'lower than {THRESHOLD_PERCENTAGE}')
+    ]
+    
+    updated_query = query
+    for pattern, replacement in threshold_patterns:
+        updated_query = re.sub(pattern, replacement, updated_query, flags=re.IGNORECASE)
+    
+    return updated_query
+
 def is_simple_identifier(query: str) -> Tuple[bool, Optional[str]]:
-    """
-    Check if query is just a simple identifier (IP, ID, hostname) without natural language
-    Returns (is_simple, sql_query)
-    """
+    """Check if query is just a simple identifier (IP, ID, hostname)"""
     if not query or not isinstance(query, str):
         return False, None
-
+    
     query = query.strip()
-
+    
+    # Replace threshold references first
+    query = replace_threshold_in_query(query)
+    
     # Remove common prefixes that don't add meaning
     clean_query = re.sub(r'^(show\s+|get\s+|find\s+)?', '', query, flags=re.IGNORECASE).strip()
-
+    
     # IP Address pattern (IPv4)
     ip_pattern = r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$'
     ip_match = re.match(ip_pattern, clean_query)
     if ip_match:
         ip = ip_match.group(1)
         return True, f"SELECT * FROM EISHome_compliance WHERE ip_address = '{ip}'"
-
+    
     # Server ID (just numbers)
     id_pattern = r'^(\d+)$'
     id_match = re.match(id_pattern, clean_query)
     if id_match:
         server_id = id_match.group(1)
         return True, f"SELECT * FROM EISHome_compliance WHERE id = {server_id}"
-
-    # Hostname pattern (letters, numbers, dots, hyphens - no spaces or natural language)
+    
+    # Hostname pattern
     hostname_pattern = r'^([a-zA-Z0-9\.\-_]+)$'
     hostname_match = re.match(hostname_pattern, clean_query)
     if hostname_match and '.' in clean_query and len(clean_query) > 3:
         hostname = hostname_match.group(1)
         return True, f"SELECT * FROM EISHome_compliance WHERE ip_address LIKE '%{hostname}%' OR server_role LIKE '%{hostname}%'"
-
-    # Single word server role queries (no articles, conjunctions, or question words)
+    
+    # Single word server role queries
     single_word_pattern = r'^([a-zA-Z]+)$'
     single_word_match = re.match(single_word_pattern, clean_query)
     if single_word_match:
         word = single_word_match.group(1).lower()
-        # Exclude question words, articles, and common natural language words
         natural_language_words = {
-            'what', 'where', 'when', 'who', 'why', 'how', 'which', 'are', 'is', 'do', 'does', 'can', 'will', 'would',
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from',
-            'all', 'some', 'any', 'many', 'much', 'few', 'little', 'more', 'most', 'less', 'least',
-            'same', 'different', 'similar', 'like', 'unlike', 'than', 'as', 'if', 'unless', 'since', 'because'
+            'what', 'where', 'when', 'who', 'why', 'how', 'which', 'are', 'is', 'do', 'does', 
+            'can', 'will', 'would', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 
+            'to', 'for', 'of', 'with', 'by', 'from', 'all', 'some', 'any', 'many', 'much', 
+            'few', 'little', 'more', 'most', 'less', 'least', 'same', 'different', 'similar', 
+            'like', 'unlike', 'than', 'as', 'if', 'unless', 'since', 'because'
         }
-
+        
         if word not in natural_language_words:
             return True, f"SELECT * FROM EISHome_compliance WHERE server_role LIKE '%{word}%'"
-
+    
     return False, None
 
 def is_natural_language_question(query: str) -> bool:
-    """
-    Determine if the query is a natural language question that needs AI processing
-    """
+    """Determine if the query is a natural language question that needs AI processing"""
     if not query or not isinstance(query, str):
         return False
-
+    
     query_lower = query.lower().strip()
-
+    
     # Question patterns
     question_starters = [
         r'^(what|where|when|who|why|how|which)\b',
@@ -142,98 +154,117 @@ def is_natural_language_question(query: str) -> bool:
         r'^(show\s+me|tell\s+me|list\s+all|give\s+me)\b',
         r'^(find\s+all|get\s+all|display\s+all)\b'
     ]
-
-    # Analytical phrases
+    
+    # Analytical phrases (including threshold-related terms)
     analytical_phrases = [
-        'same', 'different', 'compare', 'analysis', 'summary', 'overview',
-        'all have', 'do all', 'are all', 'which ones', 'how many',
-        'percentage', 'compliance', 'status', 'breakdown', 'distribution',
-        'cpu usage', 'memory usage', 'disk usage', 'performance', 'utilization'
+        'same', 'different', 'compare', 'analysis', 'summary', 'overview', 'all have', 'do all', 
+        'are all', 'which ones', 'how many', 'percentage', 'compliance', 'status', 'breakdown', 
+        'distribution', 'cpu usage', 'memory usage', 'disk usage', 'performance', 'utilization',
+        'threshold', 'above', 'below', 'higher than', 'lower than', 'firewall status', 
+        'firewall active', 'firewall inactive'
     ]
-
+    
     # Complex query indicators
     complex_indicators = [
-        'and', 'or', 'but', 'with', 'without', 'that have', 'that are',
-        'more than', 'less than', 'greater than', 'higher than', 'lower than',
-        'between', 'during', 'since', 'before', 'after'
+        'and', 'or', 'but', 'with', 'without', 'that have', 'that are', 'more than', 
+        'less than', 'greater than', 'higher than', 'lower than', 'between', 'during', 
+        'since', 'before', 'after', 'above', 'below'
     ]
-
+    
     # Check for question patterns
     for pattern in question_starters:
         if re.match(pattern, query_lower):
             return True
-
+    
     # Check for analytical phrases
     if any(phrase in query_lower for phrase in analytical_phrases):
         return True
-
+    
     # Check for complex indicators
     if any(indicator in query_lower for indicator in complex_indicators):
         return True
-
+    
     # If query has multiple words and contains common question/analysis words
     words = query_lower.split()
-    if len(words) > 3:  # More than 3 words suggests natural language
+    if len(words) > 3:
         return True
-
+    
     return False
 
 def generate_fast_sql_patterns():
-    """Generate fast SQL patterns for common simple queries"""
+    """Generate fast SQL patterns for common simple queries including threshold-based ones"""
     patterns = {
         # Count queries
         r'^count\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
         r'^count\s+servers?\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
         r'^total\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
         r'^total\s+servers?\s*$': "SELECT COUNT(*) as total_servers FROM EISHome_compliance",
-
+        
         # List all queries
         r'^all\s*$': "SELECT * FROM EISHome_compliance",
         r'^all\s+servers?\s*$': "SELECT * FROM EISHome_compliance",
         r'^servers?\s*$': "SELECT * FROM EISHome_compliance",
         r'^list\s*$': "SELECT * FROM EISHome_compliance",
-
-        # Status queries (single word + status)
-        r'^firewall\s*$': "SELECT * FROM EISHome_compliance WHERE firewall IS NOT NULL",
-        r'^dsagent\s*$': "SELECT * FROM EISHome_compliance WHERE dsAgent IS NOT NULL",
-        r'^splunk\s*$': "SELECT * FROM EISHome_compliance WHERE splunk IS NOT NULL",
-
+        
+        # Firewall queries - now properly supported
+        r'^firewall\s*$': "SELECT id, ip_address, server_role, firewall FROM EISHome_compliance WHERE firewall IS NOT NULL",
+        r'^firewall\s+status\s*$': "SELECT id, ip_address, server_role, firewall FROM EISHome_compliance WHERE firewall IS NOT NULL",
+        r'^firewall\s+active\s*$': "SELECT * FROM EISHome_compliance WHERE firewall = 'active'",
+        r'^firewall\s+inactive\s*$': "SELECT * FROM EISHome_compliance WHERE firewall = 'inactive'",
+        
+        # Status queries
+        r'^dsagent\s*$': "SELECT id, ip_address, server_role, dsAgent FROM EISHome_compliance WHERE dsAgent IS NOT NULL",
+        r'^splunk\s*$': "SELECT id, ip_address, server_role, splunk FROM EISHome_compliance WHERE splunk IS NOT NULL",
+        
         # OS queries
         r'^centos\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%CentOS%'",
         r'^linux\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%Linux%'",
         r'^windows\s*$': "SELECT * FROM EISHome_compliance WHERE osVersion LIKE '%Windows%'",
-
-        # Role-based queries (single words)
+        
+        # Role-based queries
         r'^web\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%web%'",
         r'^database\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%database%'",
         r'^db\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%db%'",
         r'^app\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%app%'",
         r'^application\s*$': "SELECT * FROM EISHome_compliance WHERE server_role LIKE '%application%'",
-
+        
         # Performance queries
         r'^cpu\s*$': "SELECT id, ip_address, server_role, cpu FROM EISHome_compliance WHERE cpu IS NOT NULL ORDER BY cpu DESC",
         r'^memory\s*$': "SELECT id, ip_address, server_role, memory FROM EISHome_compliance WHERE memory IS NOT NULL ORDER BY memory DESC",
-        r'^ram\s*$': "SELECT id, ip_address, server_role, ram FROM EISHome_compliance WHERE ram IS NOT NULL ORDER BY ram DESC"
+        r'^ram\s*$': "SELECT id, ip_address, server_role, ram FROM EISHome_compliance WHERE ram IS NOT NULL ORDER BY ram DESC",
+        
+        # Threshold-based queries
+        rf'^cpu\s+above\s+{THRESHOLD_PERCENTAGE}\s*$': f"SELECT * FROM EISHome_compliance WHERE cpu > {THRESHOLD_PERCENTAGE}",
+        rf'^memory\s+above\s+{THRESHOLD_PERCENTAGE}\s*$': f"SELECT * FROM EISHome_compliance WHERE memory > {THRESHOLD_PERCENTAGE}",
+        rf'^cpu\s+over\s+{THRESHOLD_PERCENTAGE}\s*$': f"SELECT * FROM EISHome_compliance WHERE cpu > {THRESHOLD_PERCENTAGE}",
+        rf'^memory\s+over\s+{THRESHOLD_PERCENTAGE}\s*$': f"SELECT * FROM EISHome_compliance WHERE memory > {THRESHOLD_PERCENTAGE}",
+        rf'^servers?\s+above\s+{THRESHOLD_PERCENTAGE}\s*$': f"SELECT * FROM EISHome_compliance WHERE cpu > {THRESHOLD_PERCENTAGE} OR memory > {THRESHOLD_PERCENTAGE}",
     }
+    
     return patterns
 
 def try_fast_query(query: str) -> Optional[str]:
     """Try to match simple queries to fast SQL patterns"""
     if not query or not isinstance(query, str):
         return None
-
-    query_clean = query.lower().strip()
+    
+    # Replace threshold references first
+    processed_query = replace_threshold_in_query(query)
+    query_clean = processed_query.lower().strip()
+    
     patterns = generate_fast_sql_patterns()
-
+    
     for pattern, sql in patterns.items():
         if re.match(pattern, query_clean):
             return sql
-
+    
     return None
 
 def get_sql_generation_prompt():
     """Generate comprehensive SQL prompt for complex queries"""
     return f"""You are an expert SQL generator for EISHome_compliance table.
+
+SYSTEM THRESHOLD: {THRESHOLD_PERCENTAGE}% (use this value when user mentions "threshold")
 
 TABLE SCHEMA:
 - id (BIGINT): Server ID (Primary Key, auto_increment)
@@ -247,7 +278,7 @@ TABLE SCHEMA:
 - kernelUdate (VARCHAR(100)): Kernel update info
 - aceVersion (VARCHAR(20)): IBM ACE version
 - mqVersion (VARCHAR(30)): IBM MQ version
-- firewall (VARCHAR(50)): Firewall status (active/inactive)
+- firewall (VARCHAR(50)): Firewall status (active/inactive/enabled/disabled)
 - rpmCount (INT): RPM package count
 - dsAgent (VARCHAR(50)): Deep Security Agent status
 - splunk (VARCHAR(50)): Splunk agent status
@@ -269,6 +300,12 @@ IMPORTANT FIELD MAPPINGS:
 - For RAM capacity queries: Use 'ram' field (GB)
 - For CPU cores: Use 'cpuCore' field
 - For kernel info: Use 'kernelVersion' field (NOT 'kernelUdate')
+- For firewall queries: Use 'firewall' field (values: active/inactive/enabled/disabled)
+
+THRESHOLD HANDLING:
+- When user mentions "threshold": use {THRESHOLD_PERCENTAGE}
+- "above/over threshold" = > {THRESHOLD_PERCENTAGE}
+- "below/under threshold" = < {THRESHOLD_PERCENTAGE}
 
 RULES:
 1. Generate ONLY valid SELECT statements
@@ -281,71 +318,78 @@ RULES:
 8. For performance metrics, handle NULL values appropriately
 9. For CPU/memory usage comparisons, use numeric operators
 10. Always include relevant fields in SELECT for performance queries
+11. For firewall queries, search the firewall column properly
 
 EXAMPLES:
 - "What is CPU usage of server 10.1.1.1?" → SELECT id, ip_address, server_role, cpu FROM EISHome_compliance WHERE ip_address = '10.1.1.1'
 - "Servers with high CPU usage" → SELECT * FROM EISHome_compliance WHERE cpu > 80
 - "Memory usage of all servers" → SELECT id, ip_address, server_role, memory FROM EISHome_compliance WHERE memory IS NOT NULL ORDER BY memory DESC
+- "Servers above threshold" → SELECT * FROM EISHome_compliance WHERE cpu > {THRESHOLD_PERCENTAGE} OR memory > {THRESHOLD_PERCENTAGE}
+- "CPU usage above threshold" → SELECT * FROM EISHome_compliance WHERE cpu > {THRESHOLD_PERCENTAGE}
+- "Firewall status" → SELECT id, ip_address, server_role, firewall FROM EISHome_compliance WHERE firewall IS NOT NULL
+- "Servers with active firewall" → SELECT * FROM EISHome_compliance WHERE firewall = 'active'
 
 QUESTION: {{question}}
-
 SQL:"""
 
 def clean_and_fix_sql(raw_sql: str) -> str:
     """Clean and fix SQL generated by AI with proper error handling"""
-    # Ensure we have a string to work with
     if not raw_sql or not isinstance(raw_sql, str):
         return "ERROR: Invalid SQL input"
-
+    
     print(f"DEBUG - Raw SQL: {repr(raw_sql)}")
-
+    
     # Handle refusal responses
     if any(phrase in raw_sql.lower() for phrase in ["i cannot", "i can't", "sorry", "unable"]):
         return "ERROR: AI refused to generate SQL"
-
-    # Extract SQL from various formats
+    
     sql = raw_sql.strip()
-
+    
     # Remove code block markers
     sql = re.sub(r'```(?:sql)?\s*(.*?)\s*```', r'\1', sql, flags=re.DOTALL | re.IGNORECASE)
-
+    
     # Remove common prefixes
     sql = re.sub(r'^(sql:|query:|here is|here\'s)?\s*:?\s*', '', sql, flags=re.IGNORECASE)
-
+    
     # Extract the SELECT statement
     select_match = re.search(r'(SELECT\s+.*?)(?:;|\n\s*$|$)', sql, re.IGNORECASE | re.DOTALL)
     if select_match:
         sql = select_match.group(1).strip()
-
-    # Ensure we still have a valid string after processing
+    
     if not sql or not isinstance(sql, str):
         return "ERROR: SQL processing failed"
-
+    
     # Fix common issues
     sql = re.sub(r'\s+', ' ', sql)  # Normalize whitespace
     sql = re.sub(r'from\s+eishome_compliance', 'FROM EISHome_compliance', sql, flags=re.IGNORECASE)
-
-    # Fix text field searches - only if sql is a valid string
-    text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion',
-                   'firewall', 'dsAgent', 'splunk', 'kernelVersion', 'last_update',
-                   'upTime', 'kernelUdate', 'ragent', 'eisuserExpi', 'rootExpi',
-                   'socvaExpi', 'addmitamExpi', 'systemTime', 'fileSystem', 'mem_cp_update']
-
+    
+    # Fix text field searches
+    text_fields = ['ip_address', 'server_role', 'osVersion', 'aceVersion', 'mqVersion', 'firewall', 
+                   'dsAgent', 'splunk', 'kernelVersion', 'last_update', 'upTime', 'kernelUdate', 
+                   'ragent', 'eisuserExpi', 'rootExpi', 'socvaExpi', 'addmitamExpi', 'systemTime', 
+                   'fileSystem', 'mem_cp_update']
+    
     for field in text_fields:
         try:
-            # Check if it's not an IP address exact match or numeric comparison
-            if field != 'ip_address' or not re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', sql):
+            # Special handling for firewall field - don't convert exact matches to LIKE
+            if field == 'firewall':
+                # Only convert to LIKE if it's not an exact status match
+                if not re.search(r"firewall\s*=\s*'(active|inactive|enabled|disabled)'", sql, re.IGNORECASE):
+                    pattern = f"({field})\\s*=\\s*'([^']*)'"
+                    replacement = f"\\1 LIKE '%\\2%'"
+                    sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
+            elif field != 'ip_address' or not re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', sql):
                 pattern = f"({field})\\s*=\\s*'([^']*)'"
                 replacement = f"\\1 LIKE '%\\2%'"
                 sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
         except Exception as e:
             print(f"DEBUG - Error fixing field {field}: {e}")
             continue
-
+    
     # Ensure proper semicolon
     if not sql.endswith(';'):
         sql += ';'
-
+    
     print(f"DEBUG - Cleaned SQL: {sql}")
     return sql
 
@@ -353,16 +397,16 @@ def validate_sql(sql: str) -> Tuple[str, bool]:
     """Validate and ensure SQL is safe"""
     if not sql or not isinstance(sql, str):
         return sql, False
-
+    
     if not sql.upper().strip().startswith('SELECT'):
         return sql, False
-
+    
     # Check for dangerous operations
     dangerous_ops = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE']
     sql_upper = sql.upper()
     if any(op in sql_upper for op in dangerous_ops):
         return sql, False
-
+    
     # Basic syntax validation
     try:
         parsed = sqlparse.parse(sql)
@@ -370,78 +414,110 @@ def validate_sql(sql: str) -> Tuple[str, bool]:
             return sql, False
     except:
         return sql, False
-
+    
     return sql, True
 
 def analyze_results_with_ai(question: str, results: List[Dict], llm) -> str:
     """Use AI to analyze results and provide natural language insights"""
     if not results:
         return "No matching servers found for your query."
-
+    
+    # Check if question mentions threshold and add context
+    threshold_context = ""
+    if "threshold" in question.lower():
+        threshold_context = f"\nNOTE: System threshold is set to {THRESHOLD_PERCENTAGE}%. When analyzing results, use this value for threshold references."
+    
     # Prepare summary data
     total_count = len(results)
-
-    # Get unique values for key analysis fields - updated field list
-    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent',
+    
+    # Get field analysis from results
+    analysis_fields = ['server_role', 'osVersion', 'kernelVersion', 'firewall', 'dsAgent', 
                       'aceVersion', 'mqVersion', 'splunk', 'cpu', 'memory', 'ram', 'cpuCore']
+    
     field_analysis = {}
-
     for field in analysis_fields:
-        if field in results[0]:
-            values = [str(r.get(field, 'NULL')) for r in results if r.get(field) is not None]
-            if values:  # Only analyze if we have non-null values
+        if results and field in results[0]:
+            values = []
+            for r in results:
+                val = r.get(field)
+                if val is not None:
+                    values.append(str(val))
+            
+            if values:
                 unique_values = list(set(values))
                 field_analysis[field] = {
                     'unique_count': len(unique_values),
                     'values': unique_values[:10],  # Limit for prompt size
                     'total_records': len(values)
                 }
-
+                
                 # Add statistics for numeric fields
                 if field in ['cpu', 'memory', 'ram', 'cpuCore', 'rpmCount']:
                     try:
-                        numeric_values = [float(v) for v in values if v != 'NULL' and v.replace('.','').isdigit()]
+                        numeric_values = []
+                        for v in values:
+                            if v != 'NULL' and str(v).replace('.','').replace('-','').isdigit():
+                                numeric_values.append(float(v))
+                        
                         if numeric_values:
                             field_analysis[field]['min'] = min(numeric_values)
                             field_analysis[field]['max'] = max(numeric_values)
                             field_analysis[field]['avg'] = sum(numeric_values) / len(numeric_values)
-                    except:
-                        pass
+                            
+                            # Add threshold analysis for CPU and memory
+                            if field in ['cpu', 'memory']:
+                                above_threshold = len([v for v in numeric_values if v > THRESHOLD_PERCENTAGE])
+                                below_threshold = len([v for v in numeric_values if v <= THRESHOLD_PERCENTAGE])
+                                field_analysis[field]['above_threshold'] = above_threshold
+                                field_analysis[field]['below_threshold'] = below_threshold
+                                field_analysis[field]['threshold_value'] = THRESHOLD_PERCENTAGE
+                    except Exception as e:
+                        print(f"Error calculating stats for {field}: {e}")
+    
+    # Create analysis prompt
+    prompt = f"""You are analyzing system compliance data. Be ACCURATE and FACTUAL.
 
-    # Create focused analysis prompt
-    prompt = f"""Analyze this system compliance data to answer the user's question.
+USER QUESTION: "{question}"{threshold_context}
 
-USER QUESTION: "{question}"
-
-DATA SUMMARY:
-- Total servers: {total_count}
+ACTUAL DATA SUMMARY:
+- Total servers found: {total_count}
 - Field Analysis: {json.dumps(field_analysis, indent=2)}
 
-Please provide a direct, clear answer to the user's question. Focus on:
-1. Direct yes/no answer if applicable
-2. Specific differences or issues found
-3. Key statistics or patterns
-4. Actionable insights
-5. For performance queries (CPU, memory), highlight high/low values and averages
+CRITICAL INSTRUCTIONS:
+1. The total_count ({total_count}) is the ACTUAL number of servers found
+2. Use ONLY the data provided in field_analysis
+3. Be specific and accurate - do NOT make up numbers
+4. If asked about counts, use the total_count value
+5. For performance queries, use the actual min/max/avg values provided
+6. For threshold queries, use the threshold analysis data (above_threshold/below_threshold counts)
+7. For firewall queries, analyze the firewall field values properly
 
-Keep response concise and specific to the question asked."""
+Provide a direct, accurate answer focusing on:
+1. Direct answer to the user's question using ACTUAL data
+2. Key statistics from the field_analysis (if relevant)
+3. Any notable patterns or issues
+4. For performance queries, highlight actual high/low values and averages
+5. For threshold queries, clearly state how many servers are above/below the {THRESHOLD_PERCENTAGE}% threshold
+
+Keep response clear and based ONLY on the provided data."""
 
     try:
         analysis = llm.invoke(prompt)
         return analysis.strip()
     except Exception as e:
-        return f"Analysis completed but couldn't generate detailed insights: {str(e)}"
+        # Fallback to simple data-driven response
+        return f"Found {total_count} servers matching your query. Analysis failed: {str(e)}"
 
 def format_simple_results(results: List[Dict], query: str) -> str:
     """Format results for simple queries (non-analytical)"""
     if not results:
         return f"No servers found matching '{query}'"
-
+    
     if len(results) == 1:
         # Single server - show detailed info
         server = results[0]
         output = f"🖥️ Server Details:\n"
-
+        
         # Updated key fields mapping
         key_fields = {
             'id': '🆔 ID',
@@ -461,7 +537,7 @@ def format_simple_results(results: List[Dict], query: str) -> str:
             'upTime': '⏰ Uptime',
             'last_update': '🔄 Last Update'
         }
-
+        
         for field, label in key_fields.items():
             if field in server and server[field] is not None:
                 value = server[field]
@@ -469,93 +545,134 @@ def format_simple_results(results: List[Dict], query: str) -> str:
                     value = f"{value} GB"
                 elif field in ['cpu', 'memory'] and isinstance(value, (int, float)):
                     value = f"{value}%"
+                    # Add threshold indicator
+                    if value.replace('%', '') and float(value.replace('%', '')) > THRESHOLD_PERCENTAGE:
+                        value += f" (Above {THRESHOLD_PERCENTAGE}% threshold)"
                 elif field == 'cpuCore':
                     value = f"{value} cores"
+                
                 output += f"{label}: {value}\n"
-
+        
         return output.strip()
-
+    
     elif len(results) <= 10:
         # Small result set - show table
         return format_table(results)
-
+    
     else:
         # Large result set - show summary + sample
         output = f"Found {len(results)} servers:\n\n"
-
+        
         # Add role summary if available
         if 'server_role' in results[0]:
             roles = {}
             for server in results:
                 role = server.get('server_role', 'Unknown')
                 roles[role] = roles.get(role, 0) + 1
-
+            
             output += "🏷️ Server Roles:\n"
             for role, count in sorted(roles.items()):
                 output += f"  • {role}: {count} servers\n"
             output += "\n"
-
-        # Add performance summary if CPU or memory data is available
+        
+        # Add firewall summary if this was a firewall query
+        if 'firewall' in str(query).lower() and 'firewall' in results[0]:
+            firewall_status = {}
+            for server in results:
+                status = server.get('firewall', 'Unknown')
+                firewall_status[status] = firewall_status.get(status, 0) + 1
+            
+            output += "🔥 Firewall Status:\n"
+            for status, count in sorted(firewall_status.items()):
+                output += f"  • {status}: {count} servers\n"
+            output += "\n"
+        
+        # Add performance summary with threshold analysis
         cpu_values = [s.get('cpu') for s in results if s.get('cpu') is not None]
         memory_values = [s.get('memory') for s in results if s.get('memory') is not None]
-
+        
         if cpu_values:
             avg_cpu = sum(cpu_values) / len(cpu_values)
+            above_threshold_cpu = len([v for v in cpu_values if v > THRESHOLD_PERCENTAGE])
             output += f"📊 CPU Usage: Avg {avg_cpu:.1f}%, Min {min(cpu_values)}%, Max {max(cpu_values)}%\n"
-
+            output += f"   Above {THRESHOLD_PERCENTAGE}% threshold: {above_threshold_cpu} servers\n"
+        
         if memory_values:
             avg_memory = sum(memory_values) / len(memory_values)
+            above_threshold_memory = len([v for v in memory_values if v > THRESHOLD_PERCENTAGE])
             output += f"💾 Memory Usage: Avg {avg_memory:.1f}%, Min {min(memory_values)}%, Max {max(memory_values)}%\n"
-
+            output += f"   Above {THRESHOLD_PERCENTAGE}% threshold: {above_threshold_memory} servers\n"
+        
         if cpu_values or memory_values:
             output += "\n"
-
+        
         # Show sample
         output += f"📋 Sample (first 5 servers):\n"
         output += format_table(results[:5])
         output += f"\n... and {len(results) - 5} more servers"
-
+        
         return output
 
 def format_table(results: List[Dict]) -> str:
     """Format results as a clean table"""
     if not results:
         return "No data to display"
-
+    
     # Select important columns - updated priority
-    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore',
+    priority_cols = ['id', 'ip_address', 'server_role', 'osVersion', 'ram', 'cpuCore', 
                     'cpu', 'memory', 'firewall', 'dsAgent', 'kernelVersion']
+    
     available_cols = [col for col in priority_cols if col in results[0]]
-
     if not available_cols:
         available_cols = list(results[0].keys())[:8]  # First 8 columns
-
+    
     # Calculate column widths
     col_widths = {}
     for col in available_cols:
         max_width = len(str(col))
         for row in results:
             value = str(row.get(col, 'NULL'))
+            # Add threshold indicator for performance metrics
+            if col in ['cpu', 'memory'] and row.get(col) is not None:
+                try:
+                    if float(row.get(col, 0)) > THRESHOLD_PERCENTAGE:
+                        value += "*"  # Mark values above threshold
+                except:
+                    pass
             max_width = max(max_width, len(value))
         col_widths[col] = min(max_width, 25)  # Max 25 chars
-
+    
     # Build table
     output = []
-
+    
     # Header
     header = " | ".join(col.ljust(col_widths[col]) for col in available_cols)
     separator = "-+-".join("-" * col_widths[col] for col in available_cols)
+    
     output.append(header)
     output.append(separator)
-
+    
     # Rows
     for row in results:
-        formatted_row = " | ".join(
-            str(row.get(col, 'NULL')).ljust(col_widths[col])[:col_widths[col]]
-            for col in available_cols
-        )
-        output.append(formatted_row)
-
+        formatted_row = []
+        for col in available_cols:
+            value = str(row.get(col, 'NULL'))
+            # Add threshold indicator for performance metrics
+            if col in ['cpu', 'memory'] and row.get(col) is not None:
+                try:
+                    if float(row.get(col, 0)) > THRESHOLD_PERCENTAGE:
+                        value += "*"
+                except:
+                    pass
+            formatted_row.append(value.ljust(col_widths[col])[:col_widths[col]])
+        output.append(" | ".join(formatted_row))
+    
+    # Add threshold explanation if any performance data is shown
+    has_performance = any(col in ['cpu', 'memory'] for col in available_cols)
+    if has_performance:
+        output.append("")
+        output.append(f"* Values above {THRESHOLD_PERCENTAGE}% threshold")
+    
     return "\n".join(output)
 
 class SystemComplianceAssistant:
@@ -569,7 +686,7 @@ class SystemComplianceAssistant:
         """Initialize database connection and AI components"""
         try:
             db_config = COMPLIANCE_DB_CONFIG['db_config']
-
+            
             # Direct database connection
             self.db_connection = pymysql.connect(
                 host=db_config['host'],
@@ -580,18 +697,18 @@ class SystemComplianceAssistant:
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True
             )
-
-            # AI components (only initialize when needed)
-            self.llm = OllamaLLM(model="myllm:latest", temperature=0.2)
-
+            
+            # AI components
+            self.llm = OllamaLLM(model="myllm:latest", temperature=0.1)
+            
             # Database chain for complex queries
             uri = f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}/{db_config['database']}"
             db_for_chain = SQLDatabase.from_uri(uri, include_tables=["EISHome_compliance"])
             self.db_chain = create_sql_query_chain(self.llm, db_for_chain)
-
+            
             self.initialized = True
             return True
-
+            
         except Exception as e:
             print(f"❌ Initialization failed: {e}")
             return False
@@ -611,14 +728,17 @@ class SystemComplianceAssistant:
         if not self.initialized:
             if not self.initialize():
                 return "❌ System not available"
-
+        
         start_time = time.time()
         sql_used = None
         response = ""
-
+        
         try:
+            # Replace threshold references in the original query
+            processed_query = replace_threshold_in_query(query)
+            
             # Step 1: Check for simple identifiers (IP, ID, hostname)
-            is_simple, direct_sql = is_simple_identifier(query)
+            is_simple, direct_sql = is_simple_identifier(processed_query)
             if is_simple:
                 print(f"⚡ Fast path - Direct SQL: {direct_sql}")
                 results = self.execute_query(direct_sql)
@@ -626,56 +746,52 @@ class SystemComplianceAssistant:
                 response = format_simple_results(results, query)
                 sql_used = direct_sql
                 return response
-
+            
             # Step 2: Check for simple pattern matches
-            fast_sql = try_fast_query(query)
-            if fast_sql and not is_natural_language_question(query):
+            fast_sql = try_fast_query(processed_query)
+            if fast_sql and not is_natural_language_question(processed_query):
                 print(f"⚡ Fast pattern match: {fast_sql}")
                 results = self.execute_query(fast_sql)
                 elapsed = time.time() - start_time
                 response = format_simple_results(results, query)
                 sql_used = fast_sql
                 return response
-
+            
             # Step 3: Natural language processing with AI
-            if is_natural_language_question(query):
+            if is_natural_language_question(processed_query):
                 print("🧠 Using AI for natural language query")
-
-                # Generate SQL with AI
-                prompt = get_sql_generation_prompt().format(question=query)
-
+                
+                # Generate SQL with AI using processed query (with threshold replacements)
+                prompt = get_sql_generation_prompt().format(question=processed_query)
                 try:
-                    raw_sql = self.db_chain.invoke({"question": query})
+                    raw_sql = self.db_chain.invoke({"question": processed_query})
                 except Exception as e:
                     print(f"❌ AI SQL generation failed: {e}")
                     response = f"❌ Could not generate SQL for: '{query}'"
                     return response
-
+                
                 # Clean and validate SQL
                 sql = clean_and_fix_sql(raw_sql)
-
                 if sql.startswith("ERROR:"):
                     response = sql
                     return response
-
+                
                 sql, is_valid = validate_sql(sql)
-
                 if not is_valid:
                     response = f"❌ Could not generate valid SQL for: '{query}'"
                     return response
-
+                
                 print(f"🔧 Generated SQL: {sql}")
                 sql_used = sql
-
+                
                 # Execute query
                 results = self.execute_query(sql)
-
+                
                 # Analyze results with AI
                 analysis = analyze_results_with_ai(query, results, self.llm)
-
                 elapsed = time.time() - start_time
                 print(f"✅ AI analysis completed in {elapsed:.2f}s")
-
+                
                 # Combine analysis with data
                 if results and len(results) <= 10:
                     response = f"{analysis}\n\n📊 Supporting Data:\n{format_table(results)}"
@@ -683,31 +799,33 @@ class SystemComplianceAssistant:
                     response = f"{analysis}\n\n📊 Sample Data:\n{format_table(results[:5])}\n... ({len(results)} total servers)"
                 else:
                     response = analysis
-
+                
                 return response
-
+            
             # Step 4: Fallback - treat as simple query
             print("🔄 Fallback to simple processing")
+            
             # Try to find any matches in server roles or IP addresses
             fallback_sql = f"""
-            SELECT * FROM EISHome_compliance
-            WHERE ip_address LIKE '%{query}%'
-               OR server_role LIKE '%{query}%'
-               OR CAST(id AS CHAR) LIKE '%{query}%'
-               OR osVersion LIKE '%{query}%'
+                SELECT * FROM EISHome_compliance 
+                WHERE ip_address LIKE '%{processed_query}%' 
+                   OR server_role LIKE '%{processed_query}%' 
+                   OR CAST(id AS CHAR) LIKE '%{processed_query}%' 
+                   OR osVersion LIKE '%{processed_query}%'
             """
+            
             results = self.execute_query(fallback_sql)
             elapsed = time.time() - start_time
             print(f"✅ Fallback completed in {elapsed:.2f}s")
             sql_used = fallback_sql
-
+            
             if results:
                 response = format_simple_results(results, query)
             else:
-                response = f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question like 'What is CPU usage of server X?')."
-
+                response = f"No servers found matching '{query}'. Try being more specific (e.g., IP address, server role, or ask a complete question like 'What servers have CPU usage above threshold?')."
+            
             return response
-
+            
         except Exception as e:
             elapsed = time.time() - start_time
             error_msg = f"❌ Error after {elapsed:.2f}s: {str(e)}"
@@ -715,6 +833,7 @@ class SystemComplianceAssistant:
             print(error_msg)
             traceback.print_exc()
             return response
+            
         finally:
             # Log the interaction
             log_interaction(
@@ -737,24 +856,32 @@ logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 def is_dangerous(text: str) -> bool:
-    """Check for dangerous patterns"""
+    """Check for dangerous patterns - firewall queries are now allowed"""
     if not text or not isinstance(text, str):
         return False
-    return any(re.search(pattern, text.lower()) for pattern in BLOCKED_PATTERNS)
+    
+    text_lower = text.lower()
+    
+    # Allow all firewall-related queries
+    if any(phrase in text_lower for phrase in ["firewall", "firewall status", "firewall active", "firewall inactive"]):
+        return False
+    
+    return any(re.search(pattern, text_lower) for pattern in BLOCKED_PATTERNS)
 
 def ComplianceMain(query):
     """Main entry point"""
     start_time = time.time()
+    
     if not query or not isinstance(query, str):
         response = "❌ Invalid query provided"
         log_interaction(query, response, None, time.time() - start_time)
         return response
-
+    
     if is_dangerous(query):
         response = "❌ Query blocked for security reasons"
         log_interaction(query, response, None, time.time() - start_time)
         return response
-
+    
     assistant = SystemComplianceAssistant()
     try:
         response = assistant.process_query(query)
@@ -764,8 +891,10 @@ def ComplianceMain(query):
 
 # Interactive mode
 if __name__ == "__main__":
-    print("🚀 Smart System Compliance Assistant - Updated with Full Schema")
-    print("=" * 60)
+    print("🚀 Smart System Compliance Assistant - Enhanced with Threshold Support")
+    print("=" * 80)
+    print(f"📊 System Threshold: {THRESHOLD_PERCENTAGE}% (for performance metrics)")
+    print("=" * 80)
     print("💡 Usage Examples:")
     print("  Simple Queries:")
     print("    '10.188.24.100' - Get server by IP")
@@ -774,13 +903,21 @@ if __name__ == "__main__":
     print("    'cpu' - Show CPU usage for all servers")
     print("    'memory' - Show memory usage for all servers")
     print("    'count' - Count total servers")
+    print("    'firewall' - Show firewall status for all servers")
+    print("    'firewall active' - Show servers with active firewall")
+    print("")
+    print("  Threshold-Based Queries:")
+    print("    'cpu above threshold' - Servers with CPU > 70%")
+    print("    'memory over threshold' - Servers with memory > 70%")
+    print("    'servers above threshold' - Servers with CPU or memory > 70%")
+    print("    'what servers have cpu usage above threshold' - Natural language")
     print("")
     print("  Complex Questions:")
     print("    'What is CPU usage of server 10.1.1.1?'")
     print("    'Which servers have high memory usage?'")
-    print("    'Do all servers have same kernel version?'")
     print("    'Show servers with firewall disabled'")
     print("    'What are the ACE versions across servers?'")
+    print("    'How many servers have CPU usage above threshold?'")
     print("    'Which servers need user password expiry updates?'")
     print("")
     print("  Available Fields:")
@@ -789,23 +926,25 @@ if __name__ == "__main__":
     print("    Software: aceVersion, mqVersion, firewall, dsAgent, splunk")
     print("    Security: eisuserExpi, rootExpi, socvaExpi, addmitamExpi")
     print("    Info: server_role, ip_address, last_update")
+    print(f"\n⚙️  Threshold Configuration: {THRESHOLD_PERCENTAGE}%")
+    print("    Use 'threshold' in queries to reference this value")
     print("\nType 'exit' to quit.\n")
-
+    
     while True:
         try:
             user_query = input("🔍 Query: ").strip()
-
+            
             if not user_query:
                 continue
-
+                
             if user_query.lower() in ['exit', 'quit', 'q']:
                 print("👋 Goodbye!")
                 break
-
+            
             result = ComplianceMain(user_query)
             print(f"\n{result}\n")
             print("-" * 60)
-
+            
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
             break
