@@ -1,495 +1,1122 @@
-=== Red Hat System Report === 2025-07-23 16:56:47
-
-
-=== System Overview ===
-
-Red Hat Enterprise Linux release 9.6 (Plow)
-
-Linux eispr-prt1-01 5.14.0-570.19.1.el9_6.x86_64 #1 SMP PREEMPT_DYNAMIC Sat May 24 15:55:19 EDT 2025 x86_64 x86_64 x86_64 GNU/Linux
-
-
-=== Top Processes ===
-
-top - 16:56:48 up 36 days, 19:40,  4 users,  load average: 3.95, 5.60, 7.31
-Tasks: 662 total,   2 running, 656 sleeping,   0 stopped,   4 zombie
-%Cpu(s):  2.8 us,  2.4 sy,  0.0 ni, 94.8 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
-MiB Mem :  63779.9 total,  12972.3 free,  11713.2 used,  41122.1 buff/cache
-MiB Swap:  10240.0 total,   9632.9 free,    607.1 used.  52066.8 avail Mem
-
-    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-3829202 root      20   0 9246772 596924  62360 S  35.3   0.9 156:45.52 ds_am
-4175570 root      20   0   11720   5376   3840 R  17.6   0.0   0:00.04 top
-   1912 root      20   0 3915772 938056  27492 S  11.8   1.4  21023:31 ds_agent
-4175586 root      20   0   22404  12032  10240 S  11.8   0.0   0:00.02 sshd
-      1 root      20   0  176416  16828  10496 R   5.9   0.0   3380:17 systemd
-   1880 mysql     20   0   11.9g   1.4g  38144 S   5.9   2.2   1196:23 mysqld
-  99364 root      20   0 9951.9m 553692  32752 S   5.9   0.8 636:18.61 vls_am
- 162360 root      20   0  259824  18788  14080 S   5.9   0.0  52:20.18 Network+
-3826008 root      20   0       0      0      0 I   5.9   0.0   0:00.32 kworker+
-      2 root      20   0       0      0      0 S   0.0   0.0   0:15.27 kthreadd
-      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_wo+
-      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
-      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
-
-
-=== Service Status ===
-
-  UNIT                          LOAD   ACTIVE SUB     DESCRIPTION
-  auditd.service                loaded active running Security Auditing Service
-  chronyd.service               loaded active running NTP client/server
-  commvault.Instance001.service loaded active running commvault Service
-  crond.service                 loaded active running Command Scheduler
-  Database_dev.service          loaded active running DJango Development Server
-  dbus-broker.service           loaded active running D-Bus System Message Bus
-  Django_dev.service            loaded active running DJango Development Server
-  ds_agent.service              loaded active running Trend Micro Deep Security Agent
-  firewalld.service             loaded active running firewalld - dynamic firewall daemon
-  getty@tty1.service            loaded active running Getty on tty1
-  gssproxy.service              loaded active running GSSAPI Proxy Daemon
-  httpd.service                 loaded active running The Apache HTTP Server
-  irqbalance.service            loaded active running irqbalance daemon
-  mysqld.service                loaded active running MySQL 8.0 database server
-  NetworkManager.service        loaded active running Network Manager
-  nginx.service                 loaded active running nginx - high performance web server
-  oneagent.service              loaded active running Dynatrace OneAgent
-  php-fpm.service               loaded active running The PHP FastCGI Process Manager
-  polkit.service                loaded active running Authorization Manager
-  portal.api.service            loaded active running Node(Port_monitoring) backend
-  rhsmcertd.service             loaded active running Enable periodic update of entitlement certificates.
-  rscd.service                  loaded active running BladeLogic Remote System Call Daemon
-  rsyslog.service               loaded active running System Logging Service
-  serial-getty@ttyS0.service    loaded active running Serial Getty on ttyS0
-  sshd.service                  loaded active running OpenSSH server daemon
-  systemd-journald.service      loaded active running Journal Service
-  systemd-logind.service        loaded active running User Login Management
-  systemd-udevd.service         loaded active running Rule-based Manager for Device Events and Files
-  Test_dev.service              loaded active running DJango Development Server
-  tmxbc.service                 loaded active running Endpoint Basecamp service
-  tuned.service                 loaded active running Dynamic System Tuning Daemon
-  user@0.service                loaded active running User Manager for UID 0
-  user@1001.service             loaded active running User Manager for UID 1001
-  vls_agent.service             loaded active running Trend Micro Vision One Endpoint Agent
-
-LOAD   = Reflects whether the unit definition was properly loaded.
-ACTIVE = The high-level unit activation state, i.e. generalization of SUB.
-SUB    = The low-level unit activation state, values depend on unit type.
-34 loaded units listed.
-
-
-=== Failed Services ===
-
-  UNIT LOAD ACTIVE SUB DESCRIPTION
-0 loaded units listed.
-
-
-=== CPU Utilization ===
-
-Linux 5.14.0-570.19.1.el9_6.x86_64 (eispr-prt1-01)      07/23/25        _x86_64_        (32 CPU)
-
-16:56:48     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
-16:56:49     all    2.42    0.00    1.79    0.03    0.00    0.00    0.00    0.00    0.00   95.76
-16:56:49       0    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-16:56:49       1   11.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   89.00
-16:56:49       2    3.03    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   94.95
-16:56:49       3    1.00    0.00    3.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
-16:56:49       4    2.04    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   95.92
-16:56:49       5    0.00    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   98.99
-16:56:49       6    2.02    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   95.96
-16:56:49       7    1.02    0.00    1.02    0.00    0.00    0.00    0.00    0.00    0.00   97.96
-16:56:49       8    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
-16:56:49       9    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-16:56:49      10    3.03    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   93.94
-16:56:49      11    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-16:56:49      12    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
-16:56:49      13    3.00    0.00    1.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
-16:56:49      14    2.02    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   96.97
-16:56:49      15   10.10    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   88.89
-16:56:49      16    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
-16:56:49      17    1.00    0.00    2.00    0.00    0.00    0.00    0.00    0.00    0.00   97.00
-16:56:49      18    2.00    0.00    5.00    0.00    0.00    0.00    0.00    0.00    0.00   93.00
-16:56:49      19    1.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   99.00
-16:56:49      20    3.03    0.00    6.06    0.00    0.00    0.00    0.00    0.00    0.00   90.91
-16:56:49      21    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-16:56:49      22    5.05    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   91.92
-16:56:49      23    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-16:56:49      24    3.88    0.00    2.91    0.97    0.00    0.00    0.00    0.00    0.00   92.23
-16:56:49      25    0.99    0.00    0.99    0.00    0.00    0.00    0.00    0.00    0.00   98.02
-16:56:49      26    5.05    0.00    4.04    0.00    0.00    0.00    0.00    0.00    0.00   90.91
-16:56:49      27    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-16:56:49      28    3.06    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   94.90
-16:56:49      29    2.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   98.00
-16:56:49      30    3.09    0.00    2.06    0.00    0.00    0.00    0.00    0.00    0.00   94.85
-16:56:49      31    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-
-Average:     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
-Average:     all    2.42    0.00    1.79    0.03    0.00    0.00    0.00    0.00    0.00   95.76
-Average:       0    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-Average:       1   11.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   89.00
-Average:       2    3.03    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   94.95
-Average:       3    1.00    0.00    3.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
-Average:       4    2.04    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   95.92
-Average:       5    0.00    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   98.99
-Average:       6    2.02    0.00    2.02    0.00    0.00    0.00    0.00    0.00    0.00   95.96
-Average:       7    1.02    0.00    1.02    0.00    0.00    0.00    0.00    0.00    0.00   97.96
-Average:       8    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
-Average:       9    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-Average:      10    3.03    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   93.94
-Average:      11    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-Average:      12    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
-Average:      13    3.00    0.00    1.00    0.00    0.00    0.00    0.00    0.00    0.00   96.00
-Average:      14    2.02    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   96.97
-Average:      15   10.10    0.00    1.01    0.00    0.00    0.00    0.00    0.00    0.00   88.89
-Average:      16    2.97    0.00    3.96    0.00    0.00    0.00    0.00    0.00    0.00   93.07
-Average:      17    1.00    0.00    2.00    0.00    0.00    0.00    0.00    0.00    0.00   97.00
-Average:      18    2.00    0.00    5.00    0.00    0.00    0.00    0.00    0.00    0.00   93.00
-Average:      19    1.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   99.00
-Average:      20    3.03    0.00    6.06    0.00    0.00    0.00    0.00    0.00    0.00   90.91
-Average:      21    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-Average:      22    5.05    0.00    3.03    0.00    0.00    0.00    0.00    0.00    0.00   91.92
-Average:      23    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-Average:      24    3.88    0.00    2.91    0.97    0.00    0.00    0.00    0.00    0.00   92.23
-Average:      25    0.99    0.00    0.99    0.00    0.00    0.00    0.00    0.00    0.00   98.02
-Average:      26    5.05    0.00    4.04    0.00    0.00    0.00    0.00    0.00    0.00   90.91
-Average:      27    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-Average:      28    3.06    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   94.90
-Average:      29    2.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00   98.00
-Average:      30    3.09    0.00    2.06    0.00    0.00    0.00    0.00    0.00    0.00   94.85
-Average:      31    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00    0.00  100.00
-
-Architecture:                         x86_64
-CPU op-mode(s):                       32-bit, 64-bit
-Address sizes:                        40 bits physical, 57 bits virtual
-Byte Order:                           Little Endian
-CPU(s):                               32
-On-line CPU(s) list:                  0-31
-Vendor ID:                            GenuineIntel
-BIOS Vendor ID:                       QEMU
-Model name:                           Intel Xeon Processor (Icelake)
-BIOS Model name:                      pc-i440fx-4.2
-CPU family:                           6
-Model:                                134
-Thread(s) per core:                   2
-Core(s) per socket:                   16
-Socket(s):                            1
-Stepping:                             0
-BogoMIPS:                             5187.92
-Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves wbnoinvd arat vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 md_clear arch_capabilities
-Virtualization:                       VT-x
-Hypervisor vendor:                    KVM
-Virtualization type:                  full
-L1d cache:                            1 MiB (32 instances)
-L1i cache:                            1 MiB (32 instances)
-L2 cache:                             64 MiB (16 instances)
-L3 cache:                             16 MiB (1 instance)
-NUMA node(s):                         1
-NUMA node0 CPU(s):                    0-31
-Vulnerability Gather data sampling:   Not affected
-Vulnerability Itlb multihit:          Not affected
-Vulnerability L1tf:                   Not affected
-Vulnerability Mds:                    Not affected
-Vulnerability Meltdown:               Not affected
-Vulnerability Mmio stale data:        Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
-Vulnerability Reg file data sampling: Vulnerable: No microcode
-Vulnerability Retbleed:               Not affected
-Vulnerability Spec rstack overflow:   Not affected
-Vulnerability Spec store bypass:      Mitigation; Speculative Store Bypass disabled via prctl
-Vulnerability Spectre v1:             Mitigation; usercopy/swapgs barriers and __user pointer sanitization
-Vulnerability Spectre v2:             Mitigation; Enhanced / Automatic IBRS; IBPB conditional; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop
-Vulnerability Srbds:                  Not affected
-Vulnerability Tsx async abort:        Not affected
-
-
-=== CPU Frequency ===
-
-analyzing CPU 10:
-  no or unknown cpufreq driver is active on this CPU
-  CPUs which run at the same hardware frequency: Not Available
-  CPUs which need to have their frequency coordinated by software: Not Available
-  maximum transition latency:  Cannot determine or is not supported.
-Not Available
-  available cpufreq governors: Not Available
-  Unable to determine current policy
-  current CPU frequency: Unable to call hardware
-  current CPU frequency:  Unable to call to kernel
-  boost state support:
-    Supported: no
-    Active: no
-
-
-=== Memory Usage ===
-
-               total        used        free      shared  buff/cache   available
-Mem:            62Gi        11Gi        12Gi       1.3Gi        40Gi        50Gi
-Swap:            9Gi       607Mi       9.4Gi
-
-
-=== Huge Pages ===
-
-AnonHugePages:   4313088 kB
-ShmemHugePages:        0 kB
-FileHugePages:         0 kB
-HugePages_Total:       0
-HugePages_Free:        0
-HugePages_Rsvd:        0
-HugePages_Surp:        0
-Hugepagesize:       2048 kB
-Hugetlb:               0 kB
-
-
-=== Disk Usage ===
-
-Filesystem                       Type      Size  Used Avail Use% Mounted on
-devtmpfs                         devtmpfs  4.0M     0  4.0M   0% /dev
-tmpfs                            tmpfs      32G  8.0K   32G   1% /dev/shm
-tmpfs                            tmpfs      13G  1.3G   12G  11% /run
-/dev/mapper/rootvg-rootlv        xfs        30G   16G   15G  53% /
-/dev/mapper/rootvg-usrlv         xfs        10G  4.4G  5.7G  44% /usr
-/dev/mapper/rootvg-homelv        xfs        30G   18G   13G  59% /home
-/dev/mapper/rootvg-varlv         xfs        30G   25G  5.9G  81% /var
-/dev/mapper/rootvg-optlv         xfs        20G   13G  7.8G  62% /opt
-/dev/mapper/rootvg-tmplv         xfs        10G  673M  9.4G   7% /tmp
-/dev/mapper/portal-mysql         xfs        50G   33G   18G  65% /mysql
-/dev/sda3                        xfs      1014M  424M  591M  42% /boot
-/dev/mapper/rootvg-homescriptslv xfs       5.0G  2.3G  2.8G  46% /home/scripts
-/dev/mapper/portal-PortalHub     xfs       100G   78G   23G  78% /opt/apache-tomcat
-/dev/mapper/portal-audit_log     xfs        99G   17G   83G  17% /var/log/audit
-/dev/sda2                        vfat      200M  7.0M  193M   4% /efi
-tmpfs                            tmpfs     6.3G     0  6.3G   0% /run/user/1001
-tmpfs                            tmpfs     6.3G     0  6.3G   0% /run/user/0
-/dev/loop0                       iso9660    11G   11G     0 100% /var/www/html
-
-
-=== LVM Information ===
-
-  PV         VG     Fmt  Attr PSize    PFree
-  /dev/sda4  rootvg lvm2 a--   135.00g       0
-  /dev/sda5  rootvg lvm2 a--   <13.80g   <3.80g
-  /dev/sdb1  portal lvm2 a--  <250.00g 1020.00m
-
-  VG     #PV #LV #SN Attr   VSize    VFree
-  portal   1   3   0 wz--n- <250.00g 1020.00m
-  rootvg   2   8   0 wz--n- <148.80g   <3.80g
-
-  LV            VG     Attr       LSize   Pool Origin Data%  Meta%  Move Log Cpy%Sync Convert
-  PortalHub     portal -wi-ao---- 100.00g
-  audit_log     portal -wi-ao----  99.00g
-  mysql         portal -wi-ao----  50.00g
-  homelv        rootvg -wi-ao----  30.00g
-  homescriptslv rootvg -wi-ao----   5.00g
-  optlv         rootvg -wi-ao----  20.00g
-  rootlv        rootvg -wi-ao----  30.00g
-  swap          rootvg -wi-ao----  10.00g
-  tmplv         rootvg -wi-ao----  10.00g
-  usrlv         rootvg -wi-ao----  10.00g
-  varlv         rootvg -wi-ao----  30.00g
-
-
-=== Large Directories ===
-
-
---- / ---
-
-85G     //opt
-52G     //var
-32G     //mysql
-18G     //home
-8.5G    //mysql-data
-4.2G    //usr
-2.5G    //apache-tomcat_avinash.tar
-2.4G    //scripts_30_09_2024.tar
-1.3G    //run
-842M    //log_temp
-648M    //root
-569M    //tmp
-390M    //webapps_30_09_2024.tar
-385M    //boot
-188M    //chatBot
-152M    //messages-20240922_26092024.gz
-28M     //etc
-7.0M    //efi
-232K    //nmap-ncat-7.91-12.el9.x86_64.rpm
-40K     //sop_portal
-
-
---- /home ---
-
-12G     /home/eisuser
-2.3G    /home/mysql_BKUP
-2.2G    /home/scripts
-1.5G    /home/tcs919358
-681M    /home/New_Folder
-35M     /home/addmitam
-180K    /home/SOCVA
-112K    /home/nginx
-32K     /home/home
-28K     /home/splunk
-20K     /home/cloud-user
-16K     /home/test
-4.0K    /home/eissftp
-4.0K    /home/EISHOME
-
-
---- /var ---
-
-22G     /var/www
-18G     /var/log
-9.9G    /var/spool
-2.2G    /var/lib
-760M    /var/opt
-36M     /var/cache
-52K     /var/mqsi
-4.0K    /var/tmp
-0       /var/yp
-0       /var/run
-0       /var/preserve
-0       /var/nis
-0       /var/mqm
-0       /var/mail
-0       /var/lock
-0       /var/local
-0       /var/kerberos
-0       /var/games
-0       /var/ftp
-0       /var/empty
-
-
---- /var/log ---
-
-16G     /var/log/audit
-695M    /var/log/messages
-320M    /var/log/secure
-154M    /var/log/nginx
-108M    /var/log/warn
-78M     /var/log/commvault
-75M     /var/log/messages_10072025.tar.gz
-69M     /var/log/wtmp-20250701
-65M     /var/log/messages_18072025.gz
-64M     /var/log/secure_10072025.tar.gz
-58M     /var/log/sa
-55M     /var/log/secure_18072025.gz
-49M     /var/log/mail_07072025.gz
-49M     /var/log/mail.info_07072025.gz
-42M     /var/log/messages_15072025.gz
-41M     /var/log/messages_22072025.tar.gz
-41M     /var/log/dynatrace
-40M     /var/log/messages-20250713.gz
-36M     /var/log/secure_22072025.tar.gz
-36M     /var/log/secure_15072025.gz
-
-
---- /opt ---
-
-77G     /opt/apache-tomcat
-4.2G    /opt/IBM
-1.5G    /opt/dynatrace
-1.1G    /opt/commvault
-690M    /opt/splunkforwarder
-217M    /opt/ds_agent
-200M    /opt/TrendMicro
-109M    /opt/bmc
-32K     /opt/apache-tomcat_bad_bkp
-0       /opt/mqm
-
-
---- /usr ---
-
-1.8G    /usr/lib
-840M    /usr/share
-813M    /usr/lib64
-350M    /usr/bin
-198M    /usr/libexec
-136M    /usr/src
-55M     /usr/sbin
-36M     /usr/local
-31M     /usr/include
-0       /usr/tmp
-0       /usr/java
-0       /usr/games
-0       /usr/etc
-
-
-=== Network Connections ===
-
-Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
-udp   UNCONN 0      0            0.0.0.0:111        0.0.0.0:*    users:(("systemd",pid=1,fd=68))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
-udp   UNCONN 0      0          127.0.0.1:323        0.0.0.0:*    users:(("chronyd",pid=1459,fd=5))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-udp   UNCONN 0      0          127.0.0.1:18125      0.0.0.0:*    users:(("oneagentsources",pid=72633,fd=7))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
-udp   UNCONN 0      0               [::]:111           [::]:*    users:(("systemd",pid=1,fd=70))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
-udp   UNCONN 0      0              [::1]:323           [::]:*    users:(("chronyd",pid=1459,fd=6))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=1577,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
-tcp   LISTEN 0      511          0.0.0.0:80         0.0.0.0:*    users:(("nginx",pid=2801537,fd=6),("nginx",pid=2801535,fd=6),("nginx",pid=2801534,fd=6),("nginx",pid=2801533,fd=6),("nginx",pid=2801532,fd=6),("nginx",pid=2801530,fd=6),("nginx",pid=2801527,fd=6),("nginx",pid=2801524,fd=6),("nginx",pid=2801519,fd=6),("nginx",pid=2801513,fd=6),("nginx",pid=2801509,fd=6),("nginx",pid=2801499,fd=6),("nginx",pid=2801498,fd=6),("nginx",pid=2801495,fd=6),("nginx",pid=2801489,fd=6),("nginx",pid=2801487,fd=6),("nginx",pid=2801486,fd=6),("nginx",pid=2801483,fd=6),("nginx",pid=2801480,fd=6),("nginx",pid=2801478,fd=6),("nginx",pid=2801476,fd=6),("nginx",pid=2801474,fd=6),("nginx",pid=2801473,fd=6),("nginx",pid=2801472,fd=6),("nginx",pid=2801471,fd=6),("nginx",pid=2801469,fd=6),("nginx",pid=2801466,fd=6),("nginx",pid=2801465,fd=6),("nginx",pid=2801463,fd=6),("nginx",pid=2801462,fd=6),("nginx",pid=2801461,fd=6),("nginx",pid=2801460,fd=6),("nginx",pid=2801458,fd=6))
-tcp   LISTEN 0      4096         0.0.0.0:111        0.0.0.0:*    users:(("systemd",pid=1,fd=67))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
-tcp   LISTEN 0      8            0.0.0.0:34099      0.0.0.0:*    users:(("ClMgrS",pid=508372,fd=13))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      4096         0.0.0.0:39579      0.0.0.0:*    users:(("cvfwd",pid=508371,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-tcp   LISTEN 0      100          0.0.0.0:8090       0.0.0.0:*    users:(("java",pid=1614296,fd=131))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      100          0.0.0.0:8009       0.0.0.0:*    users:(("java",pid=1614296,fd=134))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      511          0.0.0.0:5443       0.0.0.0:*    users:(("httpd",pid=3745495,fd=3),("httpd",pid=3745494,fd=3),("httpd",pid=3745490,fd=3),("httpd",pid=2780404,fd=3),("httpd",pid=1690938,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
-tcp   LISTEN 0      8            0.0.0.0:44019      0.0.0.0:*    users:(("cvd",pid=508370,fd=6))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
-tcp   LISTEN 0      4096         0.0.0.0:8403       0.0.0.0:*    users:(("cvfwd",pid=508371,fd=12))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
-tcp   LISTEN 0      64           0.0.0.0:8400       0.0.0.0:*    users:(("cvd",pid=508370,fd=5))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
-tcp   LISTEN 0      511          0.0.0.0:9090       0.0.0.0:*    users:(("nginx",pid=2801537,fd=7),("nginx",pid=2801535,fd=7),("nginx",pid=2801534,fd=7),("nginx",pid=2801533,fd=7),("nginx",pid=2801532,fd=7),("nginx",pid=2801530,fd=7),("nginx",pid=2801527,fd=7),("nginx",pid=2801524,fd=7),("nginx",pid=2801519,fd=7),("nginx",pid=2801513,fd=7),("nginx",pid=2801509,fd=7),("nginx",pid=2801499,fd=7),("nginx",pid=2801498,fd=7),("nginx",pid=2801495,fd=7),("nginx",pid=2801489,fd=7),("nginx",pid=2801487,fd=7),("nginx",pid=2801486,fd=7),("nginx",pid=2801483,fd=7),("nginx",pid=2801480,fd=7),("nginx",pid=2801478,fd=7),("nginx",pid=2801476,fd=7),("nginx",pid=2801474,fd=7),("nginx",pid=2801473,fd=7),("nginx",pid=2801472,fd=7),("nginx",pid=2801471,fd=7),("nginx",pid=2801469,fd=7),("nginx",pid=2801466,fd=7),("nginx",pid=2801465,fd=7),("nginx",pid=2801463,fd=7),("nginx",pid=2801462,fd=7),("nginx",pid=2801461,fd=7),("nginx",pid=2801460,fd=7),("nginx",pid=2801458,fd=7))
-tcp   LISTEN 0      100          0.0.0.0:9091       0.0.0.0:*    users:(("java",pid=1614296,fd=133))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      128    10.188.24.100:9966       0.0.0.0:*    users:(("python3.9",pid=537317,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
-tcp   LISTEN 0      200        127.0.0.1:41835      0.0.0.0:*    users:(("cvd",pid=508370,fd=11))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
-tcp   LISTEN 0      4096       127.0.0.1:11434      0.0.0.0:*    users:(("ollama",pid=1550163,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      15         127.0.0.1:14118      0.0.0.0:*    users:(("vls_agent",pid=3758192,fd=15))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
-tcp   LISTEN 0      128        127.0.0.1:14499      0.0.0.0:*    users:(("oneagentextensi",pid=4732,fd=18))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
-tcp   LISTEN 0      1000       127.0.0.1:3306       0.0.0.0:*    users:(("mysqld",pid=1880,fd=23))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-tcp   LISTEN 0      10         127.0.0.1:5345       0.0.0.0:*    users:(("python3.9",pid=2965094,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
-tcp   LISTEN 0      10         127.0.0.1:5543       0.0.0.0:*    users:(("python3.9",pid=453807,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
-tcp   LISTEN 0      10         127.0.0.1:5544       0.0.0.0:*    users:(("python3.11",pid=825557,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
-tcp   LISTEN 0      1          127.0.0.1:8005       0.0.0.0:*    users:(("java",pid=1614296,fd=148))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=1577,fd=4))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
-tcp   LISTEN 0      4096            [::]:111           [::]:*    users:(("systemd",pid=1,fd=69))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
-tcp   LISTEN 0      70                 *:33060            *:*    users:(("mysqld",pid=1880,fd=21))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-tcp   LISTEN 0      4096               *:39577            *:*    users:(("cvfwd",pid=508371,fd=8))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
-tcp   LISTEN 0      15                 *:4118             *:*    users:(("ds_agent",pid=1912,fd=15))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-tcp   LISTEN 0      4096               *:4750             *:*    users:(("rscd",pid=245560,fd=5))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
-tcp   LISTEN 0      511                *:5554             *:*    users:(("node",pid=1792740,fd=30))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
-
-
-=== Firewall Status ===
-
-running
-
-public (active)
-  target: default
-  icmp-block-inversion: no
-  interfaces: eth0
-  sources:
-  services: cockpit dhcpv6-client ssh
-  ports: 9966/tcp 8400/tcp 8403/tcp 8401/tcp 5443/tcp 4750/tcp
-  protocols:
-  forward: yes
-  masquerade: no
-  forward-ports:
-  source-ports:
-  icmp-blocks:
-  rich rules:
-
-
-=== SELinux Status ===
-
-SELinux status:                 disabled
-
-
-=== Available Updates ===
-
-Updating Subscription Management repositories.
-Unable to read consumer identity
-
-This system is not registered with an entitlement server. You can use subscription-manager to register.
-
-Last metadata expiration check: 2:47:16 ago on Wed Jul 23 14:09:44 2025.
-
-
-=== System Uptime ===
-
- 16:57:01 up 36 days, 19:40,  4 users,  load average: 4.04, 5.56, 7.28
-
-4.04 5.56 7.28 4/1745 4177893
-
-
-=== Kernel Messages ===
-
--- No entries --
+===================================================================                                                                    =============
+📅 2025-08-13 17:20:50
+
+❓ QUESTION: list all PR linux servers
+
+🔧 SQL USED: SELECT * FROM `EISHome_compliance` WHERE `server_role`                                                                     = 'PR LINUX';
+
+⏱️ TIME TAKEN: 46.26 seconds
+
+💡 ANSWER:
+Based on the provided system compliance data, I can answer your que                                                                    stion:
+
+**List all PR Linux servers:**
+
+Yes, there is at least one server that matches the "PR LINUX" role.
+
+No further information is available about these servers as the data                                                                     only provides a count of 1 for this field.
+
+📊 Sample Data:
+id  | ip_address    | server_role | osVersion | ram | cpuCore | cpu                                                                     | memory | firewall | dsAgent   | kernelVersion
+----+---------------+-------------+-----------+-----+---------+----                                                                    -+--------+----------+-----------+--------------------------
+133 | 10.188.24.10  | PR LINUX    | 9.6(Plow) | 64  | 4       | 32                                                                      | 62     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+134 | 10.188.24.101 | PR LINUX    | 9.6(Plow) | 64  | 4       | 10                                                                      | 33     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+135 | 10.188.24.11  | PR LINUX    | 9.6(Plow) | 64  | 4       | 44                                                                      | 61     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+136 | 10.188.24.110 | PR LINUX    | 9.6(Plow) | 64  | 8       | 88                                                                      | 61     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+137 | 10.188.24.111 | PR LINUX    | 9.6(Plow) | 64  | 8       | 76                                                                      | 61     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+... (15 total servers)
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:21:21
+
+❓ QUESTION: 10.188.24.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.24.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 133
+🌐 IP Address: 10.188.24.10
+🏷️ Role: PR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.26.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 31%
+💾 Memory Usage: 62%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 2 weeks 3 days 16 hours 13 minutes
+🔄 Last Update: 2025-08-13 05:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:22:31
+
+❓ QUESTION: give me servers with uptime less than 2 weeks
+
+🔧 SQL USED: SELECT `ip_address`, `upTime` FROM `EISHome_compliance                                                                    ` WHERE `upTime` < '1 week 3 days' LIMIT 5;
+
+⏱️ TIME TAKEN: 47.79 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+**Answer:** No servers have uptime less than 2 weeks.
+
+**Specific differences or issues found:** Since there are only 2 to                                                                    tal servers, it's not possible for any of them to have an uptime le                                                                    ss than 2 weeks. The data doesn't indicate any specific issues with                                                                     server performance or downtime.
+
+**Key statistics or patterns:** Not applicable in this case since t                                                                    here is no relevant data available.
+
+**Actionable insights:** Since all servers have an uptime greater t                                                                    han or equal to 2 weeks, it's likely that the system is functioning                                                                     well overall. However, it would be beneficial to monitor server pe                                                                    rformance and uptime regularly to identify any potential issues bef                                                                    ore they become critical.
+
+No specific performance metrics (CPU, memory) are provided in this                                                                     data summary, so I won't highlight high/low values or averages.
+
+📊 Supporting Data:
+ip_address
+-------------
+10.177.40.164
+10.177.41.164
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:23:44
+
+❓ QUESTION: what is uptime of 10.177.40.164
+
+🔧 SQL USED: SELECT `upTime` FROM `EISHome_compliance` WHERE `ip_ad                                                                    dress` = '10.177.40.164';
+
+⏱️ TIME TAKEN: 52.43 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+**Uptime of 10.177.40.164:** Unfortunately, there is no uptime data                                                                     available for this IP address since it's not a server with perform                                                                    ance monitoring enabled.
+
+Since there is only one total server and no field analysis data ava                                                                    ilable, we cannot provide any specific differences or issues found.
+
+Key statistics or patterns: None applicable.
+
+Actionable insights: Since there is no uptime data available, we ca                                                                    nnot determine the availability of this IP address. If you need to                                                                     monitor the uptime of this IP address, please enable performance mo                                                                    nitoring on the server.
+
+Please note that this response is based solely on the provided syst                                                                    em compliance data and does not include any additional information                                                                     or assumptions.
+
+📊 Supporting Data:
+upTime
+-----------------------
+1 day 15 hours 1 minute
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:25:04
+
+❓ QUESTION: 10.177.40.164
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.164'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 32
+🌐 IP Address: 10.177.40.164
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.28.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 37%
+💾 Memory Usage: 69%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 1 day 15 hours 1 minute
+🔄 Last Update: 2025-08-13 04:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:26:07
+
+❓ QUESTION: give me top five systems with highest uptime
+
+🔧 SQL USED: SELECT `ip_address`, `upTime` FROM `EISHome_compliance                                                                    ` ORDER BY STR_TO_DATE(`upTime`, '%w %d %H %i') DESC LIMIT 5;
+
+⏱️ TIME TAKEN: 43.04 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+Top five systems with highest uptime are not available in the given                                                                     data summary. The total number of servers is 5, but there is no in                                                                    formation about system uptimes.
+
+However, if you're looking for insights on server performance, here                                                                    's what I can provide:
+
+* There is no CPU or memory usage data available.
+* Since there is no field analysis provided, we cannot identify any                                                                     specific differences or issues found in the systems.
+
+To answer your original question, I would need more information abo                                                                    ut system uptimes. If you could provide that data, I'd be happy to                                                                     help you identify the top five systems with highest uptime.
+
+📊 Supporting Data:
+ip_address
+-------------
+10.177.40.10
+10.177.40.101
+10.177.40.102
+10.177.40.11
+10.177.40.110
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:26:30
+
+❓ QUESTION: 10.177.40.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 1
+🌐 IP Address: 10.177.40.10
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.25.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 8%
+💾 Memory Usage: 34%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 5 days 3 hours 3 minutes
+🔄 Last Update: 2025-08-13 05:00:03 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:26:39
+
+❓ QUESTION: 10.177.40.101
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.101'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 2
+🌐 IP Address: 10.177.40.101
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.25.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 1%
+💾 Memory Usage: 16%
+🔥 Firewall: inactive
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 5 days 2 hours 52 minutes
+🔄 Last Update: 2025-08-13 03:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:26:48
+
+❓ QUESTION: 10.177.40.102
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.102'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 3
+🌐 IP Address: 10.177.40.102
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.25.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 2%
+💾 Memory Usage: 17%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 5 days 2 hours 49 minutes
+🔄 Last Update: 2025-08-13 03:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:26:58
+
+❓ QUESTION: 10.177.40.11
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.11'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 4
+🌐 IP Address: 10.177.40.11
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.25.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 6%
+💾 Memory Usage: 36%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 5 days 2 hours 3 minutes
+🔄 Last Update: 2025-08-13 04:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:27:07
+
+❓ QUESTION: 10.177.40.110
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.110'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 5
+🌐 IP Address: 10.177.40.110
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.21.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 8 cores
+🖥️ CPU Usage: 2%
+💾 Memory Usage: 37%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 8 weeks 2 days 5 hours 31 minutes
+🔄 Last Update: 2025-08-13 05:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:28:32
+
+❓ QUESTION: give me servers with uptime higher than 3 weeks 5 days                                                                     2 hours 3 minutes
+
+🔧 SQL USED: SELECT `upTime` FROM `EISHome_compliance` WHERE `upTim                                                                    e` > '3 weeks 5 days 2 hours 3 minutes' LIMIT 0, 5;
+
+⏱️ TIME TAKEN: 46.53 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+**Direct Answer:** No servers have an uptime higher than 3 weeks 5                                                                     days 2 hours 3 minutes.
+
+**Specific Differences or Issues Found:** The analysis reveals that                                                                     none of the 5 servers meet the specified uptime criteria. This cou                                                                    ld indicate potential issues with server maintenance, monitoring, o                                                                    r overall system performance.
+
+**Key Statistics or Patterns:** No specific statistics or patterns                                                                     are available for this query as there is no data on individual serv                                                                    er uptimes.
+
+**Actionable Insights:** To improve server uptime and meet the desi                                                                    red threshold, consider implementing regular maintenance schedules,                                                                     monitoring server performance, and addressing any potential issues                                                                     promptly. Additionally, consider reviewing system logs to identify                                                                     trends and areas for improvement.
+
+No specific CPU or memory statistics are available for this query a                                                                    s it is a performance query focused on uptime.
+
+📊 Supporting Data:
+upTime
+-------------------------
+3 weeks 5 days 3 hours 3
+3 weeks 5 days 2 hours 52
+3 weeks 5 days 2 hours 49
+8 weeks 2 days 5 hours 31
+3 weeks 5 days 3 hours 26
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:29:04
+
+❓ QUESTION: is firewall active on all seervers
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+❌ Query blocked for security reasons
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:30:21
+
+❓ QUESTION: top 5 servers with highest memory usage
+
+🔧 SQL USED: SELECT `memory` FROM `EISHome_compliance` ORDER BY `me                                                                    mory` DESC LIMIT 5;
+
+⏱️ TIME TAKEN: 41.54 seconds
+
+💡 ANSWER:
+Based on the provided data, here is the answer to the user's questi                                                                    on:
+
+**Top 5 servers with highest memory usage:**
+
+The data shows that there are only 5 servers in total, so it's not                                                                     possible to identify a top 5 list. However, we can analyze the memo                                                                    ry usage values to provide some insights.
+
+* The average memory usage is 71.4%, which indicates moderate memor                                                                    y utilization.
+* The maximum memory usage is 74%, which suggests that one or more                                                                     servers are experiencing high memory pressure.
+* There is no server with extremely low memory usage (less than 69%                                                                    ).
+
+In summary, the memory usage is generally moderate to high across a                                                                    ll 5 servers, with no clear outliers.
+
+📊 Supporting Data:
+memory
+------
+74
+73
+72
+69
+69
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:31:43
+
+❓ QUESTION: what is lowest memory usage
+
+🔧 SQL USED: SELECT `memory` FROM `EISHome_compliance` ORDER BY `me                                                                    mory` LIMIT 1;
+
+⏱️ TIME TAKEN: 37.06 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question:
+
+"What is the lowest memory usage?"
+
+Unfortunately, there is no data available to provide a direct answe                                                                    r as the "Field Analysis" section is empty.
+
+However, if you're looking for insights or patterns related to memo                                                                    ry usage, I'd be happy to help. Please provide more information abo                                                                    ut the system, such as the type of servers (e.g., Linux, Windows),                                                                     and any relevant metrics like CPU usage or disk space.
+
+📊 Supporting Data:
+memory
+------
+None
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:32:49
+
+❓ QUESTION: which server has lowest memory usage
+
+🔧 SQL USED: SELECT `ip_address`, `memory` FROM `EISHome_compliance                                                                    ` ORDER BY `memory` ASC LIMIT 1;
+
+⏱️ TIME TAKEN: 32.93 seconds
+
+💡 ANSWER:
+Based on the provided data, I must inform you that there is no serv                                                                    er information available to analyze for memory usage.
+
+The user's question cannot be answered directly as there is no data                                                                     to provide a comparison or analysis of server memory usage.
+
+However, if more data becomes available in the future, we can re-an                                                                    alyze it to provide insights on which server has the lowest memory                                                                     usage.
+
+📊 Supporting Data:
+ip_address    | memory
+--------------+-------
+10.177.41.191 | None
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:33:07
+
+❓ QUESTION: 10.177.41.191
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.41.191'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 106
+🌐 IP Address: 10.177.41.191
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.26.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 4 days 6 hours 22 minutes
+🔄 Last Update: 05:00:00 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:34:00
+
+❓ QUESTION: what are diffrent server roles
+
+🔧 SQL USED: SELECT `server_role` FROM `EISHome_compliance` LIMIT 5                                                                    ;
+
+⏱️ TIME TAKEN: 30.37 seconds
+
+💡 ANSWER:
+Based on the provided data, here's a direct answer to your question                                                                    :
+
+**What are different server roles?**
+
+According to the analysis, there is only one unique server role fou                                                                    nd: **"DR LINUX"**.
+
+This means that all 5 servers have the same server role, which is "                                                                    DR LINUX".
+
+No other server roles were detected in this dataset.
+
+📊 Supporting Data:
+server_role
+-----------
+DR LINUX
+DR LINUX
+DR LINUX
+DR LINUX
+DR LINUX
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:35:12
+
+❓ QUESTION: is there a server role like PR LINUX
+
+🔧 SQL USED: SELECT * FROM `EISHome_compliance` WHERE `server_role`                                                                     = 'PR LINUX';
+
+⏱️ TIME TAKEN: 46.32 seconds
+
+💡 ANSWER:
+To answer your question: "Is there a server role like PR LINUX?"
+
+The direct answer is: **YES**, there is a server role like "PR LINU                                                                    X". According to the data summary, the unique count for the "server                                                                    _role" field is 1, and one of the values is indeed "PR LINUX".
+
+No specific differences or issues were found in this regard.
+
+📊 Sample Data:
+id  | ip_address    | server_role | osVersion | ram | cpuCore | cpu                                                                     | memory | firewall | dsAgent   | kernelVersion
+----+---------------+-------------+-----------+-----+---------+----                                                                    -+--------+----------+-----------+--------------------------
+133 | 10.188.24.10  | PR LINUX    | 9.6(Plow) | 64  | 4       | 34                                                                      | 62     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+134 | 10.188.24.101 | PR LINUX    | 9.6(Plow) | 64  | 4       | 11                                                                      | 33     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+135 | 10.188.24.11  | PR LINUX    | 9.6(Plow) | 64  | 4       | 36                                                                      | 61     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+136 | 10.188.24.110 | PR LINUX    | 9.6(Plow) | 64  | 8       | 90                                                                      | 61     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+137 | 10.188.24.111 | PR LINUX    | 9.6(Plow) | 64  | 8       | 74                                                                      | 61     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+... (15 total servers)
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:37:41
+
+❓ QUESTION: what is the os version in all the servers
+
+🔧 SQL USED: SELECT `osVersion` FROM `EISHome_compliance`;
+
+⏱️ TIME TAKEN: 35.11 seconds
+
+💡 ANSWER:
+Based on the provided data, here is a direct answer to the user's q                                                                    uestion:
+
+**OS Version:** The OS version in all servers is **9.6(Plow)**.
+
+No other OS versions were found in the analysis. This suggests that                                                                     all 147 servers are running the same OS version, which can be bene                                                                    ficial for consistency and ease of management.
+
+There are no specific differences or issues found in this data.
+
+📊 Sample Data:
+osVersion
+---------
+9.6(Plow)
+9.6(Plow)
+9.6(Plow)
+9.6(Plow)
+9.6(Plow)
+... (147 total servers)
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-13 17:39:15
+
+❓ QUESTION: how can i identify if my servers have cpu usage over t                                                                    hreshhold
+
+🔧 SQL USED: SELECT `cpu` FROM `EISHome_compliance` WHERE `cpu` > ?                                                                    ;
+
+⏱️ TIME TAKEN: 31.67 seconds
+
+💡 ANSWER:
+❌ Error after 31.65s: (1064, "You have an error in your SQL syntax                                                                    ; check the manual that corresponds to your MySQL server version fo                                                                    r the right syntax to use near '?' at line 1")
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-14 12:04:49
+
+❓ QUESTION: how many servers are there ?
+
+⏱️ TIME TAKEN: 0.86 seconds
+
+💡 ANSWER:
+❌ Could not generate SQL for: 'how many servers are there ?'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-14 12:08:41
+
+❓ QUESTION: how many servers are there ?
+
+🔧 SQL USED: SELECT COUNT(*) FROM `EISHome_compliance`;
+
+⏱️ TIME TAKEN: 43.97 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+**Answer:** There is only 1 server.
+
+No further analysis or statistics are available for this question a                                                                    s there is no additional information provided about the servers (e.                                                                    g., CPU, memory).
+
+📊 Supporting Data:
+COUNT(*)
+--------
+150
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-14 12:10:07
+
+❓ QUESTION: how many servers are there ?
+
+🔧 SQL USED: SELECT COUNT(*) FROM `EISHome_compliance`;
+
+⏱️ TIME TAKEN: 28.64 seconds
+
+💡 ANSWER:
+Based on the provided data, here is a direct answer to the user's q                                                                    uestion:
+
+**Answer:** There is only 1 server.
+
+No further analysis or insights are necessary for this simple yes/n                                                                    o question.
+
+📊 Supporting Data:
+COUNT(*)
+--------
+150
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-14 12:11:53
+
+❓ QUESTION: how many ip address are there ?
+
+🔧 SQL USED: SELECT COUNT(DISTINCT `ip_address`) FROM `EISHome_comp                                                                    liance`;
+
+⏱️ TIME TAKEN: 30.69 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+There is no information available about IP addresses in the given s                                                                    ystem compliance data. The data only provides information about ser                                                                    vers, teams, and team members, but does not mention IP addresses.
+
+Therefore, my direct answer to your question is: "No information av                                                                    ailable."
+
+📊 Supporting Data:
+COUNT(DISTINCT `ip_address`)
+-------------------------
+150
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-14 13:19:05
+
+❓ QUESTION: how many DR LINUX servers are there ?
+
+🔧 SQL USED: SELECT COUNT(*) FROM `EISHome_compliance` WHERE `serve                                                                    r_role` = 'DR LINUX';
+
+⏱️ TIME TAKEN: 41.57 seconds
+
+💡 ANSWER:
+Based on the provided data, I can answer your question as follows:
+
+There are no DR Linux servers mentioned in the data.
+
+In other words, the answer is NO, there are no DR Linux servers. Th                                                                    e total number of servers is 1, but it does not specify what type o                                                                    f server it is (e.g., production, non-production, or DR).
+
+📊 Supporting Data:
+COUNT(*)
+--------
+132
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:45:06
+
+❓ QUESTION: which server is above 40 % cpu usage
+
+⏱️ TIME TAKEN: 0.96 seconds
+
+💡 ANSWER:
+❌ Could not generate SQL for: 'which server is above 40 % cpu usag                                                                    e'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:46:01
+
+❓ QUESTION: which server is above 40 % cpu usage
+
+⏱️ TIME TAKEN: 0.65 seconds
+
+💡 ANSWER:
+❌ Could not generate SQL for: 'which server is above 40 % cpu usag                                                                    e'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:48:35
+
+❓ QUESTION: which server is above 40 % cpu usage
+
+🔧 SQL USED: SELECT * FROM `EISHome_compliance` WHERE `cpu` > (40 *                                                                     1) LIMIT 0, 5;
+
+⏱️ TIME TAKEN: 65.84 seconds
+
+💡 ANSWER:
+Based on the provided system compliance data, I can answer your que                                                                    stion:
+
+**Which server is above 40% CPU usage?**
+
+According to the "cpu" field analysis, the average CPU usage is 94.                                                                    2%. There are three unique values: 77%, 98%, and 99%. Since none of                                                                     these values exceed 40%, there is no server that is above 40% CPU                                                                     usage.
+
+**Key statistics or patterns:**
+- Average CPU usage: 94.2%
+- High value: 99%
+- Low value: 77%
+
+No specific differences or issues were found in this analysis.
+
+📊 Supporting Data:
+id | ip_address    | server_role | osVersion | ram | cpuCore | cpu                                                                     | memory | firewall | dsAgent   | kernelVersion
+---+---------------+-------------+-----------+-----+---------+-----                                                                    +--------+----------+-----------+--------------------------
+13 | 10.177.40.131 | DR LINUX    | 9.6(Plow) | 64  | 4       | 99                                                                      | 28     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+14 | 10.177.40.132 | DR LINUX    | 9.6(Plow) | 64  | 4       | 98                                                                      | 28     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+15 | 10.177.40.133 | DR LINUX    | 9.6(Plow) | 64  | 4       | 98                                                                      | 28     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+16 | 10.177.40.134 | DR LINUX    | 9.6(Plow) | 64  | 4       | 99                                                                      | 27     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+21 | 10.177.40.143 | DR LINUX    | 9.6(Plow) | 64  | 4       | 77                                                                      | 33     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:49:51
+
+❓ QUESTION: 10.188.24.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.24.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.188.24.10'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:49:59
+
+❓ QUESTION: 10.188.24.100
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.24.100'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.188.24.100'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:50:10
+
+❓ QUESTION: 10.177.40.143
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.143'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 21
+🌐 IP Address: 10.177.40.143
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.25.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 77%
+💾 Memory Usage: 33%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 4 weeks 3 days 46 minutes
+🔄 Last Update: 2025-08-18 01:00:04 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:50:27
+
+❓ QUESTION: 10.188.25.163
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.25.163'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.188.25.163'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:55:06
+
+❓ QUESTION: combiner.sh
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address LIKE                                                                     '%combiner.sh%' OR server_role LIKE '%combiner.sh%'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching 'combiner.sh'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:55:19
+
+❓ QUESTION: 10.188.25.163
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.25.163'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.188.25.163'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:55:37
+
+❓ QUESTION: 10.188.24.66
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.24.66'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.188.24.66'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 13:59:09
+
+❓ QUESTION: 10.188.25.163
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.25.163'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 245
+🌐 IP Address: 10.188.25.163
+🏷️ Role: PR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.26.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 29%
+💾 Memory Usage: 56%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 2 days 13 hours 42 minutes
+🔄 Last Update: 2025-08-18 01:00:05 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 14:00:36
+
+❓ QUESTION: 10.188.24.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.24.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 133
+🌐 IP Address: 10.188.24.10
+🏷️ Role: PR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.26.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 38%
+💾 Memory Usage: 60%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 1 day 12 hours 13 minutes
+🔄 Last Update: 2025-08-18 01:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 14:02:32
+
+❓ QUESTION: which server is above 40 % cpu usage
+
+🔧 SQL USED: SELECT * FROM `EISHome_compliance` WHERE `cpu` > 40;
+
+⏱️ TIME TAKEN: 66.32 seconds
+
+💡 ANSWER:
+Based on the provided system compliance data, I can answer your que                                                                    stion:
+
+**Which server is above 40% CPU usage?**
+
+According to the "cpu" field analysis, there are no servers with CP                                                                    U usage above 40%. The highest CPU usage recorded is 99%, which is                                                                     an outlier. The average CPU usage is 67.86%.
+
+However, if you're looking for servers with high CPU usage (above 2                                                                    0%), I can identify a few:
+
+* Server(s) with CPU usage above 20%: Yes
+* Highest CPU usage: 99%
+* Average CPU usage: 67.86%
+
+Please note that this analysis is based on the provided data, and a                                                                    ctual server performance may vary.
+
+📊 Sample Data:
+id | ip_address    | server_role | osVersion | ram | cpuCore | cpu                                                                     | memory | firewall | dsAgent   | kernelVersion
+---+---------------+-------------+-----------+-----+---------+-----                                                                    +--------+----------+-----------+--------------------------
+13 | 10.177.40.131 | DR LINUX    | 9.6(Plow) | 64  | 4       | 99                                                                      | 28     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+14 | 10.177.40.132 | DR LINUX    | 9.6(Plow) | 64  | 4       | 98                                                                      | 28     | active   | DSrunning | 5.14.0-570.26.1.el9_6.x86
+15 | 10.177.40.133 | DR LINUX    | 9.6(Plow) | 64  | 4       | 98                                                                      | 28     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+16 | 10.177.40.134 | DR LINUX    | 9.6(Plow) | 64  | 4       | 99                                                                      | 27     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+21 | 10.177.40.143 | DR LINUX    | 9.6(Plow) | 64  | 4       | 77                                                                      | 33     | active   | DSrunning | 5.14.0-570.25.1.el9_6.x86
+... (28 total servers)
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 15:55:43
+
+❓ QUESTION: 10.188.25.100
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.25.100'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.188.25.100'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 15:56:05
+
+❓ QUESTION: 10.177.40.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.40.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 1
+🌐 IP Address: 10.177.40.10
+🏷️ Role: DR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.32.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 8%
+💾 Memory Usage: 34%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 22 hours 47 minutes
+🔄 Last Update: 2025-08-18 03:00:02 PM
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 15:57:25
+
+❓ QUESTION: what is the karnel version of 10.177.40.10
+
+🔧 SQL USED: SELECT `kernelVersion` FROM `EISHome_compliance` WHERE                                                                     `ip_address` = '10.177.40.10';
+
+⏱️ TIME TAKEN: 48.28 seconds
+
+💡 ANSWER:
+Based on the provided data, the kernel version of 10.177.40.10 is:
+
+"5.14.0-570.32.1.el9_6.x86_64"
+
+This answer is based on the unique value found in the "kernelVersio                                                                    n" field analysis, which indicates that there is only one record wi                                                                    th this specific kernel version.
+
+No differences or issues were found in the data. The key statistic                                                                     is that there is only one server with this kernel version (total_re                                                                    cords: 1).
+
+📊 Supporting Data:
+kernelVersion
+-------------------------
+5.14.0-570.32.1.el9_6.x86
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 16:03:47
+
+❓ QUESTION: tell me cpu usage for 10.177.40.10
+
+🔧 SQL USED: SELECT `cpu` FROM `EISHome_compliance` WHERE `ip_addre                                                                    ss` = '10.177.40.10';
+
+⏱️ TIME TAKEN: 35.68 seconds
+
+💡 ANSWER:
+Based on the provided data, here's the answer to your question:
+
+**CPU usage for 10.177.40.10:**
+
+The CPU usage for this server is **8%**, with a total of **1 record                                                                    **.
+
+There are no significant differences or issues found in the data. T                                                                    he average CPU usage is also **8%**, indicating consistent performa                                                                    nce.
+
+No actionable insights are required, as the system appears to be ru                                                                    nning within normal parameters.
+
+For your reference, here are the key statistics:
+
+* Min: 8.0%
+* Max: 8.0%
+* Avg: 8.0%
+
+Let me know if you have any further questions!
+
+📊 Supporting Data:
+cpu
+---
+8
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 16:04:53
+
+❓ QUESTION: all servers have same kernel version?
+
+🔧 SQL USED: SELECT `kernelVersion` FROM `EISHome_compliance` GROUP                                                                     BY `kernelVersion`;
+
+⏱️ TIME TAKEN: 36.16 seconds
+
+💡 ANSWER:
+Based on the provided data, here's a direct answer to your question                                                                    :
+
+**All servers have same kernel version?**: No.
+
+The unique count of kernel versions is 5, indicating that each serv                                                                    er has a distinct kernel version. The values listed are all variati                                                                    ons of "5.14.0-570.21.1.el9_6.x86_64" with different build numbers                                                                     (25, 26, 28, and 32).
+
+No specific differences or issues were found in this analysis.
+
+📊 Supporting Data:
+kernelVersion
+-------------------------
+5.14.0-570.32.1.el9_6.x86
+5.14.0-570.25.1.el9_6.x86
+5.14.0-570.21.1.el9_6.x86
+5.14.0-570.26.1.el9_6.x86
+5.14.0-570.28.1.el9_6.x86
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 18:00:55
+
+❓ QUESTION: Server Configuration
+
+🔧 SQL USED:
+            SELECT * FROM EISHome_compliance
+            WHERE ip_address LIKE '%Server Configuration%'
+               OR server_role LIKE '%Server Configuration%'
+               OR CAST(id AS CHAR) LIKE '%Server Configuration%'
+               OR osVersion LIKE '%Server Configuration%'
+
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching 'Server Configuration'. Try being more sp                                                                    ecific (e.g., IP address, server role, or ask a complete question l                                                                    ike 'What is CPU usage of server X?').
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 18:04:02
+
+❓ QUESTION: 10.177.41.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.41.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.177.41.10'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 18:04:14
+
+❓ QUESTION: 10.177.41.100
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.177.41.100'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+No servers found matching '10.177.41.100'
+===================================================================                                                                    =============
+
+===================================================================                                                                    =============
+📅 2025-08-18 18:05:04
+
+❓ QUESTION: 10.188.24.10
+
+🔧 SQL USED: SELECT * FROM EISHome_compliance WHERE ip_address = '1                                                                    0.188.24.10'
+
+⏱️ TIME TAKEN: 0.00 seconds
+
+💡 ANSWER:
+🖥️ Server Details:
+🆔 ID: 133
+🌐 IP Address: 10.188.24.10
+🏷️ Role: PR LINUX
+💿 OS Version: 9.6(Plow)
+🔧 Kernel Version: 5.14.0-570.26.1.el9_6.x86_64
+🧠 RAM: 64 GB
+⚡ CPU Cores: 4 cores
+🖥️ CPU Usage: 35%
+💾 Memory Usage: 63%
+🔥 Firewall: active
+🛡️ Deep Security: DSrunning
+📊 Splunk: SPLrunning
+🔧 ACE Version: 12.0.12.10
+📦 MQ Version:  9.4.0.11
+⏰ Uptime: 3 weeks 1 day 17 hours 13 minutes
+🔄 Last Update: 2025-08-18 06:00:02 PM
+===================================================================                                                                    =============
